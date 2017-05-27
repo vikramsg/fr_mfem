@@ -3046,4 +3046,83 @@ void NormalInterpolator::AssembleElementMatrix2(
    }
 }
 
+
+void DGTestIntegrator::AssembleFaceMatrix(const FiniteElement &el1,
+                                           const FiniteElement &el2,
+                                           FaceElementTransformations &Trans,
+                                           DenseMatrix &elmat)
+{
+   int dim, ndof1, ndof2;
+
+   double un, a, b, w;
+
+   dim = el1.GetDim();
+   ndof1 = el1.GetDof();
+   Vector vu(dim), nor(dim);
+
+   if (Trans.Elem2No >= 0)
+   {
+      ndof2 = el2.GetDof();
+   }
+   else
+   {
+      ndof2 = 0;
+   }
+
+   shape1.SetSize(ndof1);
+   shape2.SetSize(ndof2);
+   elmat.SetSize(ndof1 + ndof2);
+   elmat = 0.0;
+
+   const IntegrationRule *ir = IntRule;
+   if (ir == NULL)
+   {
+      int order;
+      // Assuming order(u)==order(mesh)
+      if (Trans.Elem2No >= 0)
+         order = (min(Trans.Elem1->OrderW(), Trans.Elem2->OrderW()) +
+                  2*max(el1.GetOrder(), el2.GetOrder()));
+      else
+      {
+         order = Trans.Elem1->OrderW() + 2*el1.GetOrder();
+      }
+      if (el1.Space() == FunctionSpace::Pk)
+      {
+         order++;
+      }
+      ir = &IntRules.Get(Trans.FaceGeom, order);
+   }
+
+   for (int p = 0; p < ir->GetNPoints(); p++)
+   {
+      const IntegrationPoint &ip = ir->IntPoint(p);
+      IntegrationPoint eip1, eip2;
+      Trans.Loc1.Transform(ip, eip1);
+      if (ndof2)
+      {
+         Trans.Loc2.Transform(ip, eip2);
+      }
+      el1.CalcShape(eip1, shape1);
+
+      Trans.Face->SetIntPoint(&ip);
+      Trans.Elem1->SetIntPoint(&eip1);
+
+      Trans.Elem2->SetIntPoint(&eip2);
+
+      if (rho)
+      {
+          double rho_1 = rho->Eval(*Trans.Elem1, eip1);
+          double rho_2 = rho->Eval(*Trans.Elem2, eip2);
+      }
+      if (u)
+      {
+          Vector u1, u2;
+          u->Eval(u1, *Trans.Elem1, eip1);
+          u->Eval(u2, *Trans.Elem2, eip2);
+//          std::cout << u2[0] << "\t" << u2[1] << "\t" << u2[2] << "\t" << u2[3]<< std::endl;
+      }
+
+   }
+}
+
 }

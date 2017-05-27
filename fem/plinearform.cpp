@@ -43,6 +43,52 @@ HypreParVector *ParLinearForm::ParallelAssemble()
    return tv;
 }
 
+void ParLinearForm::AssembleSharedFaces()
+{
+   ParMesh *pmesh = pfes->GetParMesh();
+   FaceElementTransformations *T;
+   Array<int> vdofs1, vdofs2, vdofs_all;
+   Vector elemvect;
+   
+   int nfaces = pmesh->GetNSharedFaces();
+   for (int i = 0; i < nfaces; i++)
+   {
+      T = pmesh->GetSharedFaceTransformations(i);
+      pfes->GetElementVDofs(T->Elem1No, vdofs1);
+      pfes->GetFaceNbrElementVDofs(T->Elem2No, vdofs2);
+      vdofs1.Copy(vdofs_all);
+
+//      for (int j = 0; j < vdofs2.Size(); j++) FIXME: don't know what height is
+//      {
+//         vdofs2[j] += height;
+//      }
+      vdofs_all.Append(vdofs2);
+
+//      for (int k = 0; k < vdofs2.Size(); k++) std::cout << k << '\t' << vdofs2[k] << std::endl;
+
+      for (int k = 0; k < ilfi.Size(); k++)
+      {
+          ilfi[k] -> AssembleRHSElementVect (*pfes->GetFE(T -> Elem1No),
+                                             *pfes->GetFaceNbrFE(T -> Elem2No),
+                                              *T, elemvect);
+
+          AddElementVector (vdofs_all, elemvect);
+       }
+    }
+}
+
+
+void ParLinearForm::Assemble()
+{
+   LinearForm::Assemble();
+
+   if (ilfi.Size() > 0)
+   {
+      AssembleSharedFaces();
+   }
+}
+
+
 }
 
 #endif
