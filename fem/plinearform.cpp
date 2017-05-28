@@ -45,10 +45,13 @@ HypreParVector *ParLinearForm::ParallelAssemble()
 
 void ParLinearForm::AssembleSharedFaces()
 {
+   int myid; 
+   MPI_Comm_rank(MPI_COMM_WORLD, &myid);
+
    ParMesh *pmesh = pfes->GetParMesh();
    FaceElementTransformations *T;
    Array<int> vdofs1, vdofs2, vdofs_all;
-   Vector elemvect;
+   Vector elemvect, this_vect;
    
    int nfaces = pmesh->GetNSharedFaces();
    for (int i = 0; i < nfaces; i++)
@@ -56,15 +59,10 @@ void ParLinearForm::AssembleSharedFaces()
       T = pmesh->GetSharedFaceTransformations(i);
       pfes->GetElementVDofs(T->Elem1No, vdofs1);
       pfes->GetFaceNbrElementVDofs(T->Elem2No, vdofs2);
-      vdofs1.Copy(vdofs_all);
 
-//      for (int j = 0; j < vdofs2.Size(); j++) FIXME: don't know what height is
-//      {
-//         vdofs2[j] += height;
-//      }
-      vdofs_all.Append(vdofs2);
-
-//      for (int k = 0; k < vdofs2.Size(); k++) std::cout << k << '\t' << vdofs2[k] << std::endl;
+      Array<int> offset; 
+      offset.SetSize(vdofs1.Size());
+      for (int k = 0; k < vdofs1.Size(); k++) offset[k] = k; 
 
       for (int k = 0; k < ilfi.Size(); k++)
       {
@@ -72,7 +70,11 @@ void ParLinearForm::AssembleSharedFaces()
                                              *pfes->GetFaceNbrFE(T -> Elem2No),
                                               *T, elemvect);
 
-          AddElementVector (vdofs_all, elemvect);
+          //Assemble Shared Faces is called from each processor for the same faces
+          //Therefore only the local vector on this processor needs to be updated 
+          //Each processor will then update its own vector 
+          elemvect.GetSubVector(offset, this_vect);
+          AddElementVector (vdofs1, this_vect);
        }
     }
 }
