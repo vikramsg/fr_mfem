@@ -2328,33 +2328,6 @@ public:
                                        DenseMatrix &elmat);
 };
 
-
-class DGTestIntegrator : public BilinearFormIntegrator
-{
-private:
-   Coefficient *rho;
-   VectorCoefficient *u;
-   double alpha, beta;
-
-   Vector shape1, shape2;
-
-public:
-   /// Construct integrator with rho = 1.
-   DGTestIntegrator(VectorCoefficient &_u, double a, double b)
-   { rho = NULL; u = &_u; alpha = a; beta = b; }
-
-   DGTestIntegrator(Coefficient &_rho, 
-                     double a, double b)
-   { rho = &_rho; alpha = a; beta = b; }
-
-   using BilinearFormIntegrator::AssembleFaceMatrix;
-   virtual void AssembleFaceMatrix(const FiniteElement &el1,
-                                   const FiniteElement &el2,
-                                   FaceElementTransformations &Trans,
-                                   DenseMatrix &elmat);
-};
-
-
 }
 
 #endif

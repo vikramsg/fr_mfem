@@ -72,14 +72,14 @@ int main(int argc, char *argv[])
    int precision = 8;
    cout.precision(precision);
 
-   // 2. Read the mesh from the given mesh file. We can handle geometrically
+   //    Read the mesh from the given mesh file. We can handle geometrically
    //    periodic meshes in this code.
    Mesh *mesh = new Mesh(mesh_file, 1, 1);
    int     dim = mesh->Dimension();
    int var_dim = dim + 2;
 
 
-   // 6. Define the parallel mesh by a partitioning of the serial mesh. Refine
+   //    Define the parallel mesh by a partitioning of the serial mesh. Refine
    //    this mesh further in parallel to increase the resolution. Once the
    //    parallel mesh is defined, the serial mesh can be deleted.
    ParMesh *pmesh = new ParMesh(MPI_COMM_WORLD, *mesh);
@@ -90,7 +90,7 @@ int main(int argc, char *argv[])
    }
 
 
-   // 5. Define the discontinuous DG finite element space of the given
+   //    Define the discontinuous DG finite element space of the given
    //    polynomial order on the refined mesh.
    DG_FECollection fec(order, dim);
    ParFiniteElementSpace *fes = new ParFiniteElementSpace(pmesh, &fec, var_dim);
@@ -144,7 +144,7 @@ int main(int argc, char *argv[])
    b->AddFaceIntegrator(
       new DGEulerIntegrator(u_vec, f_vec, var_dim, -1.0));
 
-   u_sol->ExchangeFaceNbrData();
+   u_sol->ExchangeFaceNbrData(); //Exchange data across processors
    f_inv->ExchangeFaceNbrData();
 
    b->Assemble();
@@ -264,9 +264,7 @@ int main(int argc, char *argv[])
        int sub1 = i, sub2 = offset + i, sub3 = 2*offset + i, sub4 = 3*offset + i;
        if (myid == 0)
        {
-//           cout << i << '\t' << x_ref[0](sub1) << '\t' << x_ref[0](sub2) << '\t' <<  u_sol[0](sub1) << '\t' << b[0][sub1] << endl;  
 //           cout << i << '\t' << x_ref[0](sub1) << '\t' << x_ref[0](sub2) << '\t' <<  u_sol[0](sub1) << '\t' << endl;  
-//           cout << i << '\t' << x_ref[0](sub1) << '\t' << x_ref[0](sub2) << '\t' <<  u_sol[0](sub1) << '\t' << f_inv[0](sub4) << endl; 
        }
    }
 
@@ -386,13 +384,6 @@ void FE_Evolution::Mult(const Vector &x, Vector &y) const
         y_temp.SetSubVector(offsets[i - var_dim], f_x_m);
     }
     y += y_temp;
-
-
-//    for (int j = 0; j < offset; j++) cout << x(j) << '\t'<< f(0*offset + j) << endl;
-//    if (myid == 1)
-//    for (int j = 0; j < offset; j++) cout << j << '\t' << x(j) << '\t'<< b(0*offset + j) << endl;
-//    for (int j = 0; j < offset; j++) cout << x(offset + j) << '\t'<< f(var_dim*offset + 3*offset + j) << endl;
-//    for (int j = 0; j < offset; j++) cout << x(offset + j) << '\t'<< y(0*offset + j) << endl;
 
 }
 
@@ -587,10 +578,6 @@ void getVisFlux(int dim, const Vector &u, const Vector &u_grad, Vector &f)
         }
 
     }
-
-//    for (int j = 0; j < offset; j++) cout << u(offset + j) << '\t'<< f(var_dim*offset + 3*offset + j) << endl;
-//    for (int j = 0; j < offset; j++) cout << u(offset + j) << '\t'<< u_x << endl;
-
 }
 
 
