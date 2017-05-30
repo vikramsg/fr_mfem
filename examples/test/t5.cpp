@@ -11,7 +11,7 @@ int problem;
 
 //Constants
 const double gamm  = 1.4;
-const double   mu  = 0.05;
+const double   mu  = 0.00;
 const double   Pr  = 0.72;
 
 // Velocity coefficient
@@ -53,13 +53,13 @@ public:
 int main(int argc, char *argv[])
 {
    const char *mesh_file = "periodic-square.mesh";
-   int    order      = 2;
-   double t_final    = 0.1000;
-   double dt         = 0.0001;
+   int    order      = 1;
+   double t_final    = 0.0100;
+   double dt         = 0.0100;
    int    vis_steps  = 100;
-   int    ref_levels = 2;
+   int    ref_levels = 0;
 
-          problem    = 2;
+          problem    = 0;
 
    int precision = 8;
    cout.precision(precision);
@@ -213,8 +213,8 @@ int main(int argc, char *argv[])
        int offset = nodes.Size()/dim;
        int sub1 = i, sub2 = offset + i, sub3 = 2*offset + i, sub4 = 3*offset + i;
 //       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << endl;      
-//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << '\t' << b[sub4] << endl;      
-//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << '\t' << inv_flux(sub1) << endl;      
+       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << '\t' << b[sub4] << endl;      
+//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << '\t' << f_inv(sub4) << endl;      
 //       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << '\t' << u_sol(sub2) << '\t' << u_sol(sub3) << '\t' << u_sol(sub4) << endl;      
    }
 
@@ -313,7 +313,7 @@ void FE_Evolution::Mult(const Vector &x, Vector &y) const
     y += y_temp;
 
 
-//    for (int j = 0; j < offset; j++) cout << x(j) << '\t'<< f(offset + j) << endl;
+/    for (int j = 0; j < offset; j++) cout << x(j) << '\t'<< f(offset + j) << endl;
 //    for (int j = 0; j < offset; j++) cout << j << '\t'<< b(j) << endl;
 //    for (int j = 0; j < offset; j++) cout << x(offset + j) << '\t'<< f(var_dim*offset + 3*offset + j) << endl;
 //    for (int j = 0; j < offset; j++) cout << x(offset + j) << '\t'<< y(0*offset + j) << endl;

@@ -61,7 +61,7 @@ int main(int argc, char *argv[])
 
    const char *mesh_file = "periodic-square.mesh";
    int    order      = 2;
-   double t_final    = 1.0000;
+   double t_final    = 0.0150;
    double dt         = 0.00005;
    int ode_solver_type = 3;
    int    vis_steps  = 100;
