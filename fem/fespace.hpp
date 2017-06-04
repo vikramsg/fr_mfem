@@ -64,6 +64,7 @@ protected:
    Mesh *mesh;
 
    const FiniteElementCollection *fec;
+   const VarFiniteElementCollection *vfec;
 
    /// Vector dimension (number of unknowns per degree of freedom).
    int vdim;
@@ -130,6 +131,9 @@ protected:
 
 public:
    FiniteElementSpace(Mesh *mesh, const FiniteElementCollection *fec,
+                      int vdim = 1, int ordering = Ordering::byNODES);
+
+   FiniteElementSpace(Mesh *mesh, const VarFiniteElementCollection *vfec,
                       int vdim = 1, int ordering = Ordering::byNODES);
 
    /// Returns the mesh

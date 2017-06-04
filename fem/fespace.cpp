@@ -56,7 +56,14 @@ DofsToVDofs<Ordering::byVDIM>(int ndofs, int vdim, Array<int> &dofs)
 int FiniteElementSpace::GetOrder(int i) const
 {
    int GeomType = mesh->GetElementBaseGeometry(i);
-   return fec->FiniteElementForGeometry(GeomType)->GetOrder();
+   if (vfec)
+   {
+       return vfec -> GetColl(i) ->FiniteElementForGeometry(GeomType)->GetOrder();
+   }
+   else
+   {
+       return fec->FiniteElementForGeometry(GeomType)->GetOrder();
+   }
 }
 
 int FiniteElementSpace::GetFaceOrder(int i) const
@@ -899,6 +906,8 @@ FiniteElementSpace::FiniteElementSpace(Mesh *mesh,
    this->vdim = vdim;
    this->ordering = (Ordering::Type) ordering;
 
+   this->vfec = NULL;
+
    elem_dof = NULL;
    sequence = mesh->GetSequence();
 
@@ -940,6 +949,60 @@ FiniteElementSpace::FiniteElementSpace(Mesh *mesh,
 
    BuildElementToDofTable();
 }
+
+
+FiniteElementSpace::FiniteElementSpace(Mesh *mesh,
+                                       const VarFiniteElementCollection *vfec,
+                                       int vdim, int ordering)
+{
+   this->mesh = mesh;
+   this->vfec = vfec;
+   this->vdim = vdim;
+   this->ordering = (Ordering::Type) ordering;
+
+   this->fec = vfec->GetColl(0); // fec for getting point, line DOFs
+
+   elem_dof = NULL;
+   sequence = mesh->GetSequence();
+
+   const NURBSFECollection *nurbs_fec =
+      dynamic_cast<const NURBSFECollection *>(fec);
+   if (nurbs_fec)
+   {
+      if (!mesh->NURBSext)
+      {
+         mfem_error("FiniteElementSpace::FiniteElementSpace :\n"
+                    "   NURBS FE space requires NURBS mesh.");
+      }
+      else
+      {
+         int Order = nurbs_fec->GetOrder();
+         if (mesh->NURBSext->GetOrder() == Order)
+         {
+            NURBSext = mesh->NURBSext;
+            own_ext = 0;
+         }
+         else
+         {
+            NURBSext = new NURBSExtension(mesh->NURBSext, Order);
+            own_ext = 1;
+         }
+         UpdateNURBS();
+         cP = cR = NULL;
+         cP_is_set = false;
+         T = NULL;
+         own_T = true;
+      }
+   }
+   else
+   {
+      NURBSext = NULL;
+      own_ext = 0;
+      Construct();
+   }
+   BuildElementToDofTable();
+}
+
 
 NURBSExtension *FiniteElementSpace::StealNURBSext()
 {
@@ -999,6 +1062,8 @@ void FiniteElementSpace::Construct()
 
    if (mesh->Dimension() == 3 && mesh->GetNE())
    {
+      // FIXME: vfec specific condition not implemented
+      //
       // Here we assume that all faces in the mesh have the same base
       // geometry -- the base geometry of the 0-th face element.
       // The class Mesh assumes the same inside GetFaceBaseGeometry(...).
@@ -1022,7 +1087,14 @@ void FiniteElementSpace::Construct()
    bdofs[0] = 0;
    for (i = 0; i < mesh->GetNE(); i++)
    {
-      nbdofs += fec->DofForGeometry(mesh->GetElementBaseGeometry(i));
+      if (vfec)
+      {
+          nbdofs += vfec->GetColl(i)->DofForGeometry(mesh->GetElementBaseGeometry(i));
+      }
+      else
+      {
+          nbdofs += fec->DofForGeometry(mesh->GetElementBaseGeometry(i));
+      }
       bdofs[i+1] = nbdofs;
    }
 
@@ -1047,7 +1119,14 @@ void FiniteElementSpace::GetElementDofs (int i, Array<int> &dofs) const
       dim = mesh->Dimension();
       nv = fec->DofForGeometry(Geometry::POINT);
       ne = (dim > 1) ? ( fec->DofForGeometry(Geometry::SEGMENT) ) : ( 0 );
-      nb = fec->DofForGeometry(mesh->GetElementBaseGeometry(i));
+      if (vfec)
+      {
+          nb = vfec->GetColl(i)->DofForGeometry(mesh->GetElementBaseGeometry(i));
+      }
+      else
+      {
+          nb = fec->DofForGeometry(mesh->GetElementBaseGeometry(i));
+      }
       if (nv > 0)
       {
          mesh->GetElementVertices(i, V);
@@ -1059,6 +1138,7 @@ void FiniteElementSpace::GetElementDofs (int i, Array<int> &dofs) const
       nfd = 0;
       if (dim == 3)
       {
+      // FIXME: vfec specific condition not implemented
          if (fec->HasFaceDofs(mesh->GetElementBaseGeometry(i)))
          {
             mesh->GetElementFaces(i, F, Fo);
@@ -1103,6 +1183,7 @@ void FiniteElementSpace::GetElementDofs (int i, Array<int> &dofs) const
       ne = nv + ne * E.Size();
       if (nfd > 0)
          // if (dim == 3)
+      // FIXME: vfec specific condition not implemented
       {
          for (k = 0; k < F.Size(); k++)
          {
@@ -1135,6 +1216,13 @@ const FiniteElement *FiniteElementSpace::GetFE(int i) const
 {
    const FiniteElement *FE =
       fec->FiniteElementForGeometry(mesh->GetElementBaseGeometry(i));
+
+   if (vfec)
+   {
+      delete FE;
+       const FiniteElement *FE =
+      vfec->GetColl(i)->FiniteElementForGeometry(mesh->GetElementBaseGeometry(i));
+   }
 
    if (NURBSext)
    {
@@ -1330,7 +1418,14 @@ void FiniteElementSpace::GetVertexDofs(int i, Array<int> &dofs) const
 void FiniteElementSpace::GetElementInteriorDofs (int i, Array<int> &dofs) const
 {
    int j, k, nb;
-   nb = fec -> DofForGeometry (mesh -> GetElementBaseGeometry (i));
+   if (vfec)
+   {
+       nb = vfec -> GetColl(i) -> DofForGeometry (mesh -> GetElementBaseGeometry (i));
+   }
+   else
+   {
+       nb = fec -> DofForGeometry (mesh -> GetElementBaseGeometry (i));
+   }
    dofs.SetSize (nb);
    k = nvdofs + nedofs + nfdofs + bdofs[i];
    for (j = 0; j < nb; j++)
@@ -1380,8 +1475,16 @@ const FiniteElement *FiniteElementSpace::GetBE (int i) const
          break;
       case 3:
       default:
-         BE = fec->FiniteElementForGeometry(
+         if (vfec)
+         {  
+             BE = vfec -> GetColl(i) ->FiniteElementForGeometry(
                  mesh->GetBdrElementBaseGeometry(i));
+         }
+         else
+         {
+              BE = fec->FiniteElementForGeometry(
+                 mesh->GetBdrElementBaseGeometry(i));
+         }
    }
 
    if (NURBSext)

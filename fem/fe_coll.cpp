@@ -2471,4 +2471,45 @@ FiniteElementCollection *NURBSFECollection::GetTraceCollection() const
    return NULL;
 }
 
+//Default Constructor with uniform order
+VarL2_FiniteElementCollection::VarL2_FiniteElementCollection(Mesh *mesh, int order)
+{
+   int ne = mesh->GetNE(); 
+
+   int dim = mesh->SpaceDimension();
+
+   elemOrder.SetSize(ne);
+
+   elements = new FiniteElementCollection*[ne];
+
+   for (int i = 0; i < ne ; i++)
+   {
+       elemOrder[i] = order;
+       elements[i]  = new L2_FECollection(order, dim);   
+   }
+}
+
+VarL2_FiniteElementCollection::VarL2_FiniteElementCollection(Mesh *mesh, Array<int> &order) 
+{
+   int ne = mesh->GetNE(); 
+
+   int dim = mesh->SpaceDimension();
+
+   elemOrder.SetSize(ne);
+
+   elements = new FiniteElementCollection*[ne];
+
+   for (int i = 0; i < ne ; i++)
+   {
+       elemOrder[i] = order[i];
+       elements[i]  = new L2_FECollection(order[i], dim);   
+   }
+}  
+
+FiniteElementCollection *VarL2_FiniteElementCollection::GetColl(int i) const
+{
+    return elements[i];
+}
+
+
 }

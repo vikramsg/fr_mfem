@@ -13,6 +13,7 @@
 #define MFEM_FE_COLLECTION
 
 #include "../config/config.hpp"
+#include "../mesh/mesh.hpp"
 #include "geom.hpp"
 #include "fe.hpp"
 
@@ -895,6 +896,33 @@ public:
    virtual const char *Name() const { return d_name; }
 
    virtual ~Local_FECollection() { delete Local_Element; }
+};
+
+
+class VarFiniteElementCollection
+{
+protected:
+   Mesh *mesh;
+
+public:
+   /// Returns the collection the i'th finite element
+   virtual FiniteElementCollection *GetColl(int i) const = 0;
+};
+
+class VarL2_FiniteElementCollection : public VarFiniteElementCollection
+{
+protected:
+   FiniteElementCollection **elements;
+
+   Array<int> elemOrder; // Order of each element
+
+public:
+   VarL2_FiniteElementCollection(Mesh *mesh, int order);
+
+   VarL2_FiniteElementCollection(Mesh *mesh, Array<int> &order);
+
+   /// Returns the order of the i'th finite element
+   FiniteElementCollection *GetColl(int i) const ;
 };
 
 }
