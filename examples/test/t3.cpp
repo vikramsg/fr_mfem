@@ -11,7 +11,7 @@ int problem;
 
 //Constants
 const double gamm  = 1.4;
-const double   mu  = 0.1;
+const double   mu  = 0.00;
 const double   Pr  = 0.72;
 
 // Velocity coefficient
@@ -54,12 +54,12 @@ int main(int argc, char *argv[])
 {
    const char *mesh_file = "periodic-square.mesh";
    int    order      = 1;
-   double t_final    = 0.0010;
-   double dt         = 0.0001;
+   double t_final    = 0.0100;
+   double dt         = 0.0100;
    int    vis_steps  = 100;
-   int    ref_levels = 0;
+   int    ref_levels = 1;
 
-          problem    = 2;
+          problem    = 0;
 
    int precision = 8;
    cout.precision(precision);
@@ -67,18 +67,27 @@ int main(int argc, char *argv[])
    // 2. Read the mesh from the given mesh file. We can handle geometrically
    //    periodic meshes in this code.
    Mesh *mesh = new Mesh(mesh_file, 1, 1);
+   Mesh *mesh1= new Mesh(mesh_file, 1, 1);
    int     dim = mesh->Dimension();
    int var_dim = dim + 2;
 
    for (int lev = 0; lev < ref_levels; lev++)
    {
       mesh->UniformRefinement();
+      mesh1->UniformRefinement();
+      mesh1->UniformRefinement();
    }
+
+   int ne = mesh->GetNE();
+   Array<int> eleOrder(ne);
+
+   for (int i = 0; i < ne; i++) eleOrder[i] = order; 
+   for (int i =10; i < 20; i++) eleOrder[i] = 3; 
 
    // 5. Define the discontinuous DG finite element space of the given
    //    polynomial order on the refined mesh.
-   DG_FECollection fec(order, dim);
-   FiniteElementSpace fes(mesh, &fec, var_dim);
+   VarL2_FiniteElementCollection vfec(mesh, eleOrder);
+   FiniteElementSpace fes(mesh, &vfec, var_dim);
 
    cout << "Number of unknowns: " << fes.GetVSize() << endl;
 
@@ -86,7 +95,7 @@ int main(int argc, char *argv[])
    GridFunction u_sol(&fes);
    u_sol.ProjectCoefficient(u0);
 
-   FiniteElementSpace fes_vec(mesh, &fec, dim*var_dim);
+   FiniteElementSpace fes_vec(mesh, &vfec, dim*var_dim);
    GridFunction f_inv(&fes_vec);
    getInvFlux(dim, u_sol, f_inv);
 
@@ -98,7 +107,7 @@ int main(int argc, char *argv[])
    dir(0) = 0.0; dir(1) = 1.0;
    VectorConstantCoefficient y_dir(dir);
 
-   FiniteElementSpace fes_op(mesh, &fec);
+   FiniteElementSpace fes_op(mesh, &vfec);
    BilinearForm m(&fes_op);
    m.AddDomainIntegrator(new MassIntegrator);
    BilinearForm k_inv_x(&fes_op);
@@ -152,18 +161,25 @@ int main(int argc, char *argv[])
    dc = new VisItDataCollection("Euler", mesh);
    dc->SetPrecision(precision);
    
+   DG_FECollection fec(order, dim);
    FiniteElementSpace fes_fields(mesh, &fec);
+
    GridFunction rho(&fes_fields);
    GridFunction u1(&fes_fields);
    GridFunction u2(&fes_fields);
    GridFunction E(&fes_fields);
 
    dc->RegisterField("rho", &rho);
-   dc->RegisterField("u1", &u1);
-   dc->RegisterField("u2", &u2);
-   dc->RegisterField("E", &E);
+   dc->RegisterField("u1",   &u1);
+   dc->RegisterField("u2",   &u2);
+   dc->RegisterField("E",     &E);
 
-   getFields(u_sol, rho, u1, u2, E);
+   FiniteElementSpace fes_post(mesh, &fec, var_dim);
+   GridFunction u_post(&fes_post);
+
+   // Visit does not understand how to look at non-uniform order data
+   u_post.GetValuesFrom(u_sol);
+   getFields(u_post, rho, u1, u2, E);
 
    dc->SetCycle(0);
    dc->SetTime(0.0);
@@ -171,8 +187,8 @@ int main(int argc, char *argv[])
 
 
    FE_Evolution adv(m.SpMat(), k_inv_x.SpMat(), k_inv_y.SpMat(), K_vis_x, K_vis_y, b);
-   ODESolver *ode_solver = new ForwardEulerSolver; 
-//   ODESolver *ode_solver = new RK3SSPSolver; 
+//   ODESolver *ode_solver = new ForwardEulerSolver; 
+   ODESolver *ode_solver = new RK3SSPSolver; 
 
    double t = 0.0;
    adv.SetTime(t);
@@ -195,7 +211,8 @@ int main(int argc, char *argv[])
 
       if (done || ti % vis_steps == 0)
       {
-          getFields(u_sol, rho, u1, u2, E);
+          u_post.GetValuesFrom(u_sol);
+          getFields(u_post, rho, u1, u2, E);
 
           dc->SetCycle(ti);
           dc->SetTime(t);
@@ -204,7 +221,7 @@ int main(int argc, char *argv[])
    }
   
    // Print all nodes in the finite element space 
-   FiniteElementSpace fes_nodes(mesh, &fec, dim);
+   FiniteElementSpace fes_nodes(mesh, &vfec, dim);
    GridFunction nodes(&fes_nodes);
    mesh->GetNodes(nodes);
 
@@ -212,9 +229,9 @@ int main(int argc, char *argv[])
    {
        int offset = nodes.Size()/dim;
        int sub1 = i, sub2 = offset + i, sub3 = 2*offset + i, sub4 = 3*offset + i;
-//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << endl;      
+       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << endl;      
 //       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << '\t' << b[sub4] << endl;      
-//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << '\t' << inv_flux(sub1) << endl;      
+//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << '\t' << f_inv(sub4) << endl;      
 //       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << '\t' << u_sol(sub2) << '\t' << u_sol(sub3) << '\t' << u_sol(sub4) << endl;      
    }
 
@@ -226,7 +243,7 @@ int main(int argc, char *argv[])
 
 // Implementation of class FE_Evolution
 FE_Evolution::FE_Evolution(SparseMatrix &_M, SparseMatrix &_K_inv_x, SparseMatrix &_K_inv_y, SparseMatrix &_K_vis_x, SparseMatrix &_K_vis_y, const Vector &_b)
-   : TimeDependentOperator(_M.Size()), M(_M), K_inv_x(_K_inv_x), K_inv_y(_K_inv_y), K_vis_x(_K_vis_x), K_vis_y(_K_vis_y), b(_b), z(_M.Size())
+   : TimeDependentOperator(_b.Size()), M(_M), K_inv_x(_K_inv_x), K_inv_y(_K_inv_y), K_vis_x(_K_vis_x), K_vis_y(_K_vis_y), b(_b), z(_b.Size())
 {
    M_solver.SetPreconditioner(M_prec);
    M_solver.SetOperator(M);
@@ -343,39 +360,34 @@ void getInvFlux(int dim, const Vector &u, Vector &f)
     }
     Vector rho, rho_u1, rho_u2, E;
     u.GetSubVector(offsets[0], rho   );
-    u.GetSubVector(offsets[1], rho_u1);
-    u.GetSubVector(offsets[2], rho_u2);
     u.GetSubVector(offsets[3],      E);
 
-    Vector f1(offset), f2(offset), f3(offset);
-    Vector g1(offset), g2(offset), g3(offset);
+    Vector rho_vel[dim];
+    for(int i = 0; i < dim; i++) u.GetSubVector(offsets[1 + i], rho_vel[i]);
+
     for(int i = 0; i < offset; i++)
     {
-        double u1   = rho_u1(i)/rho(i);
-        double u2   = rho_u2(i)/rho(i);
-        
-        double v_sq = pow(u1, 2) + pow(u2, 2);
-        double p    = (E(i) - 0.5*rho(i)*v_sq)*(gamm - 1);
+        double vel[dim];        
+        for(int j = 0; j < dim; j++) vel[j]   = rho_vel[j](i)/rho(i);
 
-        f1(i) = rho_u1(i)*u1 + p; //rho*u*u + p    
-        f2(i) = rho_u1(i)*u2    ; //rho*u*v
-        f3(i) = (E(i) + p)*u1   ; //(E+p)*u
-        
-        g1(i) = rho_u2(i)*u1    ; //rho*u*v 
-        g2(i) = rho_u2(i)*u2 + p; //rho*v*v + p
-        g3(i) = (E(i) + p)*u2   ; //(E+p)*v
+        double vel_sq = 0.0;
+        for(int j = 0; j < dim; j++) vel_sq += pow(vel[j], 2);
+
+        double pres    = (E(i) - 0.5*rho(i)*vel_sq)*(gamm - 1);
+
+        for(int j = 0; j < dim; j++) 
+        {
+            f(j*var_dim*offset + i)       = rho_vel[j][i]; //rho*u
+
+            for (int k = 0; k < dim ; k++)
+            {
+                f(j*var_dim*offset + (k + 1)*offset + i)     = rho_vel[j](i)*vel[k]; //rho*u*u + p    
+            }
+            f(j*var_dim*offset + (j + 1)*offset + i)        += pres; 
+
+            f(j*var_dim*offset + (var_dim - 1)*offset + i)   = (E(i) + pres)*vel[j] ;//(E+p)*u
+        }
     }
-
-    f.SetSubVector(offsets[0], rho_u1);
-    f.SetSubVector(offsets[1],     f1);
-    f.SetSubVector(offsets[2],     f2);
-    f.SetSubVector(offsets[3],     f3);
-
-    f.SetSubVector(offsets[4], rho_u2);
-    f.SetSubVector(offsets[5],     g1);
-    f.SetSubVector(offsets[6],     g2);
-    f.SetSubVector(offsets[7],     g3);
-
 }
 
 
@@ -444,60 +456,77 @@ void getVisFlux(int dim, const Vector &u, const Vector &u_grad, Vector &f)
 
     Vector rho(offset), rho_u1(offset), rho_u2(offset), E(offset);
     u.GetSubVector(offsets[0], rho   );
-    u.GetSubVector(offsets[1], rho_u1);
-    u.GetSubVector(offsets[2], rho_u2);
     u.GetSubVector(offsets[3],      E);
+
+    Vector rho_vel[dim];
+    for(int i = 0; i < dim; i++) u.GetSubVector(offsets[1 + i], rho_vel[i]);
 
     for(int i = 0; i < offset; i++)
     {
-        double    u1  = rho_u1(i)/rho(i);
-        double    u2  = rho_u2(i)/rho(i);
+        double vel[dim];        
+        for(int j = 0; j < dim; j++) vel[j]   = rho_vel[j](i)/rho(i);
 
-        double v_sq   = pow(u1, 2) + pow(u2, 2);
+        double vel_sq = 0.0;
+        for(int j = 0; j < dim; j++) vel_sq += pow(vel[j], 2);
 
-        double rho_x  = u_grad(i);
-        double rho_y  = u_grad(var_dim*offset + i);
+        double rho_grad[dim], vel_grad[dim][dim], E_grad[dim], rhoVel_grad[dim][dim] ;
 
-        double rhou_x = u_grad(offset + i);
-        double rhou_y = u_grad(var_dim*offset + offset + i);
+        for (int j = 0; j < dim; j++)
+        {
+            rho_grad[j] = u_grad(j*var_dim*offset + i);
+            E_grad[j]   = u_grad(j*var_dim*offset + (var_dim - 1)*offset+ i);
+            for (int k = 0; k < dim; k++)
+            {
+                rhoVel_grad[j][k]   = u_grad(k*var_dim*offset + (j + 1)*offset+ i);
+            }
+        }
+        for (int j = 0; j < dim; j++)
+            for (int k = 0; k < dim; k++)
+            {
+                vel_grad[j][k]      = (rhoVel_grad[j][k] - rho_grad[k]*vel[j])/rho(i);
+            }
 
-        double rhov_x = u_grad(2*offset + i);
-        double rhov_y = u_grad(var_dim*offset + 2*offset + i);
+        double divergence = 0.0;            
+        for (int k = 0; k < dim; k++) divergence += vel_grad[k][k];
+
+        double tau[dim][dim];
+        for (int j = 0; j < dim; j++) 
+            for (int k = 0; k < dim; k++) 
+                tau[j][k] = mu*(vel_grad[j][k] + vel_grad[k][j]);
+
+        for (int j = 0; j < dim; j++) tau[j][j] -= 2.0*mu*divergence/3.0; 
+
+        double kin_en   = 0.5*rho(i)*vel_sq; 
+        double int_en   = (E(i) - kin_en)/rho(i);
+
+        double ke_grad, int_en_grad[dim];
+        for (int j = 0; j < dim; j++)
+        {
+            ke_grad = 0.5*(vel_sq*rho_grad[j]);
+            for (int k = 0; k < dim; k++)
+            {
+                ke_grad += rho(i)*(vel_grad[k][j]*vel[k]);
+            }
         
-        double E_x    = u_grad(3*offset + i);
-        double E_y    = u_grad(var_dim*offset + 3*offset + i);
+            int_en_grad[j] = (E_grad[j] - ke_grad - rho_grad[j]*int_en)/rho(i);
+        }
 
-        double u_x    = (rhou_x - rho_x*u1)/rho(i);
-        double u_y    = (rhou_y - rho_y*u1)/rho(i);
 
-        double v_x    = (rhov_x - rho_x*u2)/rho(i);
-        double v_y    = (rhov_y - rho_y*u2)/rho(i);
+        for (int j = 0; j < dim ; j++)
+        {
+            f(j*var_dim*offset + i)       = 0.0;
 
-        double div    = u_x + v_y; 
-        double tauxx  = 2.0*mu*(u_x - div/3.0); 
-        double tauxy  =     mu*(u_y + v_x    ); 
+            for (int k = 0; k < dim ; k++)
+            {
+                f(j*var_dim*offset + (k + 1)*offset + i)       = tau[j][k];
+            }
+            f(j*var_dim*offset + (var_dim - 1)*offset + i)     =  (mu/Pr)*gamm*int_en_grad[j]; 
+            for (int k = 0; k < dim ; k++)
+            {
+                f(j*var_dim*offset + (var_dim - 1)*offset + i)+= vel[k]*tau[j][k]; 
+            }
+        }
 
-        double tauyx  =     tauxy          ; 
-        double tauyy  = 2.0*mu*(v_y - div/3.0); 
-
-        double ke     = 0.5*rho(i)*v_sq; 
-        double inte   = (E(i) - ke)/rho(i);
-
-        double ke_x   = 0.5*(v_sq*rho_x) + rho(i)*(u_x*u1 + v_x*u2);
-        double ke_y   = 0.5*(v_sq*rho_y) + rho(i)*(u_y*u1 + v_y*u2);
-
-        double inte_x = (E_x - ke_x - rho_x*inte)/rho(i);
-        double inte_y = (E_y - ke_y - rho_y*inte)/rho(i);
-
-        f(i           )       = 0.0;
-        f(  offset + i)       = tauxx; 
-        f(2*offset + i)       = tauxy; 
-        f(3*offset + i)       = u1*tauxx + u2*tauxy + (mu/Pr)*gamm*inte_x; 
-
-        f(var_dim*offset            + i) = 0.0;
-        f(var_dim*offset +   offset + i) = tauyx; 
-        f(var_dim*offset + 2*offset + i) = tauyy; 
-        f(var_dim*offset + 3*offset + i) = u1*tauxy + u2*tauyy + (mu/Pr)*gamm*inte_y; 
     }
 
 //    for (int j = 0; j < offset; j++) cout << u(offset + j) << '\t'<< f(var_dim*offset + 3*offset + j) << endl;

@@ -2511,5 +2511,13 @@ FiniteElementCollection *VarL2_FiniteElementCollection::GetColl(int i) const
     return elements[i];
 }
 
+VarL2_FiniteElementCollection::~VarL2_FiniteElementCollection() 
+{
+   int ne = elemOrder.Size(); 
+   for (int i = 0; i < ne ; i++) delete elements[i];
+
+   delete [] elements;
+}
+
 
 }

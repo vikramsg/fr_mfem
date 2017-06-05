@@ -1001,6 +1001,7 @@ FiniteElementSpace::FiniteElementSpace(Mesh *mesh,
       Construct();
    }
    BuildElementToDofTable();
+   
 }
 
 
@@ -1214,14 +1215,15 @@ void FiniteElementSpace::GetElementDofs (int i, Array<int> &dofs) const
 
 const FiniteElement *FiniteElementSpace::GetFE(int i) const
 {
-   const FiniteElement *FE =
-      fec->FiniteElementForGeometry(mesh->GetElementBaseGeometry(i));
+   const FiniteElement *FE; 
 
    if (vfec)
    {
-      delete FE;
-       const FiniteElement *FE =
-      vfec->GetColl(i)->FiniteElementForGeometry(mesh->GetElementBaseGeometry(i));
+      FE = vfec->GetColl(i)->FiniteElementForGeometry(mesh->GetElementBaseGeometry(i));
+   }
+   else
+   {
+      FE = fec->FiniteElementForGeometry(mesh->GetElementBaseGeometry(i));
    }
 
    if (NURBSext)

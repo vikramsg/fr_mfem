@@ -875,9 +875,17 @@ void ParFiniteElementSpace::GetFaceNbrFaceVDofs(int i, Array<int> &vdofs) const
 
 const FiniteElement *ParFiniteElementSpace::GetFaceNbrFE(int i) const
 {
-   const FiniteElement *FE =
-      fec->FiniteElementForGeometry(
-         pmesh->face_nbr_elements[i]->GetGeometryType());
+   const FiniteElement *FE; 
+
+   if (vfec)
+   {
+      FE = vfec->GetColl(i)->FiniteElementForGeometry(pmesh->face_nbr_elements[i]->GetGeometryType());
+   }
+   else
+   {
+      FE = fec->FiniteElementForGeometry(pmesh->face_nbr_elements[i]->GetGeometryType());
+   }
+
 
    if (NURBSext)
    {
