@@ -53,9 +53,9 @@ public:
 int main(int argc, char *argv[])
 {
    const char *mesh_file = "periodic-square.mesh";
-   int    order      = 1;
-   double t_final    = 0.0100;
-   double dt         = 0.0100;
+   int    order      = 3;
+   double t_final    = 0.0075;
+   double dt         = 0.0075;
    int    vis_steps  = 100;
    int    ref_levels = 1;
 
@@ -67,22 +67,19 @@ int main(int argc, char *argv[])
    // 2. Read the mesh from the given mesh file. We can handle geometrically
    //    periodic meshes in this code.
    Mesh *mesh = new Mesh(mesh_file, 1, 1);
-   Mesh *mesh1= new Mesh(mesh_file, 1, 1);
    int     dim = mesh->Dimension();
    int var_dim = dim + 2;
 
    for (int lev = 0; lev < ref_levels; lev++)
    {
       mesh->UniformRefinement();
-      mesh1->UniformRefinement();
-      mesh1->UniformRefinement();
    }
 
    int ne = mesh->GetNE();
    Array<int> eleOrder(ne);
 
    for (int i = 0; i < ne; i++) eleOrder[i] = order; 
-   for (int i =10; i < 20; i++) eleOrder[i] = 3; 
+//   for (int i = 2; i < 15; i++) eleOrder[i] = order + 1; 
 
    // 5. Define the discontinuous DG finite element space of the given
    //    polynomial order on the refined mesh.
@@ -178,6 +175,7 @@ int main(int argc, char *argv[])
    GridFunction u_post(&fes_post);
 
    // Visit does not understand how to look at non-uniform order data
+   // So make a uniform space and project the solution onto that space
    u_post.GetValuesFrom(u_sol);
    getFields(u_post, rho, u1, u2, E);
 
@@ -219,6 +217,9 @@ int main(int argc, char *argv[])
           dc->Save();
       }
    }
+
+   VectorFunctionCoefficient u_ex(var_dim, init_function);
+   cout << "L2 Error " << u_sol.ComputeL2Error(u_ex) << endl;
   
    // Print all nodes in the finite element space 
    FiniteElementSpace fes_nodes(mesh, &vfec, dim);
@@ -229,7 +230,7 @@ int main(int argc, char *argv[])
    {
        int offset = nodes.Size()/dim;
        int sub1 = i, sub2 = offset + i, sub3 = 2*offset + i, sub4 = 3*offset + i;
-       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << endl;      
+//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << endl;      
 //       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << '\t' << b[sub4] << endl;      
 //       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << '\t' << f_inv(sub4) << endl;      
 //       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << '\t' << u_sol(sub2) << '\t' << u_sol(sub3) << '\t' << u_sol(sub4) << endl;      
@@ -288,10 +289,17 @@ void FE_Evolution::Mult(const Vector &x, Vector &y) const
     y = 0.0;
     for(int i = 0; i < var_dim; i++)
     {
-        f.GetSubVector(offsets[i], f_sol);
-        K_inv_x.Mult(f_sol, f_x);
+        f_x = 0.0;
         b.GetSubVector(offsets[i], b_sub);
         f_x += b_sub; // Needs to be added only once
+        M_solver.Mult(f_x, f_x_m);
+        y_temp.SetSubVector(offsets[i], f_x_m);
+    }
+    y += y_temp;
+    for(int i = 0; i < var_dim; i++)
+    {
+        f.GetSubVector(offsets[i], f_sol);
+        K_inv_x.Mult(f_sol, f_x);
         M_solver.Mult(f_x, f_x_m);
         y_temp.SetSubVector(offsets[i], f_x_m);
     }
@@ -333,7 +341,7 @@ void FE_Evolution::Mult(const Vector &x, Vector &y) const
 //    for (int j = 0; j < offset; j++) cout << x(j) << '\t'<< f(offset + j) << endl;
 //    for (int j = 0; j < offset; j++) cout << j << '\t'<< b(j) << endl;
 //    for (int j = 0; j < offset; j++) cout << x(offset + j) << '\t'<< f(var_dim*offset + 3*offset + j) << endl;
-//    for (int j = 0; j < offset; j++) cout << x(offset + j) << '\t'<< y(0*offset + j) << endl;
+//    for (int j = 0; j < offset; j++) cout << x(0*offset + j) << '\t'<< y(0*offset + j) << endl;
 
 }
 

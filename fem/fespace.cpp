@@ -911,6 +911,8 @@ FiniteElementSpace::FiniteElementSpace(Mesh *mesh,
    elem_dof = NULL;
    sequence = mesh->GetSequence();
 
+   fec_sequence = 0; //Only works with VarFEC
+
    const NURBSFECollection *nurbs_fec =
       dynamic_cast<const NURBSFECollection *>(fec);
    if (nurbs_fec)
@@ -961,6 +963,8 @@ FiniteElementSpace::FiniteElementSpace(Mesh *mesh,
    this->ordering = (Ordering::Type) ordering;
 
    this->fec = vfec->GetColl(0); // fec for getting point, line DOFs
+
+   fec_sequence = vfec->GetSequence(); 
 
    elem_dof = NULL;
    sequence = mesh->GetSequence();
@@ -1038,6 +1042,8 @@ void FiniteElementSpace::Construct()
 
    elem_dof = NULL;
    bdrElem_dof = NULL;
+
+   if (vfec) fec = vfec->GetColl(0) ; 
 
    nvdofs = mesh->GetNV() * fec->DofForGeometry(Geometry::POINT);
 
@@ -1561,16 +1567,33 @@ void FiniteElementSpace::Destroy()
 
 void FiniteElementSpace::Update(bool want_transform)
 {
-   if (mesh->GetSequence() == sequence)
+   if (vfec)
    {
-      return; // mesh and space are in sync, no-op
+       if ((mesh->GetSequence() == sequence)  && (vfec -> GetSequence() == fec_sequence))
+       {
+           return; // mesh and space are in sync, no-op
+       }
+       if (want_transform && ((mesh->GetSequence() != sequence + 1) && (vfec -> GetSequence() != fec_sequence + 1)))
+       {
+           MFEM_ABORT("Error in update sequence. Space needs to be updated after "
+                 "each mesh modification or VarFEC modification");
+       }
    }
-   if (want_transform && mesh->GetSequence() != sequence + 1)
+   else 
    {
-      MFEM_ABORT("Error in update sequence. Space needs to be updated after "
+       if (mesh->GetSequence() == sequence) 
+       {
+           return; // mesh and space are in sync, no-op
+       }
+       if (want_transform && mesh->GetSequence() != sequence + 1)
+       {
+           MFEM_ABORT("Error in update sequence. Space needs to be updated after "
                  "each mesh modification.");
+       }
    }
+
    sequence = mesh->GetSequence();
+   if (vfec) fec_sequence = vfec->GetSequence();
 
    if (NURBSext)
    {

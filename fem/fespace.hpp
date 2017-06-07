@@ -102,6 +102,8 @@ protected:
 
    long sequence; // should match Mesh::GetSequence
 
+   long fec_sequence; // should match VarFEC::GetSequence
+
    void UpdateNURBS();
 
    void Construct();

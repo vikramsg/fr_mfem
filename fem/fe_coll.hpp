@@ -904,15 +904,23 @@ class VarFiniteElementCollection
 protected:
    Mesh *mesh;
 
+   int fec_sequence;
+
 public:
    /// Returns the collection the i'th finite element
    virtual FiniteElementCollection *GetColl(int i) const = 0;
+
+   virtual int GetSequence() const = 0;
 };
 
 class VarL2_FiniteElementCollection : public VarFiniteElementCollection
 {
 protected:
    FiniteElementCollection **elements;
+
+   int sdim;
+
+   int sequence;
 
    Array<int> elemOrder; // Order of each element
 
@@ -923,6 +931,12 @@ public:
 
    /// Returns the order of the i'th finite element
    FiniteElementCollection *GetColl(int i) const ;
+
+   void Update(Array<int> &order);
+
+   int GetSequence() const;
+
+   ~VarL2_FiniteElementCollection(); 
 };
 
 }

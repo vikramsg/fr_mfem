@@ -2474,6 +2474,8 @@ FiniteElementCollection *NURBSFECollection::GetTraceCollection() const
 //Default Constructor with uniform order
 VarL2_FiniteElementCollection::VarL2_FiniteElementCollection(Mesh *mesh, int order)
 {
+   sequence = 0; //Defines the number of times the collection has been updated
+
    int ne = mesh->GetNE(); 
 
    int dim = mesh->SpaceDimension();
@@ -2491,9 +2493,13 @@ VarL2_FiniteElementCollection::VarL2_FiniteElementCollection(Mesh *mesh, int ord
 
 VarL2_FiniteElementCollection::VarL2_FiniteElementCollection(Mesh *mesh, Array<int> &order) 
 {
+   sequence = 0; //Defines the number of times the collection has been updated
+
    int ne = mesh->GetNE(); 
 
    int dim = mesh->SpaceDimension();
+
+   sdim = dim; //Space dimension
 
    elemOrder.SetSize(ne);
 
@@ -2505,6 +2511,32 @@ VarL2_FiniteElementCollection::VarL2_FiniteElementCollection(Mesh *mesh, Array<i
        elements[i]  = new L2_FECollection(order[i], dim);   
    }
 }  
+
+void VarL2_FiniteElementCollection::Update(Array<int> &order) 
+{
+   sequence = sequence + 1; 
+
+   int ne = elemOrder.Size(); 
+
+   int dim = sdim;
+
+   for (int i = 0; i < ne ; i++) delete elements[i];
+
+   delete [] elements;
+
+   elements = new FiniteElementCollection*[ne];
+
+   for (int i = 0; i < ne ; i++)
+   {
+       elemOrder[i] = order[i];
+       elements[i]  = new L2_FECollection(order[i], dim);   
+   }
+}
+
+int VarL2_FiniteElementCollection::GetSequence() const
+{
+    return sequence;
+}
 
 FiniteElementCollection *VarL2_FiniteElementCollection::GetColl(int i) const
 {
