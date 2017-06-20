@@ -367,11 +367,28 @@ public:
 };
 
 
+/** Class to provide Euler functions 
+    */
+class EulerIntegrator
+{
+protected:
+   const double gamm  = 1.4;
+   const double R     = 287;
+   const double Cv    = R/(gamm - 1);
+
+public:
+   EulerIntegrator(){};
+
+   void getEulerFlux(const Vector &u, Vector &f);
+
+   void getLFFlux(const Vector &u1, const Vector &u2, const Vector &nor, Vector &f);
+};
+
 
 
 /** Interior face Riemann integrator
     */
-class DGEulerIntegrator : public LinearFormIntegrator
+class DGEulerIntegrator : public LinearFormIntegrator, public EulerIntegrator
 {
 protected:
    VectorCoefficient &uD;
@@ -380,10 +397,6 @@ protected:
    int vDim;//Vector dimension 
 
    double alpha; // b = alpha*b
-
-   const double gamm  = 1.4;
-   const double R     = 287;
-   const double Cv    = R/(gamm - 1);
 
 #ifndef MFEM_THRAED_SAFE
    Vector shape;
@@ -412,9 +425,85 @@ public:
                                        FaceElementTransformations &Tr,
                                        Vector &elvect);
 
-   void getEulerFlux(const Vector &u, Vector &f);
-        
-        
+};
+
+
+/** For compressible NS equation boundary conditions such as NoSlipWall, Characteristic
+ *  require extrapolated values of the interior element at the boundary
+    */
+class DG_CNS_NoSlipWall_Integrator : public LinearFormIntegrator
+{
+protected:
+   VectorCoefficient &uD;
+
+   int vDim;//Vector dimension 
+
+   double alpha; // b = alpha*b
+
+   const double gamm  = 1.4;
+   const double R     = 287;
+   const double Cv    = R/(gamm - 1);
+
+#ifndef MFEM_THRAED_SAFE
+   Vector shape;
+   DenseMatrix dshape;
+   DenseMatrix adjJ;
+   DenseMatrix dshape_ps;
+   Vector nor;
+   Vector dshape_dn;
+   Vector dshape_du;
+   Vector u_dir;
+#endif
+
+public:
+   DG_CNS_NoSlipWall_Integrator(VectorCoefficient &uD_, int vDim_, double alpha_)
+      : uD(uD_), vDim(vDim_), alpha(alpha_) { }
+
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       ElementTransformation &Tr,
+                                       Vector &elvect);
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       FaceElementTransformations &Tr,
+                                       Vector &elvect);
+
+};
+
+
+
+/** For compressible NS equation boundary conditions such as NoSlipWall, Characteristic
+ *  require extrapolated values of the interior element at the boundary
+    */
+class DG_CNS_Characteristic_Integrator : public LinearFormIntegrator, public EulerIntegrator
+{
+protected:
+   VectorCoefficient &uD;         //Discontinuous coefficient
+
+   VectorCoefficient &u_bnd; //Boundary value
+
+   int vDim;//Vector dimension 
+
+   double alpha; // b = alpha*b
+
+   const double gamm  = 1.4;
+   const double R     = 287;
+   const double Cv    = R/(gamm - 1);
+
+#ifndef MFEM_THRAED_SAFE
+   Vector shape;
+   Vector nor;
+#endif
+
+public:
+   DG_CNS_Characteristic_Integrator(VectorCoefficient &uD_, VectorCoefficient &u_bnd_
+                                                           , int vDim_, double alpha_)
+      : uD(uD_),u_bnd(u_bnd_), vDim(vDim_), alpha(alpha_) { }
+
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       ElementTransformation &Tr,
+                                       Vector &elvect);
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       FaceElementTransformations &Tr,
+                                       Vector &elvect);
 
 };
 

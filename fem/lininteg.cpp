@@ -697,9 +697,7 @@ void DGElasticityDirichletLFIntegrator::AssembleRHSElementVect(
 }
 
 
-
-
-void DGEulerIntegrator::getEulerFlux(const Vector &u, Vector &f)
+void EulerIntegrator::getEulerFlux(const Vector &u, Vector &f)
 {
     int var_dim = u.Size();
     int dim     = var_dim - 2;
@@ -707,7 +705,7 @@ void DGEulerIntegrator::getEulerFlux(const Vector &u, Vector &f)
     double rho  = u(0);
     double u1   = u(1)/rho;
     double u2   = u(2)/rho;
-    
+
     double v_sq = pow(u1, 2) + pow(u2, 2);
     double p    = (u(var_dim - 1) - 0.5*rho*v_sq)*(gamm - 1);
 
@@ -721,6 +719,60 @@ void DGEulerIntegrator::getEulerFlux(const Vector &u, Vector &f)
     f(  var_dim + 2) =  u(2)*u2 + p;              //rho*v*v + p
     f(2*var_dim - 1) = (u(var_dim - 1) + p)*u2  ; //(E+p)*v    
 }
+
+/*
+ * Get Interaction flux using the local Lax Friedrichs Riemann  
+ * solver, u1 is the left value and u2 the right value
+ */
+void EulerIntegrator::getLFFlux(const Vector &u1, const Vector &u2, const Vector &nor, Vector &f)
+{
+    int var_dim = u1.Size();
+    int dim     = var_dim - 2;
+
+    double rho_L = u1(0);
+    double u_L   = u1(1)/rho_L;
+    double v_L   = u1(2)/rho_L;
+    double E_L   = u1(3);
+
+    double T_L   = (E_L - 0.5*rho_L*(pow(u_L,2) + pow(v_L,2)))/(rho_L*Cv);
+    double a_L   = sqrt(gamm * R * T_L);
+
+    double rho_R = u2(0);
+    double u_R   = u2(1)/rho_R;
+    double v_R   = u2(2)/rho_R;
+    double E_R   = u2(3);
+
+    double T_R   = (E_R - 0.5*rho_R*(pow(u_R,2) + pow(v_R,2)))/(rho_R*Cv);
+    double a_R   = sqrt(gamm * R * T_R);
+
+    Vector nor_dim(dim);
+    double nor_l2 = nor.Norml2();
+    nor_dim.Set(1/nor_l2, nor);
+
+    double vnl   = u_L*nor_dim(0) + v_L*nor_dim(1); 
+    double vnr   = u_R*nor_dim(0) + v_R*nor_dim(1); 
+
+    double u_max = std::max(a_L + std::abs(vnl), a_R + std::abs(vnr));
+
+    Vector fl(dim*var_dim), fr(dim*var_dim);
+    getEulerFlux(u1, fl);
+    getEulerFlux(u2, fr);
+    add(0.5, fl, fr, f); //Common flux without dissipation
+
+    Vector f_diss(dim*var_dim); //Rusanov dissipation 
+    subtract(-0.5*u_max*nor_dim(0), u2, u1, f_diss); // Left and right depends on normal direction
+    for (int i = 0; i < dim; i++)
+    {
+        for (int j = 0; j < var_dim; j++)
+        {
+            f_diss(i*var_dim + j) = -0.5*u_max*nor_dim(i)*(u2(j) - u1(j)); 
+        }
+    }
+
+    add(f, f_diss, f);
+}
+
+
 
 void DGEulerIntegrator::AssembleRHSElementVect(
    const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
@@ -806,52 +858,14 @@ void DGEulerIntegrator::AssembleRHSElementVect(
       uD.Eval(u1_dir, *Trans.Elem1, eip1);
       uD.Eval(u2_dir, *Trans.Elem2, eip2);
 
-      double rho_L = u1_dir(0);
-      double u_L   = u1_dir(1)/rho_L;
-      double v_L   = u1_dir(2)/rho_L;
-      double E_L   = u1_dir(3);
-
-      double T_L   = (E_L - 0.5*rho_L*(pow(u_L,2) + pow(v_L,2)))/(rho_L*Cv);
-      double a_L   = sqrt(gamm * R * T_L);
-
-      double rho_R = u2_dir(0);
-      double u_R   = u2_dir(1)/rho_R;
-      double v_R   = u2_dir(2)/rho_R;
-      double E_R   = u2_dir(3);
-
-      double T_R   = (E_R - 0.5*rho_R*(pow(u_R,2) + pow(v_R,2)))/(rho_R*Cv);
-      double a_R   = sqrt(gamm * R * T_R);
-
-      Vector nor_dim(dim);
-      double nor_l2 = nor.Norml2();
-      nor_dim.Set(1/nor_l2, nor);
-
-      double vnl   = u_L*nor_dim(0) + v_L*nor_dim(1); 
-      double vnr   = u_R*nor_dim(0) + v_R*nor_dim(1); 
-
-      double u_max = std::max(a_L + std::abs(vnl), a_R + std::abs(vnr));
-
-      Vector fl_dir(dim*vDim), fr_dir(dim*vDim);
       Vector f_dir(dim*vDim);
-      getEulerFlux(u1_dir, fl_dir);
-      getEulerFlux(u2_dir, fr_dir);
-      add(0.5, fl_dir, fr_dir, f_dir); //Common flux without dissipation
+
+      getLFFlux(u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using local Lax Friedrichs
 
       Vector f1_dir(dim*vDim), f2_dir(dim*vDim);
-      fD.Eval(f1_dir, *Trans.Elem1, eip1);
+      fD.Eval(f1_dir, *Trans.Elem1, eip1); // Get discontinuous flux at face
       fD.Eval(f2_dir, *Trans.Elem2, eip2);
 
-      Vector f_diss(dim*vDim); //Rusanov dissipation 
-      subtract(-0.5*u_max*nor_dim(0), u2_dir, u1_dir, f_diss); // Left and right depends on normal direction
-      for (int i = 0; i < dim; i++)
-      {
-          for (int j = 0; j < vDim; j++)
-          {
-              f_diss(i*vDim + j) = -0.5*u_max*nor_dim(i)*(u2_dir(j) - u1_dir(j)); 
-          }
-      }
-
-      add(f_dir, f_diss, f_dir);
 
       Vector face_f(vDim), face_f1(vDim), face_f2(vDim); //Face fluxes (dot product with normal)
       face_f = 0.0; face_f1 = 0.0; face_f2 = 0.0;
@@ -867,7 +881,7 @@ void DGEulerIntegrator::AssembleRHSElementVect(
 
       w = ip.weight * alpha; 
 
-      subtract(face_f, face_f1, face_f1); //u_comm - u1
+      subtract(face_f, face_f1, face_f1); //f_comm - f1
       for (int j = 0; j < vDim; j++)
       {
           for (int i = 0; i < ndof1; i++)
@@ -876,7 +890,7 @@ void DGEulerIntegrator::AssembleRHSElementVect(
           }
       }
 
-      subtract(face_f, face_f2, face_f2); //ucomm - u2
+      subtract(face_f, face_f2, face_f2); //fcomm - f2
       for (int j = 0; j < vDim; j++)
       {
           for (int i = 0; i < ndof2; i++)
@@ -902,6 +916,172 @@ void DGEulerIntegrator::AssembleRHSElementVect(
 
 }
 
+void DG_CNS_NoSlipWall_Integrator::AssembleRHSElementVect(
+   const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
+{
+   mfem_error("DG_CNSTraceIntegrator::AssembleRHSElementVect");
+}
+
+void DG_CNS_NoSlipWall_Integrator::AssembleRHSElementVect(
+   const FiniteElement &el, FaceElementTransformations &Tr, Vector &elvect)
+{
+   int dim, ndof;
+
+   double un, a, b, w;
+
+   Vector shape;
+   DenseMatrix dshape;
+
+   dim = el.GetDim();
+   ndof = el.GetDof();
+   
+   Vector vu(dim), nor(dim);
+
+   elvect.SetSize(vDim*(ndof));
+   elvect = 0.0;
+
+   shape.SetSize(ndof);
+   dshape.SetSize(ndof, dim);
+
+   const IntegrationRule *ir = IntRule;
+   if (ir == NULL)
+   {
+      int order;
+      // Assuming order(u)==order(mesh)
+      order = Tr.Elem1->OrderW() + 2*el.GetOrder();
+      if (el.Space() == FunctionSpace::Pk)
+      {
+         order++;
+      }
+      ir = &IntRules.Get(Tr.FaceGeom, order);
+   }
+
+   for (int p = 0; p < ir->GetNPoints(); p++)
+   {
+      const IntegrationPoint &ip = ir->IntPoint(p);
+      IntegrationPoint eip;
+      Tr.Loc1.Transform(ip, eip);
+
+      Tr.Face->SetIntPoint(&ip);
+      Tr.Elem1->SetIntPoint(&eip);
+
+      el.CalcShape(eip, shape);
+      el.CalcDShape(eip, dshape);
+
+      if (dim == 1)
+      {
+         nor(0) = 2*eip.x - 1.0;
+      }
+      else
+      {
+         CalcOrtho(Tr.Face->Jacobian(), nor);
+      }
+      
+      Vector u_wall(dim);
+//      uD.Eval(u_wall, *Tr.Elem1, eip);
+   }
+
+
+}
+
+
+void DG_CNS_Characteristic_Integrator::AssembleRHSElementVect(
+   const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
+{
+   mfem_error("DG_CNSTraceIntegrator::AssembleRHSElementVect");
+}
+
+void DG_CNS_Characteristic_Integrator::AssembleRHSElementVect(
+   const FiniteElement &el, FaceElementTransformations &Tr, Vector &elvect)
+{
+   int dim, var_dim, ndof;
+
+   double un, a, b, w;
+
+   Vector shape;
+   DenseMatrix dshape;
+
+   dim     = el.GetDim();
+   var_dim = dim + 2;
+   ndof    = el.GetDof();
+   
+   Vector vu(dim), nor(dim);
+
+   elvect.SetSize(var_dim*ndof);
+   elvect = 0.0;
+
+   shape.SetSize(ndof);
+   dshape.SetSize(ndof, dim);
+
+   const IntegrationRule *ir = IntRule;
+   if (ir == NULL)
+   {
+      int order;
+      // Assuming order(u)==order(mesh)
+      order = Tr.Elem1->OrderW() + 2*el.GetOrder();
+      if (el.Space() == FunctionSpace::Pk)
+      {
+         order++;
+      }
+      ir = &IntRules.Get(Tr.FaceGeom, order);
+   }
+
+   for (int p = 0; p < ir->GetNPoints(); p++)
+   {
+      const IntegrationPoint &ip = ir->IntPoint(p);
+      IntegrationPoint eip;
+      Tr.Loc1.Transform(ip, eip);
+
+      Tr.Face->SetIntPoint(&ip);
+      Tr.Elem1->SetIntPoint(&eip);
+
+      el.CalcShape(eip, shape);
+
+      if (dim == 1)
+      {
+         nor(0) = 2*eip.x - 1.0;
+      }
+      else
+      {
+         CalcOrtho(Tr.Face->Jacobian(), nor);
+      }
+      
+      Vector u_char(var_dim), u_disc(var_dim);
+      Vector f(dim*var_dim),  f_disc(dim*var_dim);
+
+      u_bnd.Eval(u_char, *Tr.Elem1, eip);
+
+      uD.Eval(u_disc, *Tr.Elem1, eip);
+      getEulerFlux(u_disc, f_disc); // Get discontinuous flux
+      
+      getLFFlux(u_disc, u_char, nor, f); //Elem1 is left of boundary
+
+      Vector face_f(var_dim), face_f_disc(var_dim); //Face fluxes (dot product with normal)
+      face_f = 0.0; face_f_disc = 0.0;
+      for (int i = 0; i < dim; i++)
+      {
+          for (int j = 0; j < var_dim; j++)
+          {
+              face_f_disc(j) += f_disc(i*var_dim + j)*nor(i);
+              face_f (j)     += f     (i*var_dim + j)*nor(i);
+          }
+      }
+
+      w = ip.weight * alpha; 
+
+      subtract(face_f, face_f_disc, face_f_disc); //f_comm - f1
+
+      for (int j = 0; j < var_dim; j++)
+      {
+          for (int i = 0; i < ndof; i++)
+          {
+              elvect(j*ndof + i)              += face_f_disc(j)*w*shape(i); 
+          }
+      }
+   }
+
+
+}
 
 
 }
