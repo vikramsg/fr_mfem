@@ -24,7 +24,7 @@ void getInvFlux(int dim, const Vector &u, Vector &f);
 
 int main(int argc, char *argv[])
 {
-   const char *mesh_file = "sq.msh";
+   const char *mesh_file = "char_wall.msh";
    int    order      = 2;
    double t_final    = 0.0075;
    double dt         = 0.0075;
@@ -60,20 +60,32 @@ int main(int argc, char *argv[])
 
    /////////////////////////////////////////////////////////////
    VectorGridFunctionCoefficient u_vec(&u_sol);
-   VectorFunctionCoefficient u_bnd(var_dim, df1); // Defines characterstic boundary condition
-   /////////////////////////////////////////////////////////////
-   // Linear form
+   VectorFunctionCoefficient u_char_bnd(var_dim, df1); // Defines characterstic boundary condition
+
+   // Linear form for characteristic boundary
    Array<int> dir_bdr(mesh->bdr_attributes.Max());
    dir_bdr     = 0; // Deactivate all boundaries
 
    LinearForm b1(&fes);
-   dir_bdr[3]  = 1; // For each boundary activate only that one for sending a function 
+//   dir_bdr[3]  = 1; // For each boundary activate only that one for sending a function 
    b1.AddBdrFaceIntegrator(
       new DG_CNS_Characteristic_Integrator(
-      u_vec, u_bnd, var_dim, -1.0), dir_bdr); 
+      u_vec, u_char_bnd, var_dim, -1.0), dir_bdr); 
    b1.Assemble();
 
+   /////////////////////////////////////////////////////////////
+   VectorFunctionCoefficient u_wall_bnd(dim, df2); // Defines wall boundary condition 
+   // Linear form for wall boundary
+   dir_bdr     = 0; // Deactivate all boundaries
+
+   LinearForm b2(&fes);
+   dir_bdr[1]  = 1; // For each boundary activate only that one for sending a function 
+   b2.AddBdrFaceIntegrator(
+      new DG_CNS_NoSlipWall_Integrator(
+      u_vec, u_wall_bnd, var_dim, -1.0), dir_bdr); 
+   b2.Assemble();
    //////////////
+
    FiniteElementSpace fes_op(mesh, &fec);
    BilinearForm m(&fes_op);
    m.AddDomainIntegrator(new MassIntegrator);
@@ -207,6 +219,19 @@ void df1(const Vector &x, Vector &v)
     v(2) = rho * u2;                //rho * v
     v(3) = p/(gamm - 1) + 0.5*rho*v_sq;
 }
+
+void df2(const Vector &x, Vector &v)
+{
+   //Space dimensions 
+   int dim = x.Size();
+
+   if (dim == 2)
+   {
+       v(0) = 0.0;  // x velocity   
+       v(1) = 0.0;  // y velocity 
+   }
+}
+
 
 
 //  Initialize variables coefficient

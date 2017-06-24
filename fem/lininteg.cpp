@@ -925,19 +925,20 @@ void DG_CNS_NoSlipWall_Integrator::AssembleRHSElementVect(
 void DG_CNS_NoSlipWall_Integrator::AssembleRHSElementVect(
    const FiniteElement &el, FaceElementTransformations &Tr, Vector &elvect)
 {
-   int dim, ndof;
+   int dim, var_dim, ndof;
 
    double un, a, b, w;
 
    Vector shape;
    DenseMatrix dshape;
 
-   dim = el.GetDim();
-   ndof = el.GetDof();
+   dim     = el.GetDim();
+   var_dim = dim + 2;
+   ndof    = el.GetDof();
    
    Vector vu(dim), nor(dim);
 
-   elvect.SetSize(vDim*(ndof));
+   elvect.SetSize(var_dim*ndof);
    elvect = 0.0;
 
    shape.SetSize(ndof);
@@ -966,7 +967,6 @@ void DG_CNS_NoSlipWall_Integrator::AssembleRHSElementVect(
       Tr.Elem1->SetIntPoint(&eip);
 
       el.CalcShape(eip, shape);
-      el.CalcDShape(eip, dshape);
 
       if (dim == 1)
       {
@@ -977,10 +977,56 @@ void DG_CNS_NoSlipWall_Integrator::AssembleRHSElementVect(
          CalcOrtho(Tr.Face->Jacobian(), nor);
       }
       
-      Vector u_wall(dim);
-//      uD.Eval(u_wall, *Tr.Elem1, eip);
-   }
+      Vector u_wall(dim), u_disc(var_dim);
+      Vector f(dim*var_dim),  f_disc(dim*var_dim);
 
+      u_bnd.Eval(u_wall, *Tr.Elem1, eip);
+
+      uD.Eval(u_disc, *Tr.Elem1, eip);
+      getEulerFlux(u_disc, f_disc); // Get discontinuous flux
+
+      double rho = u_disc[0];
+
+      Vector nor_dim(dim);
+      double nor_l2 = nor.Norml2();
+      nor_dim.Set(1/nor_l2, nor);
+
+      Vector vel_R(dim);     // Velocity on the right side 
+      Vector u_R(var_dim);   // Solution vector on the right side 
+      for (int i = 0; i < dim; i++) 
+      {
+          vel_R[i]   = 2*u_wall[i] - u_disc[1 + i]/rho;
+          u_R[1 + i] = rho*vel_R[i]; 
+      }
+
+      u_R[0]           = rho;
+      u_R[var_dim - 1] = u_disc[var_dim - 1];
+      
+      getLFFlux(u_disc, u_R, nor, f); //Elem1 is left of boundary, so u_disc is first argument
+
+      Vector face_f(var_dim), face_f_disc(var_dim); //Face fluxes (dot product with normal)
+      face_f = 0.0; face_f_disc = 0.0;
+      for (int i = 0; i < dim; i++)
+      {
+          for (int j = 0; j < var_dim; j++)
+          {
+              face_f_disc(j) += f_disc(i*var_dim + j)*nor(i);
+              face_f (j)     += f     (i*var_dim + j)*nor(i);
+          }
+      }
+
+      w = ip.weight * alpha; 
+
+      subtract(face_f, face_f_disc, face_f_disc); //f_comm - f1
+
+      for (int j = 0; j < var_dim; j++)
+      {
+          for (int i = 0; i < ndof; i++)
+          {
+              elvect(j*ndof + i)              += face_f_disc(j)*w*shape(i); 
+          }
+      }
+   }
 
 }
 
@@ -1079,7 +1125,6 @@ void DG_CNS_Characteristic_Integrator::AssembleRHSElementVect(
           }
       }
    }
-
 
 }
 
