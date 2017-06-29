@@ -337,7 +337,7 @@ protected:
    Coefficient *lambda, *mu;
    double alpha, kappa;
 
-#ifndef MFEM_THRAED_SAFE
+#ifndef MFEM_THREAD_SAFE
    Vector shape;
    DenseMatrix dshape;
    DenseMatrix adjJ;
@@ -398,7 +398,7 @@ protected:
 
    double alpha; // b = alpha*b
 
-#ifndef MFEM_THRAED_SAFE
+#ifndef MFEM_THREAD_SAFE
    Vector shape;
    DenseMatrix dshape;
    DenseMatrix adjJ;
@@ -430,50 +430,9 @@ public:
 
 /** For compressible NS equation boundary conditions such as NoSlipWall, Characteristic
  *  require extrapolated values of the interior element at the boundary
+ *  Characteristic boundary conditions are imposed only on the inviscid part
     */
-class DG_CNS_NoSlipWall_Integrator : public LinearFormIntegrator
-{
-protected:
-   VectorCoefficient &uD;
-
-   int vDim;//Vector dimension 
-
-   double alpha; // b = alpha*b
-
-   const double gamm  = 1.4;
-   const double R     = 287;
-   const double Cv    = R/(gamm - 1);
-
-#ifndef MFEM_THRAED_SAFE
-   Vector shape;
-   DenseMatrix dshape;
-   DenseMatrix adjJ;
-   DenseMatrix dshape_ps;
-   Vector nor;
-   Vector dshape_dn;
-   Vector dshape_du;
-   Vector u_dir;
-#endif
-
-public:
-   DG_CNS_NoSlipWall_Integrator(VectorCoefficient &uD_, int vDim_, double alpha_)
-      : uD(uD_), vDim(vDim_), alpha(alpha_) { }
-
-   virtual void AssembleRHSElementVect(const FiniteElement &el,
-                                       ElementTransformation &Tr,
-                                       Vector &elvect);
-   virtual void AssembleRHSElementVect(const FiniteElement &el,
-                                       FaceElementTransformations &Tr,
-                                       Vector &elvect);
-
-};
-
-
-
-/** For compressible NS equation boundary conditions such as NoSlipWall, Characteristic
- *  require extrapolated values of the interior element at the boundary
-    */
-class DG_CNS_Characteristic_Integrator : public LinearFormIntegrator, public EulerIntegrator
+class DG_Inv_Characteristic_Integrator : public LinearFormIntegrator, public EulerIntegrator
 {
 protected:
    VectorCoefficient &uD;         //Discontinuous coefficient
@@ -484,17 +443,13 @@ protected:
 
    double alpha; // b = alpha*b
 
-   const double gamm  = 1.4;
-   const double R     = 287;
-   const double Cv    = R/(gamm - 1);
-
-#ifndef MFEM_THRAED_SAFE
+#ifndef MFEM_THREAD_SAFE
    Vector shape;
    Vector nor;
 #endif
 
 public:
-   DG_CNS_Characteristic_Integrator(VectorCoefficient &uD_, VectorCoefficient &u_bnd_
+   DG_Inv_Characteristic_Integrator(VectorCoefficient &uD_, VectorCoefficient &u_bnd_
                                                            , int vDim_, double alpha_)
       : uD(uD_),u_bnd(u_bnd_), vDim(vDim_), alpha(alpha_) { }
 
@@ -506,6 +461,113 @@ public:
                                        Vector &elvect);
 
 };
+
+class FaceInt : public LinearFormIntegrator
+{
+protected:
+   VectorCoefficient &uD;
+   VectorCoefficient &dir;
+
+   double alpha; // b = alpha*b
+
+#ifndef MFEM_THREAD_SAFE
+   Vector shape;
+   DenseMatrix dshape;
+   DenseMatrix adjJ;
+   DenseMatrix dshape_ps;
+   Vector nor;
+   Vector dshape_dn;
+   Vector dshape_du;
+   Vector u_dir;
+#endif
+
+public:
+   FaceInt(VectorCoefficient &uD_, VectorCoefficient &dir_, double alpha_)
+      : uD(uD_), dir(dir_), alpha(alpha_) { }
+
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       ElementTransformation &Tr,
+                                       Vector &elvect);
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       FaceElementTransformations &Tr,
+                                       Vector &elvect);
+   //For interior faces
+   virtual void AssembleRHSElementVect(const FiniteElement &el1,
+                                       const FiniteElement &el2,
+                                       FaceElementTransformations &Tr,
+                                       Vector &elvect);
+
+};
+
+class DG_CNS_Aux_Integrator: public LinearFormIntegrator
+{
+protected:
+   VectorCoefficient &uD;
+   VectorCoefficient &u_bnd;
+   VectorCoefficient &dir;
+
+   double alpha; // b = alpha*b
+
+#ifndef MFEM_THREAD_SAFE
+   Vector shape;
+   DenseMatrix dshape;
+   DenseMatrix adjJ;
+   DenseMatrix dshape_ps;
+   Vector nor;
+   Vector dshape_dn;
+   Vector dshape_du;
+   Vector u_dir;
+#endif
+
+public:
+   DG_CNS_Aux_Integrator(VectorCoefficient &dir_, VectorCoefficient &uD_, VectorCoefficient &u_bnd_, double alpha_)
+      : uD(uD_), dir(dir_), u_bnd(u_bnd_), alpha(alpha_) { }
+
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       ElementTransformation &Tr,
+                                       Vector &elvect);
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       FaceElementTransformations &Tr,
+                                       Vector &elvect);
+
+};
+
+
+/** Boundary face Riemann integrator
+    */
+class DG_Euler_NoSlip_Integrator: public LinearFormIntegrator, public EulerIntegrator
+{
+protected:
+   VectorCoefficient &uD;
+   VectorCoefficient &fD;
+   VectorCoefficient &u_bnd;
+
+   double alpha; // b = alpha*b
+
+#ifndef MFEM_THREAD_SAFE
+   Vector shape;
+   DenseMatrix dshape;
+   DenseMatrix adjJ;
+   DenseMatrix dshape_ps;
+   Vector nor;
+   Vector dshape_dn;
+   Vector dshape_du;
+   Vector u_dir;
+#endif
+
+public:
+   DG_Euler_NoSlip_Integrator(VectorCoefficient &uD_, VectorCoefficient &fD_, VectorCoefficient &u_bnd_, double alpha_)
+      : uD(uD_), fD(fD_), u_bnd(u_bnd_), alpha(alpha_) { }
+
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       ElementTransformation &Tr,
+                                       Vector &elvect);
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       FaceElementTransformations &Tr,
+                                       Vector &elvect);
+
+};
+
 
 
 }
