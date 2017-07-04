@@ -428,39 +428,6 @@ public:
 };
 
 
-/** For compressible NS equation boundary conditions such as NoSlipWall, Characteristic
- *  require extrapolated values of the interior element at the boundary
- *  Characteristic boundary conditions are imposed only on the inviscid part
-    */
-class DG_Inv_Characteristic_Integrator : public LinearFormIntegrator, public EulerIntegrator
-{
-protected:
-   VectorCoefficient &uD;         //Discontinuous coefficient
-
-   VectorCoefficient &u_bnd; //Boundary value
-
-   int vDim;//Vector dimension 
-
-   double alpha; // b = alpha*b
-
-#ifndef MFEM_THREAD_SAFE
-   Vector shape;
-   Vector nor;
-#endif
-
-public:
-   DG_Inv_Characteristic_Integrator(VectorCoefficient &uD_, VectorCoefficient &u_bnd_
-                                                           , int vDim_, double alpha_)
-      : uD(uD_),u_bnd(u_bnd_), vDim(vDim_), alpha(alpha_) { }
-
-   virtual void AssembleRHSElementVect(const FiniteElement &el,
-                                       ElementTransformation &Tr,
-                                       Vector &elvect);
-   virtual void AssembleRHSElementVect(const FiniteElement &el,
-                                       FaceElementTransformations &Tr,
-                                       Vector &elvect);
-
-};
 
 class FaceInt : public LinearFormIntegrator
 {
@@ -567,6 +534,138 @@ public:
                                        Vector &elvect);
 
 };
+
+
+/** Boundary face Riemann integrator
+    */
+class DG_Euler_Adiabatic_NoSlip_Integrator: public LinearFormIntegrator, public EulerIntegrator
+{
+protected:
+   VectorCoefficient &uD;
+   VectorCoefficient &fD;
+   VectorCoefficient &u_bnd;
+
+   double alpha; // b = alpha*b
+
+#ifndef MFEM_THREAD_SAFE
+   Vector shape;
+   DenseMatrix dshape;
+   DenseMatrix adjJ;
+   DenseMatrix dshape_ps;
+   Vector nor;
+   Vector dshape_dn;
+   Vector dshape_du;
+   Vector u_dir;
+#endif
+
+public:
+   DG_Euler_Adiabatic_NoSlip_Integrator(VectorCoefficient &uD_, VectorCoefficient &fD_, VectorCoefficient &u_bnd_, double alpha_)
+      : uD(uD_), fD(fD_), u_bnd(u_bnd_), alpha(alpha_) { }
+
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       ElementTransformation &Tr,
+                                       Vector &elvect);
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       FaceElementTransformations &Tr,
+                                       Vector &elvect);
+
+};
+
+
+
+/** Boundary face Riemann integrator
+    */
+class DG_Euler_Characteristic_Integrator: public LinearFormIntegrator, public EulerIntegrator
+{
+protected:
+   VectorCoefficient &uD;
+   VectorCoefficient &fD;
+   VectorCoefficient &u_bnd;
+
+   double alpha; // b = alpha*b
+
+#ifndef MFEM_THREAD_SAFE
+   Vector shape;
+   DenseMatrix dshape;
+   DenseMatrix adjJ;
+   DenseMatrix dshape_ps;
+   Vector nor;
+   Vector dshape_dn;
+   Vector dshape_du;
+   Vector u_dir;
+#endif
+
+public:
+   DG_Euler_Characteristic_Integrator(VectorCoefficient &uD_, VectorCoefficient &fD_, VectorCoefficient &u_bnd_, double alpha_)
+      : uD(uD_), fD(fD_), u_bnd(u_bnd_), alpha(alpha_) { }
+
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       ElementTransformation &Tr,
+                                       Vector &elvect);
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       FaceElementTransformations &Tr,
+                                       Vector &elvect);
+
+};
+
+/** Class to provide CNS functions 
+    */
+class CNSIntegrator
+{
+protected:
+   const double gamm  = 1.4;
+   const double R     = 287;
+   const double Cv    = R/(gamm - 1);
+
+public:
+   CNSIntegrator(){};
+
+   void getViscousCNSFlux(const Vector &u, const Vector &aux_grad, const double mu, const double Pr, Vector &f);
+
+};
+
+
+
+/** Boundary viscous adiabatic integrator
+    */
+class DG_CNS_Vis_Adiabatic_Integrator: public LinearFormIntegrator, public CNSIntegrator
+{
+protected:
+   VectorCoefficient &uD;
+   VectorCoefficient &fD;
+   VectorCoefficient &auxD;
+   VectorCoefficient &u_bnd;
+
+   double alpha; // b = alpha*b
+
+   double mu, Pr;
+
+#ifndef MFEM_THREAD_SAFE
+   Vector shape;
+   DenseMatrix dshape;
+   DenseMatrix adjJ;
+   DenseMatrix dshape_ps;
+   Vector nor;
+   Vector dshape_dn;
+   Vector dshape_du;
+   Vector u_dir;
+#endif
+
+public:
+   DG_CNS_Vis_Adiabatic_Integrator(VectorCoefficient &uD_, VectorCoefficient &fD_, VectorCoefficient &auxD_, 
+                                    VectorCoefficient &u_bnd_,  double mu_, double Pr_, double alpha_) 
+      : uD(uD_), fD(fD_), auxD(auxD_), u_bnd(u_bnd_), alpha(alpha_), mu(mu_), Pr(Pr_) { }
+
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       ElementTransformation &Tr,
+                                       Vector &elvect);
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       FaceElementTransformations &Tr,
+                                       Vector &elvect);
+
+};
+
+
 
 
 
