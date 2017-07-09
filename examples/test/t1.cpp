@@ -8,7 +8,7 @@ using namespace mfem;
 
 //Constants
 const double gamm  = 1.4;
-const double   mu  = 0.0050;
+const double   mu  = 0.031;
 const double R_gas = 287;
 const double   Pr  = 0.72;
 
@@ -21,10 +21,9 @@ void init_function(const Vector &x, Vector &v);
 void char_bnd_cnd(const Vector &x, Vector &v);
 // Wall boundary condition specification
 void wall_bnd_cnd(const Vector &x, Vector &v);
-void lid_bnd_cnd(const Vector &x, Vector &v);
+void wall_adi_bnd_cnd(const Vector &x, Vector &v);
 
-void lid_flux_bnd_cnd(const Vector &x, Vector &v);
-void wall_flux_bnd_cnd(const Vector &x, Vector &v);
+double getUMax(int dim, const Vector &u);
 
 void getInvFlux(int dim, const Vector &u, Vector &f);
 
@@ -67,12 +66,12 @@ public:
 
 int main(int argc, char *argv[])
 {
-   const char *mesh_file = "ldc.msh";
+   const char *mesh_file = "cyl.msh";
    int    order      = 2;
-   double t_final    = 40.000;
-   double dt         = 0.0002;
-   int    vis_steps  = 1000;
-   int    ref_levels = 3;
+   double t_final    = 20;
+   double cfl        = 0.20;
+   int    vis_steps  = 500;
+   int    ref_levels = 0;
 
           problem    = 0;    
 
@@ -91,6 +90,10 @@ int main(int argc, char *argv[])
       mesh->UniformRefinement();
    }
 
+   double h_min, h_max;  // Minimum, maximum element size
+   double kappa_min, kappa_max;
+   mesh->GetCharacteristics(h_min, h_max, kappa_min, kappa_max);
+   
    // 5. Define the discontinuous DG finite element space of the given
    //    polynomial order on the refined mesh.
    DG_FECollection fec(order, dim);
@@ -162,74 +165,36 @@ int main(int argc, char *argv[])
    b.Assemble();
    ///////////////////////////////////////////////////////////
 
-   
-   FiniteElementSpace fes_aux(mesh, &fec, aux_dim);
-   GridFunction aux_var(&fes_aux);
-   getAuxVar(dim, u_sol, aux_var);
-   VectorGridFunctionCoefficient aux_vec(&aux_var);
-
-   ///////////////////////////////////////////////////////////
-   // Linear form for boundary condition
-   // Each boundary should get its own array since they are passed by reference
    Array<int> dir_bdr_1(mesh->bdr_attributes.Max());
-
-   VectorFunctionCoefficient u_lid_bnd(aux_dim, lid_bnd_cnd); // Defines lid boundary condition
-   VectorFunctionCoefficient u_lid_flux_bnd(var_dim, lid_flux_bnd_cnd); // Defines lid boundary condition
    // Linear form for boundary condition
    dir_bdr_1    = 0; // Deactivate all boundaries
    dir_bdr_1[0] = 1; // Activate lid boundary 
 
+   VectorFunctionCoefficient u_wall_bnd(aux_dim, wall_bnd_cnd); // Defines wall boundary condition
    LinearForm b1(&fes);
    b1.AddBdrFaceIntegrator(
       new DG_Euler_NoSlip_Integrator(
-      u_vec, f_vec, u_lid_bnd, -1.0), dir_bdr_1); 
+      u_vec, f_vec, u_wall_bnd, -1.0), dir_bdr_1); 
    b1.Assemble();
 
-   LinearForm b_aux_x_1(&fes_aux);
-   b_aux_x_1.AddBdrFaceIntegrator(
-      new DG_CNS_Aux_Integrator(
-      x_dir, aux_vec, u_lid_bnd, 1.0), dir_bdr_1); 
-   b_aux_x_1.Assemble();
-
-   LinearForm b_aux_y_1(&fes_aux);
-   b_aux_y_1.AddBdrFaceIntegrator(
-      new DG_CNS_Aux_Integrator(
-      y_dir, aux_vec, u_lid_bnd,  1.0), dir_bdr_1); 
-   b_aux_y_1.Assemble();
-   ///////////////////////////////////////////////////////////
-
-   Array<int> dir_bdr_2(mesh->bdr_attributes.Max());
-
-   VectorFunctionCoefficient u_wall_bnd(aux_dim, wall_bnd_cnd); // Defines wall boundary condition
-   VectorFunctionCoefficient u_wall_flux_bnd(var_dim, wall_flux_bnd_cnd); // Defines wall boundary condition
-   // Linear form for boundary condition
-   dir_bdr_2    = 0; // Deactivate all boundaries
-   dir_bdr_2[1] = 1; // Activate lid boundary 
-
-   LinearForm b2(&fes);
-   b2.AddBdrFaceIntegrator(
-      new DG_Euler_NoSlip_Integrator(
-      u_vec, f_vec, u_wall_bnd, -1.0), dir_bdr_2); 
-   b2.Assemble();
-
-   LinearForm b_aux_x_2(&fes_aux);
-   b_aux_x_2.AddBdrFaceIntegrator(
-      new DG_CNS_Aux_Integrator(
-      x_dir, aux_vec, u_wall_bnd, 1.0), dir_bdr_2); 
-   b_aux_x_2.Assemble();
-
-   LinearForm b_aux_y_2(&fes_aux);
-   b_aux_y_2.AddBdrFaceIntegrator(
-      new DG_CNS_Aux_Integrator(
-      y_dir, aux_vec, u_wall_bnd,  1.0), dir_bdr_2); 
-   b_aux_y_2.Assemble();
-   ///////////////////////////////////////////////////////////
-
+   
+   FiniteElementSpace fes_aux(mesh, &fec, aux_dim);
    LinearForm b_aux_x(&fes_aux);
    LinearForm b_aux_y(&fes_aux);
 
-   add(b_aux_x_1, b_aux_x_2, b_aux_x);
-   add(b_aux_y_1, b_aux_y_2, b_aux_y);
+   GridFunction aux_var(&fes_aux);
+   getAuxVar(dim, u_sol, aux_var);
+   VectorGridFunctionCoefficient aux_vec(&aux_var);
+
+   b_aux_x.AddBdrFaceIntegrator(
+      new DG_CNS_Aux_Integrator(
+      x_dir, aux_vec, u_wall_bnd,  1.0), dir_bdr_1); 
+   b_aux_x.Assemble();
+
+   b_aux_y.AddBdrFaceIntegrator(
+      new DG_CNS_Aux_Integrator(
+      y_dir, aux_vec, u_wall_bnd,  1.0), dir_bdr_1); 
+   b_aux_y.Assemble();
 
    FiniteElementSpace fes_aux_grad(mesh, &fec, dim*aux_dim);
    GridFunction aux_grad(&fes_aux_grad);
@@ -237,9 +202,31 @@ int main(int argc, char *argv[])
    GridFunction f_vis(&fes_vec);
    getVisFlux(dim, u_sol, aux_grad, f_vis);
 
+   VectorGridFunctionCoefficient aux_grad_vec(&aux_grad);
+
+   VectorGridFunctionCoefficient vis_vec(&f_vis);
+   VectorFunctionCoefficient u_adi_wall_bnd(dim, wall_adi_bnd_cnd); // Defines lid boundary condition
+
+   LinearForm b_vis(&fes);
+   b_vis.AddBdrFaceIntegrator(
+      new DG_CNS_Vis_Adiabatic_Integrator(
+          u_vec, vis_vec, aux_grad_vec, u_adi_wall_bnd, mu, Pr, 1.0), dir_bdr_1);
+   b_vis.Assemble();
+
    ///////////////////////////////////////////////////////////
-   //
-   //
+   Array<int> dir_bdr_2(mesh->bdr_attributes.Max());
+
+   VectorFunctionCoefficient u_char_bnd(var_dim, char_bnd_cnd); // Defines lid boundary condition
+   // Linear form for boundary condition
+   dir_bdr_2    = 0; // 
+   dir_bdr_2[1] = 1; //
+
+   LinearForm b2(&fes);
+   b2.AddBdrFaceIntegrator(
+      new DG_Euler_Characteristic_Integrator(
+      u_vec, f_vec, u_char_bnd, -1.0), dir_bdr_2); 
+   b2.Assemble();
+   ///////////////////////////////////////////////////////////
    // Create data collection for solution output: either VisItDataCollection for
    // ascii data files, or SidreDataCollection for binary data files.
    DataCollection *dc = NULL;
@@ -259,7 +246,13 @@ int main(int argc, char *argv[])
    GridFunction v_x(&fes_fields);
    GridFunction v_y(&fes_fields);
 
+   GridFunction rhs(&fes);
+   GridFunction rhs1(&fes_fields);
+   GridFunction b1_1(&fes_fields);
+
    dc->RegisterField("rho", &rho);
+   dc->RegisterField("rhs1", &rhs1);
+   dc->RegisterField("b1_1", &rhs1);
    dc->RegisterField("u1", &u1);
    dc->RegisterField("u2", &u2);
    dc->RegisterField("E", &E);
@@ -277,11 +270,16 @@ int main(int argc, char *argv[])
    dc->Save();
 
 
+
+
    FE_Evolution adv(m.SpMat(), k_inv_x.SpMat(), k_inv_y.SpMat(), 
                         K_vis_x, K_vis_y, b, b_aux_x, b_aux_y);
+
 //   ODESolver *ode_solver = new ForwardEulerSolver; 
    ODESolver *ode_solver = new RK3SSPSolver; 
 
+   double u_max = getUMax(dim, u_sol);
+   double dt = cfl*((h_min/(2.0*order + 1))/u_max); 
 
    double t = 0.0;
    adv.SetTime(t);
@@ -293,27 +291,30 @@ int main(int argc, char *argv[])
       b.Assemble();
       b1.Assemble();
       b2.Assemble();
+      b_vis.Assemble();
 
       add(b, b1, b);
       add(b, b2, b);
+      add(b, b_vis, b);
 
-      b_aux_x_1.Assemble();
-      b_aux_y_1.Assemble();
-      b_aux_x_2.Assemble();
-      b_aux_y_2.Assemble();
-
-      add(b_aux_x_1, b_aux_x_2, b_aux_x);
-      add(b_aux_y_1, b_aux_y_2, b_aux_y);
+      
+      b_aux_x.Assemble();
+      b_aux_y.Assemble();
 
       double dt_real = min(dt, t_final - t);
       ode_solver->Step(u_sol, t, dt_real);
       ti++;
 
-      cout << "time step: " << ti << ", time: " << t << ", max_sol: " << u_sol.Max() << endl;
+      cout << "time step: " << ti << ", dt: " << dt_real << ", time: " << t << ", max_speed " << u_max << endl;
+
+      u_max = getUMax(dim, u_sol);
+      dt = cfl*((h_min/(2.0*order + 1))/u_max); 
 
       getInvFlux(dim, u_sol, f_inv); // To update f_vec
 
       getAuxVar(dim, u_sol, aux_var);
+      getAuxGrad(dim, K_vis_x, K_vis_y, M, u_sol, b_aux_x, b_aux_y, aux_grad);
+      getVisFlux(dim, u_sol, aux_grad, f_vis);
 
       done = (t >= t_final - 1e-8*dt);
 
@@ -321,6 +322,12 @@ int main(int argc, char *argv[])
       {
           getAuxGrad(dim, K_vis_x, K_vis_y, M, u_sol, b_aux_x, b_aux_y, aux_grad);
           getFields(u_sol, aux_grad, rho, u1, u2, E, T_x, T_y, u_x, u_y, v_x, v_y);
+          adv.Mult(u_sol, rhs);
+          for(int i = 0; i < K_vis_x.Size(); i++)
+          {
+              rhs1[i] = rhs[i];          
+              b1_1[i] = b1[i];          
+          }
 
           dc->SetCycle(ti);
           dc->SetTime(t);
@@ -338,10 +345,12 @@ int main(int argc, char *argv[])
    {
        int offset = nodes.Size()/dim;
        int sub1 = i, sub2 = offset + i, sub3 = 2*offset + i, sub4 = 3*offset + i;
-//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub3) << '\t' << aux_grad[4*offset + i]<< endl;      
-//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << '\t' << b_aux_y_1[sub1]<< endl;      
-//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << '\t' << b[sub3] << "\t" << b1[sub1] << "\t" << b2[sub4]<< endl;      
-//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub4) << '\t' << aux_var(sub3) << "\t" << thermal_k*aux_grad(sub3) << endl;      
+//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << "\t" << rhs[sub1]<< endl;      
+//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub2) << '\t' << b[sub1]<< endl;      
+//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub4) << '\t' << b_aux_y[sub3]<< endl;      
+//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << aux_var[sub1] << '\t' << b_aux_x[sub3]<< endl;      
+//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << aux_var[sub1] << '\t' << f_vis[2*offset + i]<< endl;      
+//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << aux_var[sub1] << '\t' << aux_grad[5*offset + i]<< endl;      
    }
 
    return 0;
@@ -408,6 +417,7 @@ void FE_Evolution::Mult(const Vector &x, Vector &y) const
         y_temp.SetSubVector(offsets[i], f_x_m);
     }
     y += y_temp;
+
     for(int i = var_dim + 0; i < 2*var_dim; i++)
     {
         f.GetSubVector(offsets[i], f_sol);
@@ -432,7 +442,6 @@ void FE_Evolution::Mult(const Vector &x, Vector &y) const
         M_solver.Mult(f_x, f_x_m);
         y_temp.SetSubVector(offsets[i], f_x_m);
     }
-
     y += y_temp;
 
     for(int i = var_dim + 0; i < 2*var_dim; i++)
@@ -445,17 +454,41 @@ void FE_Evolution::Mult(const Vector &x, Vector &y) const
     }
     y += y_temp;
 
-//    for (int j = 0; j < offset; j++) 
-//    {
-//        int sub = 1*offset + j ;
-//        cout << j << "\t" << x(j) << '\t'<< f(sub) << "\t" << b(sub) << "\t" << y(sub) << endl;
-//    }
+}
 
+// Get max signal speed 
+double getUMax(int dim, const Vector &u)
+{
+    int var_dim = dim + 2; 
+    int aux_dim = dim + 1; // Auxilliary variables are {u, v, w, T}
 
-//    for (int j = 0; j < offset; j++) cout << j << '\t'<< b(j) << endl;
-//    for (int j = 0; j < offset; j++) cout << x(offset + j) << '\t'<< f(var_dim*offset + 3*offset + j) << endl;
-//    for (int j = 0; j < offset; j++) cout << x(0*offset + j) << '\t'<< y(0*offset + j) << endl;
+    int offset = u.Size()/var_dim;
 
+    double u_max = 0;
+
+    double rho, vel[dim];
+    for(int j = 0; j < offset; j++)
+    {
+        rho = u[j];
+    
+        for(int i = 0; i < dim; i++) vel[i] = u[1 + i]/rho;
+
+        double v_sq =  0;
+        for(int i = 0; i < dim; i++)
+        {
+            v_sq += pow(vel[i], 2);
+        }
+        double rho_E = u[(var_dim - 1)*offset + j];
+        double e  = (rho_E - 0.5*rho*v_sq)/rho;
+        double Cv = R_gas/(gamm - 1);
+
+        double T = e/Cv; // T
+
+        double a = sqrt(gamm*R_gas*T);
+
+        u_max = max(u_max, sqrt(v_sq) + a);
+    }
+    return u_max;
 }
 
 
@@ -562,6 +595,10 @@ void getAuxGrad(int dim, const SparseMatrix &K_x, const SparseMatrix &K_y, const
         add(b_sub, aux_x, aux_x);
         M_solver.Mult(aux_x, aux_x);
         aux_grad.SetSubVector(offsets[aux_dim + i], aux_x);
+    }
+    for(int i = 0; i < offset; i++)
+    {
+//        cout << i << "\t" << aux_sol(2*offset + i) << "\t" << aux_grad(3*offset + i) << endl;    
     }
 }
 
@@ -700,35 +737,9 @@ void init_function(const Vector &x, Vector &v)
    if (dim == 2)
    {
        double rho, u1, u2, p;
-       if (problem == 0)
-       {
-           rho = 1;
-           u1 = 0.0; u2 = 0.0;
-           p   = 100;
-       }
-       else if (problem == 1)
-       {
-           if (x(0) < 0.0)
-           {
-               rho = 1.0; 
-               u1  = 0.0; u2 = 0.0;
-               p   = 1;
-           }
-           else
-           {
-               rho = 0.125;
-               u1  = 0.0; u2 = 0.0;
-               p   = 0.1;
-           }
-       }
-       else if (problem == 2) //Taylor Green Vortex
-       {
-           rho =  1.0;
-           p   =  100 + rho/4.0*(cos(2.0*M_PI*x(0)) + cos(2.0*M_PI*x(1)));
-           u1  =      sin(M_PI*x(0))*cos(M_PI*x(1))/rho;
-           u2  = -1.0*cos(M_PI*x(0))*sin(M_PI*x(1))/rho;
-       }
-
+       rho = 1;
+       u1 = 3.10; u2 = 0.0;
+       p   =172.2;
     
        double v_sq = pow(u1, 2) + pow(u2, 2);
     
@@ -737,21 +748,8 @@ void init_function(const Vector &x, Vector &v)
        v(2) = rho * u2;                //rho * v
        v(3) = p/(gamm - 1) + 0.5*rho*v_sq;
    }
+
 }
-
-void lid_bnd_cnd(const Vector &x, Vector &v)
-{
-   //Space dimensions 
-   int dim = x.Size();
-
-   if (dim == 2)
-   {
-       v(0) = 1.0;  // x velocity   
-       v(1) = 0.0;  // y velocity 
-       v(2) = 0.3484;  // Temperature 
-   }
-}
-
 
 void wall_bnd_cnd(const Vector &x, Vector &v)
 {
@@ -762,9 +760,46 @@ void wall_bnd_cnd(const Vector &x, Vector &v)
    {
        v(0) = 0.0;  // x velocity   
        v(1) = 0.0;  // y velocity 
-       v(2) = 0.3484;  // Temperature 
+       v(2) = 0.6;  // Temperature 
    }
 }
+
+void wall_adi_bnd_cnd(const Vector &x, Vector &v)
+{
+   //Space dimensions 
+   int dim = x.Size();
+
+   if (dim == 2)
+   {
+       v(0) = 0.0;  // x velocity   
+       v(1) = 0.0;  // y velocity 
+   }
+}
+
+
+void char_bnd_cnd(const Vector &x, Vector &v)
+{
+   //Space dimensions 
+   int dim = x.Size();
+
+   if (dim == 2)
+   {
+       double rho, u1, u2, p;
+       rho = 1;
+       u1 = 3.10; u2 = 0.0;
+       p   =172.2;
+    
+       double v_sq = pow(u1, 2) + pow(u2, 2);
+    
+       v(0) = rho;                     //rho
+       v(1) = rho * u1;                //rho * u
+       v(2) = rho * u2;                //rho * v
+       v(3) = p/(gamm - 1) + 0.5*rho*v_sq;
+   }
+}
+
+
+
 
 
 void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, Vector &u1, Vector &u2, 

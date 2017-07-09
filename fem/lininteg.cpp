@@ -1097,7 +1097,7 @@ void DG_CNS_Aux_Integrator::AssembleRHSElementVect(
          CalcOrtho(Trans.Face->Jacobian(), nor);
       }
 
-      Vector u1_dir(aux_dim), u2_bnd(dim), u2_dir(aux_dim);
+      Vector u1_dir(aux_dim), u2_bnd(aux_dim), u2_dir(aux_dim);
       uD.Eval(u1_dir, *Trans.Elem1, eip);
       u_bnd.Eval(u2_bnd, *Trans.Elem1, eip);
 
@@ -1228,8 +1228,9 @@ void DG_Euler_NoSlip_Integrator::AssembleRHSElementVect(
           vel_R(j) = 2*u2_bnd(j) - vel_L(j);      
           v_sq    += pow(vel_R(j), 2);
       }
-      double T_R   = u2_bnd(aux_dim - 1);
-      double rho_R = p_R/(R*T_R);
+//      double T_R   = u2_bnd(aux_dim - 1);
+//      double rho_R = p_R/(R*T_R);
+      double rho_R = rho_L;
       double E_R   = p_R/(gamm - 1) + 0.5*rho_R*v_sq;
 
       u2_dir(0) = rho_R;
@@ -1335,7 +1336,7 @@ void DG_Euler_Adiabatic_NoSlip_Integrator::AssembleRHSElementVect(
       }
 
       Vector u1_dir(var_dim), u2_dir(var_dim);
-      Vector u2_bnd(dim);
+      Vector u2_bnd(aux_dim);
       uD.Eval(u1_dir, *Trans.Elem1, eip);
       u_bnd.Eval(u2_bnd, *Trans.Elem1, eip);
 
@@ -1625,6 +1626,14 @@ void DG_CNS_Vis_Adiabatic_Integrator::AssembleRHSElementVect(
       Vector aux1_dir(dim*aux_dim), aux2_dir(dim*aux_dim);
       auxD.Eval(aux1_dir, *Tr.Elem1, eip);
 
+//      ///////////
+//      Vector f_dir(dim*var_dim);
+//      getViscousCNSFlux(u1_dir, aux1_dir, mu, Pr, f_dir);
+//
+//      Vector f1_dir(dim*var_dim);
+//      fD.Eval(f1_dir, *Tr.Elem1, eip);        // Get discontinuous flux at face
+//      ////////////
+
       Vector vel_L(dim);    
       double rho_L = u1_dir(0);
       double v_sq  = 0.0;
@@ -1640,7 +1649,7 @@ void DG_CNS_Vis_Adiabatic_Integrator::AssembleRHSElementVect(
       v_sq  = 0.0;
       for (int j = 0; j < dim; j++)
       {
-          vel_R(j) = 2*u2_bnd(j) - vel_L(j);      
+          vel_R(j) = u2_bnd(j);      
           v_sq    += pow(vel_R(j), 2);
       }
       double rho_R = rho_L;
@@ -1662,18 +1671,20 @@ void DG_CNS_Vis_Adiabatic_Integrator::AssembleRHSElementVect(
 
       for (int i = 0; i < dim; i++)
       {
-           aux2_dir[i*aux_dim + aux_dim - 1] -= T_dot_n*nor_dim(i); // T_x = T_x - T_x.n
+////           aux2_dir[i*aux_dim + aux_dim - 1] -= T_dot_n*nor_dim(i); // T_x = T_x - T_x.n
+           aux2_dir[i*aux_dim + aux_dim - 1] = 0.0; // T_x = 0.0 
       }
 
-
       Vector fL_dir(dim*var_dim), fR_dir(dim*var_dim);
-      getViscousCNSFlux(u1_dir, aux1_dir, mu, Pr, fL_dir);
-      getViscousCNSFlux(u2_dir, aux2_dir, mu, Pr, fR_dir);
-
       Vector f_dir(dim*var_dim);
-      add(0.5, fL_dir, fR_dir, f_dir);      // Get common flux
+      getViscousCNSFlux(u1_dir, aux1_dir, mu, Pr, fL_dir);
+      getViscousCNSFlux(u2_dir, aux2_dir, mu, Pr, f_dir);
 
-      Vector f1_dir(dim*var_dim), f2_dir(dim*var_dim);
+//      for(int j = 0; j < var_dim; j++) std::cout << j << "\t" << fL_dir(var_dim + j) << "\t" << fR_dir(var_dim + j) << std::endl;
+
+//      for(int j = 0; j < var_dim; j++) std::cout << j << "\t" << fL_dir(j) << "\t" << f_dir(j) << std::endl;
+
+      Vector f1_dir(dim*var_dim);
       fD.Eval(f1_dir, *Tr.Elem1, eip);        // Get discontinuous flux at face
 
       Vector face_f(var_dim), face_f1(var_dim); //Face fluxes (dot product with normal)
