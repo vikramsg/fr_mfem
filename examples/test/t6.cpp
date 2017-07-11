@@ -587,8 +587,10 @@ void ComputeLift(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, GridFunc
               for(int j = 0; j < dim ; j++) tau[i][j] = vis_vals[i*(dim + 2) + 1 + j];
 
           for(int i = 0; i < dim ; i++)
+          {
               force(0) += tau[0][i]*nor(i)*ip.weight; // Quadrature of shear stress 
               force(1) += tau[1][i]*nor(i)*ip.weight; // Quadrature of shear stress 
+          }
 
        }
 
