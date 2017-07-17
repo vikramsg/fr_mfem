@@ -1616,7 +1616,9 @@ void FiniteElementSpace::Update(bool want_transform)
    Construct(); // sets T to NULL, own_T to true
    BuildElementToDofTable();
 
-   if (want_transform)
+   // FIXME: If variable FEC then I am assuming I only need the correct
+   // connectivity. GridFunction transformations done by client code
+   if (want_transform && !vfec)
    {
       // calculate appropriate GridFunction transformation
       switch (mesh->GetLastOperation())

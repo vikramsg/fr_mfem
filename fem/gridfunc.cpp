@@ -145,19 +145,18 @@ void GridFunction::Update()
 {
    const Operator *T = fes->GetUpdateOperator();
 
-   // FIXME: Assumed that if it is variable FEC
-   // Update needs to happen everytime
-   if (!fes->IsVfec())
+   // FIXME: Crude condition for variable FEC
+   // Assumed that the client code will take care of updating values
+   if (fes->IsVfec()) SetSize(fes->GetVSize());
+
+   if (fes->GetSequence() == sequence)
    {
-       if (fes->GetSequence() == sequence)
-       {
-          return; // space and grid function are in sync, no-op
-       }
-       if (fes->GetSequence() != sequence + 1)
-       {
-          MFEM_ABORT("Error in update sequence. GridFunction needs to be updated "
-                     "right after the space is updated.");
-       }
+      return; // space and grid function are in sync, no-op
+   }
+   if (fes->GetSequence() != sequence + 1)
+   {
+      MFEM_ABORT("Error in update sequence. GridFunction needs to be updated "
+                 "right after the space is updated.");
    }
    sequence = fes->GetSequence();
 
