@@ -845,7 +845,8 @@ void BilinearForm::Update(FiniteElementSpace *nfes)
       // Check for different size (e.g. assembled form on non-conforming space)
       // or different sequence number.
       full_update = (fes->GetVSize() != Height() ||
-                     sequence < fes->GetSequence());
+                     sequence < fes->GetSequence() ||
+                     fes->IsVfec());
    }
 
    delete mat_e;

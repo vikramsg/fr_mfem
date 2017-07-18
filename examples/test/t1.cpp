@@ -15,14 +15,16 @@ const double   Pr  = 0.72;
 //Run parameters
 const char *mesh_file   = "per_5.mesh";
 const int    order      = 2;
-const double t_final    =10.00000;
+const double t_final    =  0.00000;
 const double cfl        = 0.20;
 const double dt_const   = 0.0010;
-const int    vis_steps  =5000;
-const int    ref_levels = 1;
+const int    vis_steps  =100 ;
+const int    ref_levels = 2;
 const int    problem    = 0;
 
-const double tolerance = 1e-3; // Tolerance for adaptation
+const bool   adapt     = true ;
+const int    adapt_iter= 4    ; // Time steps after which adaptation is done
+const double tolerance = 1e-3 ; // Tolerance for adaptation
 
 
 // Velocity coefficient
@@ -48,6 +50,7 @@ void getFields(const GridFunction &u_sol, Vector &rho, Vector &u1, Vector &u2, V
 
 void ComputeMaxResidual(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, int vDim, Vector &maxResi);
 
+void postProcess(Mesh &mesh, VarL2_FiniteElementCollection &vfec, GridFunction &u_sol, int cycle, double time);
 
 /** A time-dependent operator for the right-hand side of the ODE. The DG weak
     form is M du/dt = K u + b, where M and K are the mass
@@ -84,7 +87,6 @@ private:
    
     BilinearForm *m, *k_inv_x, *k_inv_y;
 
-    DataCollection *dc;
     ODESolver *ode_solver; 
 
     int dim;
@@ -201,25 +203,6 @@ CNS::CNS()
    b->Assemble();
    ///////////////////////////////////////////////////////////
 
-   dc = new VisItDataCollection("Euler", mesh);
-   dc->SetPrecision(8);
- 
-   FiniteElementSpace fes_fields(mesh, vfec);
-   GridFunction rho(&fes_fields);
-   GridFunction u1(&fes_fields);
-   GridFunction u2(&fes_fields);
-   GridFunction E(&fes_fields);
-
-   dc->RegisterField("rho", &rho);
-   dc->RegisterField("u1", &u1);
-   dc->RegisterField("u2", &u2);
-   dc->RegisterField("E", &E);
-
-   getFields(u_sol, rho, u1, u2, E);
-
-   dc->SetCycle(0);
-   dc->SetTime(0.0);
-   dc->Save();
 
    Vector maxResi(fes->GetNE()); // Max residual in each element
 
@@ -234,6 +217,7 @@ CNS::CNS()
    dt = dt_const; 
 
    t = 0.0; ti = 0;
+   postProcess(*mesh, *vfec, u_sol, ti, t);
 
    adv->SetTime(t);
    ode_solver->Init(*adv);
@@ -243,10 +227,10 @@ CNS::CNS()
    {
       Step();
 
-      adv->Mult(u_sol, rhs);
-
-      if (ti % 4 == 0)
+      if (ti % adapt_iter == 0 && adapt)
       {
+          adv->Mult(u_sol, rhs);
+
           Array<int> newEleOrder(fes->GetNE());
           ComputeMaxResidual(*mesh, *fes, rhs, 1, maxResi);
           UpdateElementOrder(maxResi, tolerance, newEleOrder);
@@ -261,6 +245,12 @@ CNS::CNS()
       }
 
       done = (t >= t_final - 1e-8*dt);
+      
+      if (done || ti % vis_steps == 0)
+      {
+          postProcess(*mesh, *vfec, u_sol, ti, t);
+      }
+ 
    }
 
    cout << "L2 Error :" << u_sol.ComputeL2Error(u0) << endl;
@@ -286,7 +276,6 @@ CNS::~CNS()
 {
     delete b;
     delete ode_solver;
-    delete dc;
     delete mesh;
 }
 
@@ -298,8 +287,8 @@ void CNS::Step()
       ode_solver->Step(u_sol, t, dt_real);
       ti++;
 
-      cout << "time step: " << ti << ", dt: " << dt_real << ", time: " << t << ", max_speed " << u_max << endl;
-//      cout << "time step: " << ti << ", dt: " << dt_real << ", time: " << t << ", fes_size " << fes->GetVSize() << endl;
+//      cout << "time step: " << ti << ", dt: " << dt_real << ", time: " << t << ", max_speed " << u_max << endl;
+      cout << "time step: " << ti << ", dt: " << dt_real << ", time: " << t << ", fes_size " << fes->GetVSize() << endl;
 
       u_max = getUMax(dim, u_sol);
 //      dt = cfl*((h_min/(2.0*order + 1))/u_max); 
@@ -581,55 +570,6 @@ void init_function(const Vector &x, Vector &v)
 }
 
 
-void wall_bnd_cnd(const Vector &x, Vector &v)
-{
-   //Space dimensions 
-   int dim = x.Size();
-
-   if (dim == 2)
-   {
-       v(0) = 0.0;  // x velocity   
-       v(1) = 0.0;  // y velocity 
-       v(2) = 0.6;  // Temperature 
-   }
-}
-
-void wall_adi_bnd_cnd(const Vector &x, Vector &v)
-{
-   //Space dimensions 
-   int dim = x.Size();
-
-   if (dim == 2)
-   {
-       v(0) = 0.0;  // x velocity   
-       v(1) = 0.0;  // y velocity 
-   }
-}
-
-
-void char_bnd_cnd(const Vector &x, Vector &v)
-{
-   //Space dimensions 
-   int dim = x.Size();
-
-   if (dim == 2)
-   {
-       double rho, u1, u2, p;
-       rho = 1;
-       u1 = 3.10; u2 = 0.0;
-       p   =172.2;
-    
-       double v_sq = pow(u1, 2) + pow(u2, 2);
-    
-       v(0) = rho;                     //rho
-       v(1) = rho * u1;                //rho * u
-       v(2) = rho * u2;                //rho * v
-       v(3) = p/(gamm - 1) + 0.5*rho*v_sq;
-   }
-}
-
-
-
 
 
 void getFields(const GridFunction &u_sol, Vector &rho, Vector &u1, Vector &u2, Vector &E)
@@ -683,6 +623,46 @@ void ComputeMaxResidual(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, i
 
    }
 
+}
+
+
+
+void postProcess(Mesh &mesh, VarL2_FiniteElementCollection &vfec, GridFunction &u_sol, int cycle, double time)
+{
+   Mesh new_mesh(mesh, true);
+
+   int dim     = new_mesh.Dimension();
+   int var_dim = dim + 2;
+
+   DG_FECollection fec(order + 1, dim);
+   FiniteElementSpace fes_post(&new_mesh, &fec, var_dim);
+   GridFunction u_post(&fes_post);
+   u_post.GetValuesFrom(u_sol); // Create a temp variable to get the previous space solution
+ 
+   new_mesh.UniformRefinement();
+   fes_post.Update();
+   u_post.Update();
+
+   VisItDataCollection dc("CNS", &new_mesh);
+   dc.SetPrecision(10);
+ 
+   FiniteElementSpace fes_fields(&new_mesh, &fec);
+   GridFunction rho(&fes_fields);
+   GridFunction u1(&fes_fields);
+   GridFunction u2(&fes_fields);
+   GridFunction E(&fes_fields);
+
+   dc.RegisterField("rho", &rho);
+   dc.RegisterField("u1", &u1);
+   dc.RegisterField("u2", &u2);
+   dc.RegisterField("E", &E);
+
+   getFields(u_post, rho, u1, u2, E);
+
+   dc.SetCycle(cycle);
+   dc.SetTime(time);
+   dc.Save();
+  
 }
 
 
