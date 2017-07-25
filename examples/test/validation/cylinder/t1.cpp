@@ -561,7 +561,10 @@ void getInvFlux(int dim, const Vector &u, Vector &f)
 void getAuxGrad(int dim, const SparseMatrix &K_x, const SparseMatrix &K_y, const SparseMatrix &M, 
         const Vector &u, const Vector &b_aux_x, const Vector &b_aux_y, Vector &aux_grad)
 {
+    DSmoother M_prec;
     CGSolver M_solver;
+
+    M_solver.SetPreconditioner(M_prec);
 
     M_solver.SetOperator(M);
     M_solver.iterative_mode = false;
