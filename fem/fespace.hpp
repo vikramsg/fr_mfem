@@ -375,6 +375,9 @@ public:
    /// Return update counter (see Mesh::sequence)
    long GetSequence() const { return sequence; }
 
+
+   bool IsVfec() const { if (vfec) return true; else return false;}
+
    void Save(std::ostream &out) const;
 
    virtual ~FiniteElementSpace();
