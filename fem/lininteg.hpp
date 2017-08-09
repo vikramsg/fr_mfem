@@ -382,6 +382,8 @@ public:
    void getEulerFlux(const Vector &u, Vector &f);
 
    void getLFFlux(const Vector &u1, const Vector &u2, const Vector &nor, Vector &f);
+
+   void getConvectiveFlux(const Vector &u1, const Vector &u2, const Vector &nor, Vector &f);
 };
 
 
@@ -535,10 +537,9 @@ public:
 
 };
 
-
 /** Boundary face Riemann integrator
     */
-class DG_Euler_Adiabatic_NoSlip_Integrator: public LinearFormIntegrator, public EulerIntegrator
+class DG_Euler_Slip_Integrator: public LinearFormIntegrator, public EulerIntegrator
 {
 protected:
    VectorCoefficient &uD;
@@ -559,7 +560,7 @@ protected:
 #endif
 
 public:
-   DG_Euler_Adiabatic_NoSlip_Integrator(VectorCoefficient &uD_, VectorCoefficient &fD_, VectorCoefficient &u_bnd_, double alpha_)
+   DG_Euler_Slip_Integrator(VectorCoefficient &uD_, VectorCoefficient &fD_, VectorCoefficient &u_bnd_, double alpha_)
       : uD(uD_), fD(fD_), u_bnd(u_bnd_), alpha(alpha_) { }
 
    virtual void AssembleRHSElementVect(const FiniteElement &el,
@@ -570,6 +571,8 @@ public:
                                        Vector &elvect);
 
 };
+
+
 
 
 
