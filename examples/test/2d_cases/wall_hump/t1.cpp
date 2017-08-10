@@ -8,7 +8,7 @@ using namespace mfem;
 
 //Constants
 const double gamm  = 1.4;
-const double   mu  = 0.00031;
+const double   mu  = 1.655982905982906e-06; 
 const double R_gas = 287;
 const double   Pr  = 0.72;
 
@@ -20,7 +20,10 @@ int problem;
 void init_function(const Vector &x, Vector &v);
 
 // Characteristic boundary condition specification
-void char_bnd_cnd(const Vector &x, Vector &v);
+void inflow_bnd_cnd(const Vector &x, Vector &v);
+void outflow_bnd_cnd(const Vector &x, Vector &v);
+
+
 // Wall boundary condition specification
 void wall_bnd_cnd(const Vector &x, Vector &v);
 void wall_adi_bnd_cnd(const Vector &x, Vector &v);
@@ -36,7 +39,7 @@ void getAuxGrad(int dim, const SparseMatrix &K_x, const SparseMatrix &K_y, const
 void getAuxVar(int dim, const Vector &u, Vector &aux_sol);
 
 void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, Vector &u1, Vector &u2, 
-                Vector &E, Vector &T_x, Vector &T_y, Vector &u_x, Vector &u_y, Vector &v_x, Vector &v_y);
+                Vector &E, Vector &u_x, Vector &u_y, Vector &v_x, Vector &v_y);
 
 void ComputeLift(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, GridFunction &f_vis_D, 
                     const Array<int> &bdr, const double gamm, Vector &force);
@@ -73,10 +76,10 @@ public:
 
 int main(int argc, char *argv[])
 {
-   const char *mesh_file = "sd7003.msh";
+   const char *mesh_file = "hump_test.msh";
    double t_final    = 100 ;
-   double cfl        = 0.40;
-   int    vis_steps  = 5000;
+   double cfl        = 0.200;
+   int    vis_steps  =  100;
    int    ref_levels = 0;
 
           problem    = 0;    
@@ -228,28 +231,50 @@ int main(int argc, char *argv[])
    ///////////////////////////////////////////////////////////
    Array<int> dir_bdr_2(mesh->bdr_attributes.Max());
 
-   VectorFunctionCoefficient u_char_bnd(var_dim, char_bnd_cnd); // Defines lid boundary condition
    // Linear form for boundary condition
    dir_bdr_2    = 0; // 
    dir_bdr_2[1] = 1; //
 
    LinearForm b2(&fes);
    b2.AddBdrFaceIntegrator(
-      new DG_Euler_Characteristic_Integrator(
-      u_vec, f_vec, u_char_bnd, -1.0), dir_bdr_2); 
+      new DG_Euler_Slip_Integrator(
+      u_vec, f_vec, u_wall_bnd, -1.0), dir_bdr_2); 
    b2.Assemble();
    ///////////////////////////////////////////////////////////
 
-   ofstream force_file;
-   force_file.open ("forces.dat");
-   force_file << "Iteration \t dt \t time \t F_x \t F_y \n";
+   ///////////////////////////////////////////////////////////
+   Array<int> dir_bdr_3(mesh->bdr_attributes.Max());
 
-   Vector forces(dim);
+   VectorFunctionCoefficient u_inflow(var_dim, inflow_bnd_cnd); // Defines char boundary condition
+   // Linear form for boundary condition
+   dir_bdr_3    = 0; // 
+   dir_bdr_3[2] = 1; //
+
+   LinearForm b3(&fes);
+   b3.AddBdrFaceIntegrator(
+      new DG_Euler_Characteristic_Integrator(
+      u_vec, f_vec, u_inflow, -1.0), dir_bdr_3); 
+   b3.Assemble();
+   ///////////////////////////////////////////////////////////
+
+   ///////////////////////////////////////////////////////////
+   Array<int> dir_bdr_4(mesh->bdr_attributes.Max());
+
+   VectorFunctionCoefficient u_outflow(var_dim, outflow_bnd_cnd); // Defines char boundary condition
+   // Linear form for boundary condition
+   dir_bdr_4    = 0; // 
+   dir_bdr_4[3] = 1; //
+
+   LinearForm b4(&fes);
+   b4.AddBdrFaceIntegrator(
+      new DG_Euler_Subsonic_Pressure_Outflow_Integrator(
+      u_vec, f_vec, u_outflow, -1.0), dir_bdr_4); 
+   b4.Assemble();
+   ///////////////////////////////////////////////////////////
 
    FE_Evolution adv(m.SpMat(), k_inv_x.SpMat(), k_inv_y.SpMat(), 
                         K_vis_x, K_vis_y, b, b_aux_x, b_aux_y);
 
-//   ODESolver *ode_solver = new ForwardEulerSolver; 
    ODESolver *ode_solver = new RK3SSPSolver; 
 
    double u_max = getUMax(dim, u_sol);
@@ -267,10 +292,14 @@ int main(int argc, char *argv[])
       b.Assemble();
       b1.Assemble();
       b2.Assemble();
+      b3.Assemble();
+      b4.Assemble();
       b_vis.Assemble();
 
       add(b, b1, b);
       add(b, b2, b);
+      add(b, b3, b);
+      add(b, b4, b);
       add(b, b_vis, b);
 
       
@@ -291,9 +320,6 @@ int main(int argc, char *argv[])
       getAuxVar(dim, u_sol, aux_var);
       getAuxGrad(dim, K_vis_x, K_vis_y, M_solver, u_sol, b_aux_x, b_aux_y, aux_grad);
       getVisFlux(dim, u_sol, aux_grad, f_vis);
-
-      ComputeLift(*mesh, fes, u_sol, f_vis, dir_bdr_1, gamm, forces);
-      force_file << ti << "\t" <<  dt_real << "\t" << t << "\t" << forces(0) << "\t" << forces(1) <<  endl;
 
       done = (t >= t_final - 1e-8*dt);
 
@@ -323,7 +349,6 @@ int main(int argc, char *argv[])
 //       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << aux_var[sub1] << '\t' << aux_grad[5*offset + i]<< endl;      
    }
 
-   force_file.close();
    return 0;
 }
 
@@ -700,7 +725,7 @@ void init_function(const Vector &x, Vector &v)
    {
        double rho, u1, u2, p;
        rho = 1;
-       u1 = 3.0924; u2 = 0.2162;
+       u1 = 1.55; u2 = 0.0;
        p   =172.2;
     
        double v_sq = pow(u1, 2) + pow(u2, 2);
@@ -739,7 +764,29 @@ void wall_adi_bnd_cnd(const Vector &x, Vector &v)
 }
 
 
-void char_bnd_cnd(const Vector &x, Vector &v)
+
+void inflow_bnd_cnd(const Vector &x, Vector &v)
+{
+   //Space dimensions 
+   int dim = x.Size();
+
+   if (dim == 2)
+   {
+       double rho, u1, u2, p;
+       rho = 1.0;
+       u1  = 1.55; u2 = 0.0;
+       p   = 172.2;
+    
+       double v_sq = pow(u1, 2) + pow(u2, 2);
+    
+       v(0) = rho;                     //rho
+       v(1) = rho * u1;                //rho * u
+       v(2) = rho * u2;                //rho * v
+       v(3) = p/(gamm - 1) + 0.5*rho*v_sq;
+   }
+}
+
+void outflow_bnd_cnd(const Vector &x, Vector &v)
 {
    //Space dimensions 
    int dim = x.Size();
@@ -748,8 +795,8 @@ void char_bnd_cnd(const Vector &x, Vector &v)
    {
        double rho, u1, u2, p;
        rho = 1;
-       u1 = 3.0924; u2 = 0.2162;
-       p   =172.2;
+       u1  = 1.55; u2 = 0.0;
+       p   = 172.00            ; 
     
        double v_sq = pow(u1, 2) + pow(u2, 2);
     
@@ -763,9 +810,8 @@ void char_bnd_cnd(const Vector &x, Vector &v)
 
 
 
-
 void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, Vector &u1, Vector &u2, 
-                Vector &E, Vector &T_x, Vector &T_y, Vector &u_x, Vector &u_y, Vector &v_x, Vector &v_y)
+                Vector &E, Vector &u_x, Vector &u_y, Vector &v_x, Vector &v_y)
 {
 
     int vDim    = u_sol.VectorDim();
@@ -785,8 +831,6 @@ void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, V
         v_x[i] = aux_grad[(1          )*dofs + i];
         v_y[i] = aux_grad[(aux_dim + 1)*dofs + i];
 
-        T_x[i] = aux_grad[(aux_dim - 1)*dofs + i];
-        T_y[i] = aux_grad[aux_dim*dofs + (aux_dim - 1)*dofs + i];
     }
 }
 
@@ -887,6 +931,8 @@ void ComputeLift(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, GridFunc
    } // NBE loop
 }
 
+
+
 void postProcess(Mesh &mesh, GridFunction &u_sol, GridFunction &aux_grad, int cycle, double time)
 {
    Mesh new_mesh(mesh, true);
@@ -908,7 +954,7 @@ void postProcess(Mesh &mesh, GridFunction &u_sol, GridFunction &aux_grad, int cy
    aux_grad_post.Update();
 
    VisItDataCollection dc("CNS", &new_mesh);
-   dc.SetPrecision(12);
+   dc.SetPrecision(8);
  
    FiniteElementSpace fes_fields(&new_mesh, &fec);
    
@@ -916,8 +962,6 @@ void postProcess(Mesh &mesh, GridFunction &u_sol, GridFunction &aux_grad, int cy
    GridFunction u1(&fes_fields);
    GridFunction u2(&fes_fields);
    GridFunction E(&fes_fields);
-   GridFunction T_x(&fes_fields);
-   GridFunction T_y(&fes_fields);
    GridFunction u_x(&fes_fields);
    GridFunction u_y(&fes_fields);
    GridFunction v_x(&fes_fields);
@@ -927,19 +971,18 @@ void postProcess(Mesh &mesh, GridFunction &u_sol, GridFunction &aux_grad, int cy
    dc.RegisterField("u1", &u1);
    dc.RegisterField("u2", &u2);
    dc.RegisterField("E", &E);
-   dc.RegisterField("T_x", &T_x);
-   dc.RegisterField("T_y", &T_y);
    dc.RegisterField("u_x", &u_x);
    dc.RegisterField("u_y", &u_y);
    dc.RegisterField("v_x", &v_x);
    dc.RegisterField("v_y", &v_y);
 
-   getFields(u_post, aux_grad_post, rho, u1, u2, E, T_x, T_y, u_x, u_y, v_x, v_y);
+   getFields(u_post, aux_grad_post, rho, u1, u2, E, u_x, u_y, v_x, v_y);
 
    dc.SetCycle(cycle);
    dc.SetTime(time);
    dc.Save();
   
 }
+
 
 

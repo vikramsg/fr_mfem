@@ -574,8 +574,6 @@ public:
 
 
 
-
-
 /** Boundary face Riemann integrator
     */
 class DG_Euler_Characteristic_Integrator: public LinearFormIntegrator, public EulerIntegrator
@@ -610,6 +608,45 @@ public:
                                        Vector &elvect);
 
 };
+
+
+
+
+/** Boundary face Riemann integrator
+    */
+class DG_Euler_Subsonic_Pressure_Outflow_Integrator: public LinearFormIntegrator, public EulerIntegrator
+{
+protected:
+   VectorCoefficient &uD;
+   VectorCoefficient &fD;
+   VectorCoefficient &u_bnd;
+
+   double alpha; // b = alpha*b
+
+#ifndef MFEM_THREAD_SAFE
+   Vector shape;
+   DenseMatrix dshape;
+   DenseMatrix adjJ;
+   DenseMatrix dshape_ps;
+   Vector nor;
+   Vector dshape_dn;
+   Vector dshape_du;
+   Vector u_dir;
+#endif
+
+public:
+   DG_Euler_Subsonic_Pressure_Outflow_Integrator(VectorCoefficient &uD_, VectorCoefficient &fD_, VectorCoefficient &u_bnd_, double alpha_)
+      : uD(uD_), fD(fD_), u_bnd(u_bnd_), alpha(alpha_) { }
+
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       ElementTransformation &Tr,
+                                       Vector &elvect);
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       FaceElementTransformations &Tr,
+                                       Vector &elvect);
+
+};
+
 
 /** Class to provide CNS functions 
     */

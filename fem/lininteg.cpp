@@ -1551,6 +1551,138 @@ void DG_Euler_Characteristic_Integrator::AssembleRHSElementVect(
 
 }
 
+
+
+
+void DG_Euler_Subsonic_Pressure_Outflow_Integrator::AssembleRHSElementVect(
+   const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
+{
+   mfem_error("DGEulerIntegrator::AssembleRHSElementVect");
+}
+
+
+
+void DG_Euler_Subsonic_Pressure_Outflow_Integrator::AssembleRHSElementVect(
+   const FiniteElement &el, FaceElementTransformations &Trans, Vector &elvect)
+{
+   int dim, var_dim, ndof, aux_dim;
+
+   double un, a, b, w;
+
+   Vector shape;
+
+   dim = el.GetDim();
+   var_dim = dim + 2;
+   ndof = el.GetDof();
+   
+   Vector vu(dim), nor(dim);
+
+   elvect.SetSize(var_dim*(ndof));
+   elvect = 0.0;
+
+   shape.SetSize(ndof);
+
+   const IntegrationRule *ir = IntRule;
+   if (ir == NULL)
+   {
+      int order;
+         
+      order = Trans.Elem1->OrderW() + 2*el.GetOrder();
+      if (el.Space() == FunctionSpace::Pk)
+      {
+         order++;
+      }
+      ir = &IntRules.Get(Trans.FaceGeom, order);
+   }
+
+   for (int p = 0; p < ir->GetNPoints(); p++)
+   {
+      const IntegrationPoint &ip = ir->IntPoint(p);
+      IntegrationPoint eip;
+      Trans.Loc1.Transform(ip, eip);
+
+      Trans.Face->SetIntPoint(&ip);
+      Trans.Elem1->SetIntPoint(&eip);
+
+      el.CalcShape(eip, shape);
+
+      if (dim == 1)
+      {
+         nor(0) = 2*eip.x - 1.0;
+      }
+      else
+      {
+         CalcOrtho(Trans.Face->Jacobian(), nor);
+      }
+
+      Vector u1_dir(var_dim), u2_dir(var_dim);
+      Vector u2_bnd(var_dim);
+      uD.Eval(u1_dir, *Trans.Elem1, eip);
+      u_bnd.Eval(u2_dir, *Trans.Elem1, eip);
+
+      Vector vel_L(dim);    
+      double rho_L = u1_dir(0);
+      double v_sq  = 0.0;
+      for (int j = 0; j < dim; j++)
+      {
+          vel_L(j) = u1_dir(1 + j)/rho_L;      
+          v_sq    += pow(vel_L(j), 2);
+      }
+      double p_L = (gamm - 1)*(u1_dir(var_dim - 1) - 0.5*rho_L*v_sq);
+
+      Vector vel_R(dim);    
+      double rho_R = u2_dir(0);
+      double v2_sq  = 0.0;
+      for (int j = 0; j < dim; j++)
+      {
+          vel_R(j) = u2_dir(1 + j)/rho_R;      
+          v2_sq    += pow(vel_R(j), 2);
+      }
+      double p_R   = (gamm - 1)*(u2_dir(var_dim - 1) - 0.5*rho_R*v2_sq);
+      double E_R   = (2*p_R - p_L)/(gamm - 1) + 0.5*rho_L*v_sq; // PNR BC AIAA 2014-2923
+
+      u2_dir(0) = rho_L;
+      for (int j = 0; j < dim; j++)
+      {
+          u2_dir(1 + j)   = rho_L*vel_L(j)    ;
+      }
+      u2_dir(var_dim - 1) = E_R;
+
+
+      Vector f_dir(dim*var_dim);
+      getLFFlux(u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using local Lax Friedrichs
+
+      Vector f1_dir(dim*var_dim);
+      fD.Eval(f1_dir, *Trans.Elem1, eip); // Get discontinuous flux at face
+
+      Vector face_f(var_dim), face_f1(var_dim); //Face fluxes (dot product with normal)
+      face_f = 0.0; face_f1 = 0.0; 
+      for (int i = 0; i < dim; i++)
+      {
+          for (int j = 0; j < var_dim; j++)
+          {
+              face_f1(j) += f1_dir(i*var_dim + j)*nor(i);
+              face_f (j) += f_dir (i*var_dim + j)*nor(i);
+          }
+      }
+
+      w = ip.weight * alpha; 
+
+      subtract(face_f, face_f1, face_f1); //f_comm - f1
+      for (int j = 0; j < var_dim; j++)
+      {
+          for (int i = 0; i < ndof; i++)
+          {
+              elvect(j*ndof + i)              += face_f1(j)*w*shape(i); 
+          }
+      }
+
+   }// for ir loop
+
+}
+
+
+
 void CNSIntegrator::getViscousCNSFlux(const Vector &u, const Vector &aux_grad, const double mu, const double Pr, Vector &f)
 {
     int var_dim = u.Size();
