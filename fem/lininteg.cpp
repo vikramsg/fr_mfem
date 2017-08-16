@@ -697,66 +697,102 @@ void DGElasticityDirichletLFIntegrator::AssembleRHSElementVect(
 }
 
 
-void EulerIntegrator::getEulerFlux(const Vector &u, Vector &f)
+void EulerIntegrator::getEulerFlux(const double R, const double gamm, const Vector &u, Vector &f)
 {
     int var_dim = u.Size();
     int dim     = var_dim - 2;
 
     double rho  = u(0);
-    double u1   = u(1)/rho;
-    double u2   = u(2)/rho;
 
-    double v_sq = pow(u1, 2) + pow(u2, 2);
+    Vector vel(dim);
+    for (int i = 0; i < dim; i++)
+    {
+        vel(i) = u(1 + i)/rho;    
+    }
+
+    double v_sq = 0.0; 
+
+    for (int i = 0; i < dim; i++)
+    {
+        v_sq += pow(vel(i), 2) ;
+    }
+
     double p    = (u(var_dim - 1) - 0.5*rho*v_sq)*(gamm - 1);
+    
+    for (int i = 0; i < dim; i++)
+    {
+        f(i*var_dim + 0) = u(1 + i);
+        for (int j = 0; j < dim; j++)
+        {
+            f(i*var_dim + 1 + j) = u(1 + i)*vel(j);
+        }
+        f(i*var_dim + 1 + i)    += p;
 
-    f(0)             =  u(1); 
-    f(1)             =  u(1)*u1 + p;               //rho*u*u + p    
-    f(2)             =  u(1)*u2    ;               //rho*u*v
-    f(var_dim - 1)   = (u(var_dim - 1) + p)*u1  ;  //(E+p)*u
-
-    f(  var_dim + 0) =  u(2); 
-    f(  var_dim + 1) =  u(2)*u1;                  //rho*u*v     
-    f(  var_dim + 2) =  u(2)*u2 + p;              //rho*v*v + p
-    f(2*var_dim - 1) = (u(var_dim - 1) + p)*u2  ; //(E+p)*v    
+        f(i*var_dim + var_dim - 1) = (u(var_dim - 1) + p)*vel(i);
+    }
 }
 
 /*
  * Get Interaction flux using the local Lax Friedrichs Riemann  
  * solver, u1 is the left value and u2 the right value
  */
-void EulerIntegrator::getLFFlux(const Vector &u1, const Vector &u2, const Vector &nor, Vector &f)
+void EulerIntegrator::getLFFlux(const double R, const double gamm, const Vector &u1, const Vector &u2, 
+                                const Vector &nor, Vector &f)
 {
     int var_dim = u1.Size();
     int dim     = var_dim - 2;
 
-    double rho_L = u1(0);
-    double u_L   = u1(1)/rho_L;
-    double v_L   = u1(2)/rho_L;
-    double E_L   = u1(3);
+    double Cv   = R/(gamm - 1);
 
-    double T_L   = (E_L - 0.5*rho_L*(pow(u_L,2) + pow(v_L,2)))/(rho_L*Cv);
+    double rho_L = u1(0);
+    
+    Vector vel_L(dim);
+    for (int i = 0; i < dim; i++)
+    {
+        vel_L(i) = u1(1 + i)/rho_L;    
+    }
+    double E_L   = u1(var_dim - 1);
+
+    double vel_sq_L = 0.0;
+    for (int i = 0; i < dim; i++)
+    {
+        vel_sq_L += pow(vel_L(i), 2) ;
+    }
+    double T_L   = (E_L - 0.5*rho_L*vel_sq_L)/(rho_L*Cv);
     double a_L   = sqrt(gamm * R * T_L);
 
     double rho_R = u2(0);
-    double u_R   = u2(1)/rho_R;
-    double v_R   = u2(2)/rho_R;
-    double E_R   = u2(3);
+    Vector vel_R(dim);
+    for (int i = 0; i < dim; i++)
+    {
+        vel_R(i) = u2(1 + i)/rho_R;    
+    }
+    double E_R   = u2(var_dim - 1);
 
-    double T_R   = (E_R - 0.5*rho_R*(pow(u_R,2) + pow(v_R,2)))/(rho_R*Cv);
+    double vel_sq_R = 0.0;
+    for (int i = 0; i < dim; i++)
+    {
+        vel_sq_R += pow(vel_R(i), 2) ;
+    }
+    double T_R   = (E_R - 0.5*rho_R*vel_sq_R)/(rho_R*Cv);
     double a_R   = sqrt(gamm * R * T_R);
 
     Vector nor_dim(dim);
     double nor_l2 = nor.Norml2();
     nor_dim.Set(1/nor_l2, nor);
 
-    double vnl   = u_L*nor_dim(0) + v_L*nor_dim(1); 
-    double vnr   = u_R*nor_dim(0) + v_R*nor_dim(1); 
+    double vnl   = 0.0, vnr = 0.0;
+    for (int i = 0; i < dim; i++)
+    {
+        vnl += vel_L[i]*nor_dim(i); 
+        vnr += vel_R[i]*nor_dim(i); 
+    }
 
     double u_max = std::max(a_L + std::abs(vnl), a_R + std::abs(vnr));
 
     Vector fl(dim*var_dim), fr(dim*var_dim);
-    getEulerFlux(u1, fl);
-    getEulerFlux(u2, fr);
+    getEulerFlux(R, gamm, u1, fl);
+    getEulerFlux(R, gamm, u2, fr);
     add(0.5, fl, fr, f); //Common flux without dissipation
 
     Vector f_diss(dim*var_dim); //Rusanov dissipation 
@@ -768,49 +804,73 @@ void EulerIntegrator::getLFFlux(const Vector &u1, const Vector &u2, const Vector
             f_diss(i*var_dim + j) = -0.5*u_max*nor_dim(i)*(u2(j) - u1(j)); 
         }
     }
-
     add(f, f_diss, f);
 }
+
+
 
 /*
  * Get Interaction flux using a simple central flux 
  * solver, u1 is the left value and u2 the right value
  */
-void EulerIntegrator::getConvectiveFlux(const Vector &u1, const Vector &u2, const Vector &nor, Vector &f)
+void EulerIntegrator::getConvectiveFlux(const double R, const double gamm, const Vector &u1, const Vector &u2, 
+                                        const Vector &nor, Vector &f)
 {
     int var_dim = u1.Size();
     int dim     = var_dim - 2;
 
-    double rho_L = u1(0);
-    double u_L   = u1(1)/rho_L;
-    double v_L   = u1(2)/rho_L;
-    double E_L   = u1(3);
+    double Cv   = R/(gamm - 1);
 
-    double T_L   = (E_L - 0.5*rho_L*(pow(u_L,2) + pow(v_L,2)))/(rho_L*Cv);
+    double rho_L = u1(0);
+    
+    Vector vel_L(dim);
+    for (int i = 0; i < dim; i++)
+    {
+        vel_L(i) = u1(1 + i)/rho_L;    
+    }
+    double E_L   = u1(var_dim - 1);
+
+    double vel_sq_L = 0.0;
+    for (int i = 0; i < dim; i++)
+    {
+        vel_sq_L += pow(vel_L(i), 2) ;
+    }
+    double T_L   = (E_L - 0.5*rho_L*vel_sq_L)/(rho_L*Cv);
     double a_L   = sqrt(gamm * R * T_L);
 
     double rho_R = u2(0);
-    double u_R   = u2(1)/rho_R;
-    double v_R   = u2(2)/rho_R;
-    double E_R   = u2(3);
+    Vector vel_R(dim);
+    for (int i = 0; i < dim; i++)
+    {
+        vel_R(i) = u2(1 + i)/rho_R;    
+    }
+    double E_R   = u2(var_dim - 1);
 
-    double T_R   = (E_R - 0.5*rho_R*(pow(u_R,2) + pow(v_R,2)))/(rho_R*Cv);
+    double vel_sq_R = 0.0;
+    for (int i = 0; i < dim; i++)
+    {
+        vel_sq_R += pow(vel_R(i), 2) ;
+    }
+    double T_R   = (E_R - 0.5*rho_R*vel_sq_R)/(rho_R*Cv);
     double a_R   = sqrt(gamm * R * T_R);
 
     Vector nor_dim(dim);
     double nor_l2 = nor.Norml2();
     nor_dim.Set(1/nor_l2, nor);
 
-    double vnl   = u_L*nor_dim(0) + v_L*nor_dim(1); 
-    double vnr   = u_R*nor_dim(0) + v_R*nor_dim(1); 
+    double vnl   = 0.0, vnr = 0.0;
+    for (int i = 0; i < dim; i++)
+    {
+        vnl += vel_L[i]*nor_dim(i); 
+        vnr += vel_R[i]*nor_dim(i); 
+    }
 
     double u_max = std::max(a_L + std::abs(vnl), a_R + std::abs(vnr));
 
     Vector fl(dim*var_dim), fr(dim*var_dim);
-    getEulerFlux(u1, fl);
-    getEulerFlux(u2, fr);
+    getEulerFlux(R, gamm, u1, fl);
+    getEulerFlux(R, gamm, u2, fr);
     add(0.5, fl, fr, f); //Common flux without dissipation
-
 }
 
 
@@ -902,7 +962,7 @@ void DGEulerIntegrator::AssembleRHSElementVect(
 
       Vector f_dir(dim*vDim);
 
-      getLFFlux(u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using local Lax Friedrichs
+      getLFFlux(R, gamm, u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using local Lax Friedrichs
 
       Vector f1_dir(dim*vDim), f2_dir(dim*vDim);
       fD.Eval(f1_dir, *Trans.Elem1, eip1); // Get discontinuous flux at face
@@ -1285,7 +1345,7 @@ void DG_Euler_NoSlip_Integrator::AssembleRHSElementVect(
 
       Vector f_dir(dim*var_dim);
 //      getLFFlux(u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using local Lax Friedrichs
-      getConvectiveFlux(u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using central convective flux 
+      getConvectiveFlux(R, gamm, u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using central convective flux 
 
       Vector f1_dir(dim*var_dim);
       fD.Eval(f1_dir, *Trans.Elem1, eip); // Get discontinuous flux at face
@@ -1419,7 +1479,7 @@ void DG_Euler_Slip_Integrator::AssembleRHSElementVect(
 
       Vector f_dir(dim*var_dim);
 //      getLFFlux(u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using local Lax Friedrichs
-      getConvectiveFlux(u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using central convective flux 
+      getConvectiveFlux(R, gamm, u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using central convective flux 
 
       Vector f1_dir(dim*var_dim);
       fD.Eval(f1_dir, *Trans.Elem1, eip); // Get discontinuous flux at face
@@ -1520,7 +1580,7 @@ void DG_Euler_Characteristic_Integrator::AssembleRHSElementVect(
       u_bnd.Eval(u2_dir, *Trans.Elem1, eip);
 
       Vector f_dir(dim*var_dim);
-      getLFFlux(u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using local Lax Friedrichs
+      getLFFlux(R, gamm, u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using local Lax Friedrichs
 
       Vector f1_dir(dim*var_dim);
       fD.Eval(f1_dir, *Trans.Elem1, eip); // Get discontinuous flux at face
@@ -1650,7 +1710,7 @@ void DG_Euler_Subsonic_Pressure_Outflow_Integrator::AssembleRHSElementVect(
 
 
       Vector f_dir(dim*var_dim);
-      getLFFlux(u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using local Lax Friedrichs
+      getLFFlux(R, gamm, u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using local Lax Friedrichs
 
       Vector f1_dir(dim*var_dim);
       fD.Eval(f1_dir, *Trans.Elem1, eip); // Get discontinuous flux at face
@@ -1683,7 +1743,8 @@ void DG_Euler_Subsonic_Pressure_Outflow_Integrator::AssembleRHSElementVect(
 
 
 
-void CNSIntegrator::getViscousCNSFlux(const Vector &u, const Vector &aux_grad, const double mu, const double Pr, Vector &f)
+void CNSIntegrator::getViscousCNSFlux(double R, double gamm, const Vector &u, const Vector &aux_grad, 
+                                        const double mu, const double Pr, Vector &f)
 {
     int var_dim = u.Size();
     int dim     = var_dim - 2;
@@ -1862,8 +1923,8 @@ void DG_CNS_Vis_Adiabatic_Integrator::AssembleRHSElementVect(
 
       Vector fL_dir(dim*var_dim), fR_dir(dim*var_dim);
       Vector f_dir(dim*var_dim);
-      getViscousCNSFlux(u1_dir, aux1_dir, mu, Pr, fL_dir);
-      getViscousCNSFlux(u2_dir, aux2_dir, mu, Pr, f_dir);
+      getViscousCNSFlux(R, gamm, u1_dir, aux1_dir, mu, Pr, fL_dir);
+      getViscousCNSFlux(R, gamm, u2_dir, aux2_dir, mu, Pr, f_dir);
 
 //      for(int j = 0; j < var_dim; j++) std::cout << j << "\t" << fL_dir(var_dim + j) << "\t" << fR_dir(var_dim + j) << std::endl;
 

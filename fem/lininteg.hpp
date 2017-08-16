@@ -371,19 +371,14 @@ public:
     */
 class EulerIntegrator
 {
-protected:
-   const double gamm  = 1.4;
-   const double R     = 287;
-   const double Cv    = R/(gamm - 1);
-
 public:
    EulerIntegrator(){};
 
-   void getEulerFlux(const Vector &u, Vector &f);
+   void getEulerFlux(const double R, const double gamm, const Vector &u, Vector &f);
 
-   void getLFFlux(const Vector &u1, const Vector &u2, const Vector &nor, Vector &f);
+   void getLFFlux(const double R, const double gamm, const Vector &u1, const Vector &u2, const Vector &nor, Vector &f);
 
-   void getConvectiveFlux(const Vector &u1, const Vector &u2, const Vector &nor, Vector &f);
+   void getConvectiveFlux(const double R, const double gamm, const Vector &u1, const Vector &u2, const Vector &nor, Vector &f);
 };
 
 
@@ -395,6 +390,9 @@ class DGEulerIntegrator : public LinearFormIntegrator, public EulerIntegrator
 protected:
    VectorCoefficient &uD;
    VectorCoefficient &fD;
+
+   double gamm;
+   double R   ;
 
    int vDim;//Vector dimension 
 
@@ -412,8 +410,8 @@ protected:
 #endif
 
 public:
-   DGEulerIntegrator(VectorCoefficient &uD_, VectorCoefficient &fD_, int vDim_, double alpha_)
-      : uD(uD_), fD(fD_), vDim(vDim_), alpha(alpha_) { }
+   DGEulerIntegrator(double R_, double gamm_, VectorCoefficient &uD_, VectorCoefficient &fD_, int vDim_, double alpha_)
+      : uD(uD_), fD(fD_), vDim(vDim_), alpha(alpha_), R(R_), gamm(gamm_) { }
 
    virtual void AssembleRHSElementVect(const FiniteElement &el,
                                        ElementTransformation &Tr,
@@ -513,6 +511,9 @@ protected:
 
    double alpha; // b = alpha*b
 
+   double gamm;
+   double R   ;
+
 #ifndef MFEM_THREAD_SAFE
    Vector shape;
    DenseMatrix dshape;
@@ -525,8 +526,9 @@ protected:
 #endif
 
 public:
-   DG_Euler_NoSlip_Integrator(VectorCoefficient &uD_, VectorCoefficient &fD_, VectorCoefficient &u_bnd_, double alpha_)
-      : uD(uD_), fD(fD_), u_bnd(u_bnd_), alpha(alpha_) { }
+   DG_Euler_NoSlip_Integrator(double R_, double gamm_, VectorCoefficient &uD_, VectorCoefficient &fD_, 
+                                VectorCoefficient &u_bnd_, double alpha_)
+      : uD(uD_), fD(fD_), u_bnd(u_bnd_), alpha(alpha_), R(R_), gamm(gamm_) { }
 
    virtual void AssembleRHSElementVect(const FiniteElement &el,
                                        ElementTransformation &Tr,
@@ -546,6 +548,9 @@ protected:
    VectorCoefficient &fD;
    VectorCoefficient &u_bnd;
 
+   double gamm;
+   double R   ;
+
    double alpha; // b = alpha*b
 
 #ifndef MFEM_THREAD_SAFE
@@ -560,8 +565,9 @@ protected:
 #endif
 
 public:
-   DG_Euler_Slip_Integrator(VectorCoefficient &uD_, VectorCoefficient &fD_, VectorCoefficient &u_bnd_, double alpha_)
-      : uD(uD_), fD(fD_), u_bnd(u_bnd_), alpha(alpha_) { }
+   DG_Euler_Slip_Integrator(double R_, double gamm_, VectorCoefficient &uD_, VectorCoefficient &fD_, 
+                                VectorCoefficient &u_bnd_, double alpha_)
+      : uD(uD_), fD(fD_), u_bnd(u_bnd_), alpha(alpha_), R(R_), gamm(gamm_){ }
 
    virtual void AssembleRHSElementVect(const FiniteElement &el,
                                        ElementTransformation &Tr,
@@ -583,6 +589,9 @@ protected:
    VectorCoefficient &fD;
    VectorCoefficient &u_bnd;
 
+   double gamm;
+   double R   ;
+
    double alpha; // b = alpha*b
 
 #ifndef MFEM_THREAD_SAFE
@@ -597,8 +606,9 @@ protected:
 #endif
 
 public:
-   DG_Euler_Characteristic_Integrator(VectorCoefficient &uD_, VectorCoefficient &fD_, VectorCoefficient &u_bnd_, double alpha_)
-      : uD(uD_), fD(fD_), u_bnd(u_bnd_), alpha(alpha_) { }
+   DG_Euler_Characteristic_Integrator(double R_, double gamm_, VectorCoefficient &uD_, VectorCoefficient &fD_, 
+                                        VectorCoefficient &u_bnd_, double alpha_)
+      : uD(uD_), fD(fD_), u_bnd(u_bnd_), alpha(alpha_) , R(R_), gamm(gamm_) { }
 
    virtual void AssembleRHSElementVect(const FiniteElement &el,
                                        ElementTransformation &Tr,
@@ -621,6 +631,9 @@ protected:
    VectorCoefficient &fD;
    VectorCoefficient &u_bnd;
 
+   double gamm;
+   double R   ;
+
    double alpha; // b = alpha*b
 
 #ifndef MFEM_THREAD_SAFE
@@ -635,8 +648,9 @@ protected:
 #endif
 
 public:
-   DG_Euler_Subsonic_Pressure_Outflow_Integrator(VectorCoefficient &uD_, VectorCoefficient &fD_, VectorCoefficient &u_bnd_, double alpha_)
-      : uD(uD_), fD(fD_), u_bnd(u_bnd_), alpha(alpha_) { }
+   DG_Euler_Subsonic_Pressure_Outflow_Integrator(double R_, double gamm_, VectorCoefficient &uD_, VectorCoefficient &fD_, 
+                                                    VectorCoefficient &u_bnd_, double alpha_)
+      : uD(uD_), fD(fD_), u_bnd(u_bnd_), alpha(alpha_) , R(R_), gamm(gamm_) { }
 
    virtual void AssembleRHSElementVect(const FiniteElement &el,
                                        ElementTransformation &Tr,
@@ -652,15 +666,11 @@ public:
     */
 class CNSIntegrator
 {
-protected:
-   const double gamm  = 1.4;
-   const double R     = 287;
-   const double Cv    = R/(gamm - 1);
-
 public:
    CNSIntegrator(){};
 
-   void getViscousCNSFlux(const Vector &u, const Vector &aux_grad, const double mu, const double Pr, Vector &f);
+   void getViscousCNSFlux(double R, double gamm, const Vector &u, const Vector &aux_grad, 
+                            const double mu, const double Pr, Vector &f);
 
 };
 
@@ -675,6 +685,9 @@ protected:
    VectorCoefficient &fD;
    VectorCoefficient &auxD;
    VectorCoefficient &u_bnd;
+
+   double gamm;
+   double R   ;
 
    double alpha; // b = alpha*b
 
@@ -692,9 +705,10 @@ protected:
 #endif
 
 public:
-   DG_CNS_Vis_Adiabatic_Integrator(VectorCoefficient &uD_, VectorCoefficient &fD_, VectorCoefficient &auxD_, 
+   DG_CNS_Vis_Adiabatic_Integrator(double R_, double gamm_, VectorCoefficient &uD_, VectorCoefficient &fD_, 
+                                    VectorCoefficient &auxD_, 
                                     VectorCoefficient &u_bnd_,  double mu_, double Pr_, double alpha_) 
-      : uD(uD_), fD(fD_), auxD(auxD_), u_bnd(u_bnd_), alpha(alpha_), mu(mu_), Pr(Pr_) { }
+      : uD(uD_), fD(fD_), auxD(auxD_), u_bnd(u_bnd_), alpha(alpha_), mu(mu_), Pr(Pr_) , R(R_), gamm(gamm_) { }
 
    virtual void AssembleRHSElementVect(const FiniteElement &el,
                                        ElementTransformation &Tr,
