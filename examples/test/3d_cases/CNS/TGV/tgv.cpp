@@ -46,10 +46,10 @@ void getAuxVar(int dim, const Vector &u, Vector &aux_sol);
 
 void ComputeMaxResidual(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, int vDim, Vector &maxResi);
 
-void postProcess(Mesh &mesh, VarL2_FiniteElementCollection &vfec, GridFunction &u_sol, 
-        int cycle, double time);
-void getFields(const GridFunction &u_sol, Vector &rho, Vector &u1, Vector &u2, 
-                Vector &E);
+void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, Vector &u1, Vector &u2, 
+                Vector &E, Vector &u_x, Vector &u_y, Vector &v_x, Vector &v_y);
+void postProcess(Mesh &mesh, VarL2_FiniteElementCollection &vfec, GridFunction &u_sol, GridFunction &aux_grad,
+        GridFunction &eleOrder, int cycle, double time);
 
 void getEleOrder(FiniteElementSpace &fes, Array<int> &newEleOrder, GridFunction &order);
 
@@ -167,6 +167,9 @@ CNS::CNS()
    f_inv.SetSpace(fes_vec);
    getInvFlux(dim, u_sol, f_inv);
 
+   FiniteElementSpace fes_aux_grad(mesh, vfec, dim*aux_dim);
+   GridFunction aux_grad(&fes_aux_grad);
+
    ///////////////////////////////////////////////////////////
    // Setup bilinear form for x derivative and the mass matrix
    Vector dir(dim); 
@@ -258,9 +261,13 @@ CNS::CNS()
 
    }
 
+   GridFunction ele_order_pp(fes_op); // Get element order
+   getEleOrder(*fes_op, eleOrder, ele_order_pp);
    
    t = 0.0; ti = 0; // Initialize time and time iterations
-   postProcess(*mesh, *vfec, u_sol, ti, t);
+   getAuxGrad(dim, k_vis_x->SpMat(), k_vis_y->SpMat(), k_vis_z->SpMat(), 
+           adv->GetMSolver(), u_sol, aux_grad);
+   postProcess(*mesh, *vfec, u_sol, aux_grad, ele_order_pp, ti, t);
 
    adv->SetTime(t);
 
@@ -298,7 +305,12 @@ CNS::CNS()
       
       if (done || ti % vis_steps == 0) // Visualize
       {
-          postProcess(*mesh, *vfec, u_sol, ti, t);
+          getAuxGrad(dim, k_vis_x->SpMat(), k_vis_y->SpMat(), k_vis_z->SpMat(), 
+                  adv->GetMSolver(), u_sol, aux_grad);
+
+          GridFunction ele_order_temp(fes_op);
+          getEleOrder(*fes_op, newEleOrder, ele_order_temp);
+          postProcess(*mesh, *vfec, u_sol, aux_grad, ele_order_temp, ti, t);
       }
  
    }
@@ -504,7 +516,7 @@ double getUMax(int dim, const Vector &u)
     {
         rho = u[j];
     
-        for(int i = 0; i < dim; i++) vel[i] = u[1 + i]/rho;
+        for(int i = 0; i < dim; i++) vel[i] = u[i*offset + j]/rho;
 
         double v_sq =  0;
         for(int i = 0; i < dim; i++)
@@ -837,23 +849,62 @@ void init_function(const Vector &x, Vector &v)
 }
 
 
-void getFields(const GridFunction &u_sol, Vector &rho, Vector &u1, Vector &u2, 
-                Vector &E)
+void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, Vector &M,
+                Vector &p, Vector &vort, Vector &q)
 {
 
     int vDim    = u_sol.VectorDim();
     int dofs    = u_sol.Size()/vDim;
+    int dim     = vDim - 2;
 
     int aux_dim = vDim - 1;
 
     for (int i = 0; i < dofs; i++)
     {
-        rho[i] = u_sol[         i];        
-        u1 [i] = u_sol[  dofs + i]/rho[i];        
-        u2 [i] = u_sol[2*dofs + i]/rho[i];        
-        E  [i] = u_sol[3*dofs + i];        
+        rho[i]   = u_sol[         i];        
+        double vel[dim]; 
+        for (int j = 0; j < dim; j++)
+        {
+            vel[j] =  u_sol[(1 + j)*dofs + i]/rho[i];        
+        }
+        double E  = u_sol[(vDim - 1)*dofs + i];        
+
+        double v_sq = 0.0;    
+        for (int j = 0; j < dim; j++)
+        {
+            v_sq += pow(vel[j], 2); 
+        }
+
+        p[i]     = (E - 0.5*rho[i]*v_sq)*(gamm - 1);
+
+        M[i]     = sqrt(v_sq)/sqrt(gamm*p[i]/rho[i]);
+        
+        double u_x = aux_grad[(0          )*dofs + i];
+        double v_x = aux_grad[(1          )*dofs + i];
+        double w_x = aux_grad[(2          )*dofs + i];
+
+        double u_y = aux_grad[(3          )*dofs + i];
+        double v_y = aux_grad[(4          )*dofs + i];
+        double w_y = aux_grad[(5          )*dofs + i];
+
+        double u_z = aux_grad[(6          )*dofs + i];
+        double v_z = aux_grad[(7          )*dofs + i];
+        double w_z = aux_grad[(8          )*dofs + i];
+
+        double omega_x  = w_y - v_z, omega_y = u_z - w_x, omega_z = v_x - u_y;
+        double omega_sq = pow(omega_x, 2) + pow(omega_y, 2) + pow(omega_z, 2); 
+
+        vort[i]   = sqrt(omega_sq);
+
+        double s_x  = w_y + v_z, s_y = u_z + w_x, s_z = v_x + u_y;
+        double s_sq = pow(s_x, 2) + pow(s_y, 2) + pow(s_z, 2); 
+
+        q[i]      = 0.5*(omega_sq - s_sq);
+
+
     }
 }
+
 
 
 // Returns the max residual of the componenent of the vector specified by vDim
@@ -895,9 +946,8 @@ void ComputeMaxResidual(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, i
 }
 
 
-
-void postProcess(Mesh &mesh, VarL2_FiniteElementCollection &vfec, GridFunction &u_sol, 
-        int cycle, double time)
+void postProcess(Mesh &mesh, VarL2_FiniteElementCollection &vfec, GridFunction &u_sol, GridFunction &aux_grad,
+        GridFunction &eleOrder, int cycle, double time)
 {
    Mesh new_mesh(mesh, true);
 
@@ -911,31 +961,53 @@ void postProcess(Mesh &mesh, VarL2_FiniteElementCollection &vfec, GridFunction &
    GridFunction u_post(&fes_post);
    u_post.GetValuesFrom(u_sol); // Create a temp variable to get the previous space solution
  
-   new_mesh.UniformRefinement();
+   GridFunction aux_grad_post(&fes_post_grad);
+   aux_grad_post.GetValuesFrom(aux_grad); // Create a temp variable to get the previous space solution
+
+   FiniteElementSpace fes_order(&new_mesh, &fec);
+   GridFunction order_post(&fes_order);
+   order_post.GetValuesFrom(eleOrder); // Create a temp variable to get the previous space solution
+
+//   new_mesh.UniformRefinement();
    fes_post.Update();
    u_post.Update();
+   aux_grad_post.Update();
+
+   fes_order.Update();
+   order_post.Update();
+
 
    VisItDataCollection dc("CNS", &new_mesh);
    dc.SetPrecision(8);
  
    FiniteElementSpace fes_fields(&new_mesh, &fec);
    GridFunction rho(&fes_fields);
-   GridFunction u1(&fes_fields);
-   GridFunction u2(&fes_fields);
-   GridFunction E(&fes_fields);
+   GridFunction M(&fes_fields);
+   GridFunction p(&fes_fields);
+   GridFunction vort(&fes_fields);
+   GridFunction q(&fes_fields);
+
+   GridFunction newEleOrder(&fes_fields);
+   newEleOrder.GetValuesFrom(order_post); // Create a temp variable to get the previous space solution
 
    dc.RegisterField("rho", &rho);
-   dc.RegisterField("u1", &u1);
-   dc.RegisterField("u2", &u2);
-   dc.RegisterField("E", &E);
+   dc.RegisterField("M", &M);
+   dc.RegisterField("p", &p);
+   dc.RegisterField("vort", &vort);
+   dc.RegisterField("q_criterion", &q);
 
-   getFields(u_post, rho, u1, u2, E);
+//   dc.RegisterField("order", &newEleOrder);
+
+   getFields(u_post, aux_grad_post, rho, M, p, vort, q);
 
    dc.SetCycle(cycle);
    dc.SetTime(time);
    dc.Save();
   
 }
+
+
+
 
 // Creates a gridfunction with the element order for post processing 
 void getEleOrder(FiniteElementSpace &fes, Array<int> &newEleOrder, GridFunction &eleOrder)
