@@ -13,15 +13,15 @@ const double R_gas = 287;
 const double   Pr  = 0.72;
 
 //Run parameters
-const char *mesh_file        =  "periodic-square.mesh";
-const int    order           =  3;
-const double t_final         =  0.02000;
-const int    problem         =  0;
-const int    ref_levels      =  3;
+const char *mesh_file        =  "periodic-cube.mesh";
+const int    order           =  2;
+const double t_final         =  0.20000;
+const int    problem         =  1;
+const int    ref_levels      =  2;
 
 const bool   time_adapt      =  false;
 const double cfl             =  0.20;
-const double dt_const        =  0.0002 ;
+const double dt_const        =  0.001  ;
 const int    ode_solver_type =  2; // 1. Forward Euler 2. TVD SSP 3 Stage
 
 const int    vis_steps       =   50 ;
@@ -236,6 +236,25 @@ CNS::CNS()
    k_vis_y->Assemble(skip_zeros);
    k_vis_y->Finalize(skip_zeros);
 
+   if (dim == 3)
+   {
+       dir = 0.0; dir(2) = 1.0;
+       VectorConstantCoefficient z_dir(dir);
+      
+       k_inv_z = new ParBilinearForm(fes_op);
+       k_inv_y->AddDomainIntegrator(new ConvectionIntegrator(z_dir, -1.0));
+    
+       k_inv_z->Assemble(skip_zeros);
+       k_inv_z->Finalize(skip_zeros);
+       
+       k_vis_z = new ParBilinearForm(fes_op);
+       k_vis_z->AddDomainIntegrator(new ConvectionIntegrator(y_dir,  1.0));
+       k_vis_z->AddInteriorFaceIntegrator(
+          new TransposeIntegrator(new DGTraceIntegrator(y_dir, -1.0,  0.0)));// Beta 0 means central flux
+    
+       k_vis_z->Assemble(skip_zeros);
+       k_vis_z->Finalize(skip_zeros);
+   }
 
    ///////////////////////////////////////////////////////////////
    //Setup time stepping objects and do initial post-processing
@@ -249,13 +268,28 @@ CNS::CNS()
    HypreParMatrix *K_vis_x = k_vis_x->ParallelAssemble();
    HypreParMatrix *K_vis_y = k_vis_y->ParallelAssemble();
 
-   HypreParMatrix dummyMat;
-   adv  = new FE_Evolution(*M, *K_inv_x, *K_inv_y, dummyMat,
+   HypreParMatrix *K_inv_z;
+   HypreParMatrix *K_vis_z;
+
+   if (dim == 3)
+   {
+       K_inv_z = k_inv_z->ParallelAssemble();
+       K_vis_z = k_vis_z->ParallelAssemble();
+
+       adv  = new FE_Evolution(*M, *K_inv_x, *K_inv_y, *K_inv_z, 
+                   *K_vis_x, *K_vis_y, *K_vis_z, *b);
+   }
+   else if (dim == 2)
+   {
+       HypreParMatrix dummyMat;
+       adv  = new FE_Evolution(*M, *K_inv_x, *K_inv_y, dummyMat,
                             *K_vis_x, *K_vis_y, dummyMat, *b);
-   
-   t = 0.0; ti = 0; // Initialize time and time iterations
-   getAuxGrad(dim, *K_vis_x, *K_vis_y, dummyMat, 
+       
+       getAuxGrad(dim, *K_vis_x, *K_vis_y, dummyMat, 
            adv->GetMSolver(), *U, aux_grad);
+   }
+
+   t = 0.0; ti = 0; // Initialize time and time iterations
    postProcess(*pmesh, *u_sol, aux_grad, ti, t);
 
    adv->SetTime(t);
@@ -281,8 +315,13 @@ CNS::CNS()
     
       if (done || ti % vis_steps == 0) // Visualize
       {
-          getAuxGrad(dim, *K_vis_x, *K_vis_y, dummyMat, 
-              adv->GetMSolver(), *U, aux_grad);
+          if (dim == 2)
+          {
+              HypreParMatrix dummyMat;
+              getAuxGrad(dim, *K_vis_x, *K_vis_y, dummyMat, 
+                      adv->GetMSolver(), *U, aux_grad);
+          }
+
           postProcess(*pmesh, *u_sol, aux_grad, ti, t);
       }
    
@@ -302,7 +341,8 @@ CNS::CNS()
 //   }
 //
    delete adv;
-   delete M, K_inv_x, K_inv_y;
+   delete M, K_inv_x, K_inv_y, K_inv_z;
+   delete K_vis_x, K_vis_y, K_vis_z;
 }
 
 
@@ -419,6 +459,19 @@ void FE_Evolution::Mult(const Vector &x, Vector &y) const
         y_temp.SetSubVector(offsets[i - var_dim], f_x_m);
     }
     y += y_temp;
+
+
+    if (dim == 3)
+    {
+        for(int i = 2*var_dim + 0; i < 3*var_dim; i++)
+        {
+            f.GetSubVector(offsets[i], f_sol);
+            K_inv_z.Mult(f_sol, f_x);
+            M_solver.Mult(f_x, f_x_m);
+            y_temp.SetSubVector(offsets[i - 2*var_dim], f_x_m);
+        }
+        y += y_temp;
+    }
 
     //////////////////////////////////////////////
     //Get viscous contribution
