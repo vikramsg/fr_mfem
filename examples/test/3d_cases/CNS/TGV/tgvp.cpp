@@ -8,23 +8,23 @@ using namespace mfem;
 
 //Constants
 const double gamm  = 1.4;
-const double   mu  = 0.0001989436788648692; 
+const double   mu  = 0.1; 
 const double R_gas = 287;
 const double   Pr  = 0.72;
 
 //Run parameters
-const char *mesh_file        =  "periodic-cube.mesh";
-const int    order           =  2;
-const double t_final         = 10.00000;
-const int    problem         =  1;
-const int    ref_levels      =  2;
+const char *mesh_file        =  "periodic-square.mesh";
+const int    order           =  3;
+const double t_final         =  0.02000;
+const int    problem         =  0;
+const int    ref_levels      =  3;
 
 const bool   time_adapt      =  false;
 const double cfl             =  0.20;
-const double dt_const        =  0.0004 ;
+const double dt_const        =  0.0002 ;
 const int    ode_solver_type =  2; // 1. Forward Euler 2. TVD SSP 3 Stage
 
-const int    vis_steps       =   200;
+const int    vis_steps       =   50 ;
 
 const bool   adapt           =  false;
 const int    adapt_iter      =  200  ; // Time steps after which adaptation is done
@@ -39,17 +39,17 @@ double getUMax(int dim, const Vector &u);
 void getInvFlux(int dim, const Vector &u, Vector &f);
 void getVisFlux(int dim, const Vector &u, const Vector &aux_grad, Vector &f);
 
-void getAuxGrad(int dim, const SparseMatrix &K_x, const SparseMatrix &K_y, const SparseMatrix &K_z,
+void getAuxGrad(int dim, const HypreParMatrix &K_x, const HypreParMatrix &K_y, const HypreParMatrix &K_z,
         const CGSolver &M_solver, const Vector &u, Vector &aux_grad);
 void getAuxVar(int dim, const Vector &u, Vector &aux_sol);
 
 
-void ComputeMaxResidual(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, int vDim, Vector &maxResi);
+void ComputeMaxResidual(ParMesh &mesh, FiniteElementSpace &fes, GridFunction &uD, int vDim, Vector &maxResi);
 
 void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, Vector &u1, Vector &u2, 
                 Vector &E, Vector &u_x, Vector &u_y, Vector &v_x, Vector &v_y);
-void postProcess(Mesh &mesh, VarL2_FiniteElementCollection &vfec, GridFunction &u_sol, GridFunction &aux_grad,
-        GridFunction &eleOrder, int cycle, double time);
+void postProcess(ParMesh &mesh, ParGridFunction &u_sol, ParGridFunction &aux_grad,
+        int cycle, double time);
 
 void getEleOrder(FiniteElementSpace &fes, Array<int> &newEleOrder, GridFunction &order);
 
@@ -61,15 +61,15 @@ void getEleOrder(FiniteElementSpace &fes, Array<int> &newEleOrder, GridFunction 
 class FE_Evolution : public TimeDependentOperator
 {
 private:
-   SparseMatrix &M, &K_inv_x, &K_inv_y, &K_inv_z;
-   SparseMatrix     &K_vis_x, &K_vis_y, &K_vis_z;
+   HypreParMatrix &M, &K_inv_x, &K_inv_y, &K_inv_z;
+   HypreParMatrix     &K_vis_x, &K_vis_y, &K_vis_z;
    const Vector &b;
-   DSmoother M_prec;
+   HypreSmoother M_prec;
    CGSolver M_solver;
 
 public:
-   FE_Evolution(SparseMatrix &_M, SparseMatrix &_K_inv_x, SparseMatrix &_K_inv_y, SparseMatrix &_K_inv_z, 
-                            SparseMatrix &_K_vis_x, SparseMatrix &_K_vis_y, SparseMatrix &_K_vis_z,
+   FE_Evolution(HypreParMatrix &_M, HypreParMatrix &_K_inv_x, HypreParMatrix &_K_inv_y, HypreParMatrix &_K_inv_z, 
+                            HypreParMatrix &_K_vis_x, HypreParMatrix &_K_vis_y, HypreParMatrix &_K_vis_z,
                             Vector &_b);
 
    void GetSize() ;
@@ -86,25 +86,25 @@ public:
 class CNS 
 {
 private:
-    Mesh *mesh;
-    Array<int> eleOrder;
-    VarL2_FiniteElementCollection *vfec;
-    FiniteElementSpace *fes, *fes_vec, *fes_op;
+    int num_procs, myid;
+
+    ParMesh *pmesh ;
+
+    ParFiniteElementSpace  *fes, *fes_vec, *fes_op;
    
-    BilinearForm *m, *k_inv_x, *k_inv_y, *k_inv_z;
-    BilinearForm     *k_vis_x, *k_vis_y, *k_vis_z;
+    ParBilinearForm *m, *k_inv_x, *k_inv_y, *k_inv_z;
+    ParBilinearForm     *k_vis_x, *k_vis_y, *k_vis_z;
 
     ODESolver *ode_solver; 
 
     int dim;
 
-    GridFunction u_sol, f_inv;   
-    LinearForm *b;
-
-    GridFunction rhs;   
+    ParGridFunction *u_sol, *f_inv;   
+    HypreParVector  *U;
+    ParLinearForm   *b;
 
     double h_min, h_max;  // Minimum, maximum element size
-    double dt, t, u_max;
+    double dt, t, glob_u_max;
     int ti;
 public:
    CNS();
@@ -120,6 +120,12 @@ public:
 
 int main(int argc, char *argv[])
 {
+    // Initialize MPI.
+   int num_procs, myid;
+   MPI_Init(&argc, &argv);
+   MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
+   MPI_Comm_rank(MPI_COMM_WORLD, &myid);
+   
    int precision = 8;
    cout.precision(precision);
 
@@ -130,45 +136,48 @@ int main(int argc, char *argv[])
 
 CNS::CNS() 
 {
+   MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
+   MPI_Comm_rank(MPI_COMM_WORLD, &myid);
+
    // Read the mesh from the given mesh file
-   mesh = new Mesh(mesh_file, 1, 1);
+   Mesh *mesh = new Mesh(mesh_file, 1, 1);
            dim = mesh->Dimension();
    int var_dim = dim + 2;
    int aux_dim = dim + 1; //Auxiliary variables for the viscous terms
 
+   pmesh = new ParMesh(MPI_COMM_WORLD, *mesh);
+   delete mesh;
    for (int lev = 0; lev < ref_levels; lev++)
    {
-      mesh->UniformRefinement();
+      pmesh->UniformRefinement();
    }
 
    double kappa_min, kappa_max;
-   mesh->GetCharacteristics(h_min, h_max, kappa_min, kappa_max);
+   pmesh->GetCharacteristics(h_min, h_max, kappa_min, kappa_max);
 
-   int ne = mesh->GetNE();
-   eleOrder.SetSize(ne);
+   DG_FECollection fec(order, dim);
+   fes = new ParFiniteElementSpace(pmesh, &fec, var_dim);
 
-   for (int i = 0; i < ne; i++) 
+   HYPRE_Int global_vSize = fes->GlobalTrueVSize();
+   if (myid == 0)
    {
-       eleOrder[i] = order; // Initializing with uniform order
+      cout << "Number of unknowns: " << global_vSize << endl;
    }
 
-   //    Define the discontinuous DG finite element space 
-   //    Var_L2 allows variable order polynomials 
-   vfec = new VarL2_FiniteElementCollection(mesh, eleOrder);
-   fes = new FiniteElementSpace(mesh, vfec, var_dim);
-
-   cout << "Number of unknowns: " << fes->GetVSize() << endl;
-
    VectorFunctionCoefficient u0(var_dim, init_function);
-   u_sol.SetSpace(fes);
-   u_sol.ProjectCoefficient(u0);
+   
+   u_sol = new ParGridFunction(fes);
+   u_sol->ProjectCoefficient(u0);
 
-   fes_vec = new FiniteElementSpace(mesh, vfec, dim*var_dim);
-   f_inv.SetSpace(fes_vec);
-   getInvFlux(dim, u_sol, f_inv);
+   U = u_sol->GetTrueDofs();
 
-   FiniteElementSpace fes_aux_grad(mesh, vfec, dim*aux_dim);
-   GridFunction aux_grad(&fes_aux_grad);
+   fes_vec = new ParFiniteElementSpace(pmesh, &fec, dim*var_dim);
+       
+   f_inv = new ParGridFunction(fes_vec);
+   getInvFlux(dim, *u_sol, *f_inv);
+
+   ParFiniteElementSpace fes_aux_grad(pmesh, &fec, dim*aux_dim);
+   ParGridFunction aux_grad(&fes_aux_grad);
 
    ///////////////////////////////////////////////////////////
    // Setup bilinear form for x derivative and the mass matrix
@@ -178,12 +187,12 @@ CNS::CNS()
    dir = 0.0; dir(1) = 1.0;
    VectorConstantCoefficient y_dir(dir);
 
-   fes_op = new FiniteElementSpace(mesh, vfec);
-   m = new BilinearForm(fes_op);
+   fes_op = new ParFiniteElementSpace(pmesh, &fec);
+   m      = new ParBilinearForm(fes_op);
    m->AddDomainIntegrator(new MassIntegrator);
-   k_inv_x = new BilinearForm(fes_op);
+   k_inv_x = new ParBilinearForm(fes_op);
    k_inv_x->AddDomainIntegrator(new ConvectionIntegrator(x_dir, -1.0));
-   k_inv_y = new BilinearForm(fes_op);
+   k_inv_y = new ParBilinearForm(fes_op);
    k_inv_y->AddDomainIntegrator(new ConvectionIntegrator(y_dir, -1.0));
 
    m->Assemble();
@@ -196,25 +205,28 @@ CNS::CNS()
 
    /////////////////////////////////////////////////////////////
 
-   VectorGridFunctionCoefficient u_vec(&u_sol);
-   VectorGridFunctionCoefficient f_vec(&f_inv);
+   VectorGridFunctionCoefficient u_vec(u_sol);
+   VectorGridFunctionCoefficient f_vec(f_inv);
+
+   u_sol->ExchangeFaceNbrData(); //Exchange data across processors
+   f_inv->ExchangeFaceNbrData();
 
    /////////////////////////////////////////////////////////////
    // Linear form
-   b = new LinearForm(fes);
+   b = new ParLinearForm(fes);
    b->AddFaceIntegrator(
       new DGEulerIntegrator(R_gas, gamm, u_vec, f_vec, var_dim, -1.0));
    b->Assemble();
    ///////////////////////////////////////////////////////////
- 
+
    ///////////////////////////////////////////////////////////
    // Setup bilinear form for viscous terms 
-   k_vis_x = new BilinearForm(fes_op);
+   k_vis_x = new ParBilinearForm(fes_op);
    k_vis_x->AddDomainIntegrator(new ConvectionIntegrator(x_dir,  1.0));
    k_vis_x->AddInteriorFaceIntegrator(
       new TransposeIntegrator(new DGTraceIntegrator(x_dir, -1.0,  0.0)));// Beta 0 means central flux
 
-   k_vis_y = new BilinearForm(fes_op);
+   k_vis_y = new ParBilinearForm(fes_op);
    k_vis_y->AddDomainIntegrator(new ConvectionIntegrator(y_dir,  1.0));
    k_vis_y->AddInteriorFaceIntegrator(
       new TransposeIntegrator(new DGTraceIntegrator(y_dir, -1.0,  0.0)));// Beta 0 means central flux
@@ -224,50 +236,27 @@ CNS::CNS()
    k_vis_y->Assemble(skip_zeros);
    k_vis_y->Finalize(skip_zeros);
 
-   if (dim == 3)
-   {
-       dir = 0.0; dir(2) = 1.0;
-       VectorConstantCoefficient z_dir(dir);
-      
-       k_inv_z = new BilinearForm(fes_op);
-       k_inv_y->AddDomainIntegrator(new ConvectionIntegrator(z_dir, -1.0));
-    
-       k_inv_z->Assemble(skip_zeros);
-       k_inv_z->Finalize(skip_zeros);
-       
-       k_vis_z = new BilinearForm(fes_op);
-       k_vis_z->AddDomainIntegrator(new ConvectionIntegrator(y_dir,  1.0));
-       k_vis_z->AddInteriorFaceIntegrator(
-          new TransposeIntegrator(new DGTraceIntegrator(y_dir, -1.0,  0.0)));// Beta 0 means central flux
-    
-       k_vis_z->Assemble(skip_zeros);
-       k_vis_z->Finalize(skip_zeros);
-   }
 
    ///////////////////////////////////////////////////////////////
    //Setup time stepping objects and do initial post-processing
    
    FE_Evolution *adv;
-   if (dim == 3)
-   {
-       adv  = new FE_Evolution(m->SpMat(), k_inv_x->SpMat(), k_inv_y->SpMat(), k_inv_z->SpMat(), 
-                   k_vis_x->SpMat(), k_vis_y->SpMat(), k_vis_z->SpMat(), *b);
-   }
-   else if (dim == 2)
-   {
-       SparseMatrix dummyMat(1, 1);
-       adv  = new FE_Evolution(m->SpMat(), k_inv_x->SpMat(), k_inv_y->SpMat(), dummyMat,
-                                k_vis_x->SpMat(), k_vis_y->SpMat(), dummyMat, *b);
 
-   }
+   HypreParMatrix *M       = m->ParallelAssemble();
+   HypreParMatrix *K_inv_x = k_inv_x->ParallelAssemble();
+   HypreParMatrix *K_inv_y = k_inv_y->ParallelAssemble();
 
-   GridFunction ele_order_pp(fes_op); // Get element order
-   getEleOrder(*fes_op, eleOrder, ele_order_pp);
+   HypreParMatrix *K_vis_x = k_vis_x->ParallelAssemble();
+   HypreParMatrix *K_vis_y = k_vis_y->ParallelAssemble();
+
+   HypreParMatrix dummyMat;
+   adv  = new FE_Evolution(*M, *K_inv_x, *K_inv_y, dummyMat,
+                            *K_vis_x, *K_vis_y, dummyMat, *b);
    
    t = 0.0; ti = 0; // Initialize time and time iterations
-   getAuxGrad(dim, k_vis_x->SpMat(), k_vis_y->SpMat(), k_vis_z->SpMat(), 
-           adv->GetMSolver(), u_sol, aux_grad);
-   postProcess(*mesh, *vfec, u_sol, aux_grad, ele_order_pp, ti, t);
+   getAuxGrad(dim, *K_vis_x, *K_vis_y, dummyMat, 
+           adv->GetMSolver(), *U, aux_grad);
+   postProcess(*pmesh, *u_sol, aux_grad, ti, t);
 
    adv->SetTime(t);
 
@@ -281,20 +270,7 @@ CNS::CNS()
 
    ode_solver->Init(*adv);
 
-   ///////////////////////////////////////////////////////////////
-   //Calculate time step
-   u_max = getUMax(dim, u_sol);
-
-   if (time_adapt)
-   {
-       dt = cfl*((h_min/(2.0*order + 1))/u_max); 
-   }
-   else
-   {
-       dt = dt_const; 
-   }
-
-   Array<int> newEleOrder(fes->GetNE());
+   dt = dt_const; 
 
    bool done = false;
    for (ti = 0; !done; )
@@ -302,33 +278,31 @@ CNS::CNS()
       Step(); // Step in time
 
       done = (t >= t_final - 1e-8*dt);
-      
+    
       if (done || ti % vis_steps == 0) // Visualize
       {
-          getAuxGrad(dim, k_vis_x->SpMat(), k_vis_y->SpMat(), k_vis_z->SpMat(), 
-                  adv->GetMSolver(), u_sol, aux_grad);
-
-          GridFunction ele_order_temp(fes_op);
-          getEleOrder(*fes_op, newEleOrder, ele_order_temp);
-          postProcess(*mesh, *vfec, u_sol, aux_grad, ele_order_temp, ti, t);
+          getAuxGrad(dim, *K_vis_x, *K_vis_y, dummyMat, 
+              adv->GetMSolver(), *U, aux_grad);
+          postProcess(*pmesh, *u_sol, aux_grad, ti, t);
       }
- 
+   
    }
 
-   // Print all nodes in the finite element space 
-   FiniteElementSpace fes_nodes(mesh, vfec, dim);
-   GridFunction nodes(&fes_nodes);
-   mesh->GetNodes(nodes);
-
-   for (int i = 0; i < nodes.Size()/dim; i++)
-   {
-       int offset = nodes.Size()/dim;
-       int sub1 = i, sub2 = offset + i, sub3 = 2*offset + i, sub4 = 3*offset + i;
-//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << "\t" << rhs(sub2)<< endl;      
-//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << "\t" << u_out(sub1) << endl;      
-   }
-
+//   // Print all nodes in the finite element space 
+//   FiniteElementSpace fes_nodes(mesh, vfec, dim);
+//   GridFunction nodes(&fes_nodes);
+//   mesh->GetNodes(nodes);
+//
+//   for (int i = 0; i < nodes.Size()/dim; i++)
+//   {
+//       int offset = nodes.Size()/dim;
+//       int sub1 = i, sub2 = offset + i, sub3 = 2*offset + i, sub4 = 3*offset + i;
+////       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << "\t" << rhs(sub2)<< endl;      
+////       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << "\t" << u_out(sub1) << endl;      
+//   }
+//
    delete adv;
+   delete M, K_inv_x, K_inv_y;
 }
 
 
@@ -336,8 +310,7 @@ CNS::~CNS()
 {
     delete b;
     delete ode_solver;
-    delete mesh;
-    delete vfec;
+    delete pmesh;
     delete fes;
     delete fes_vec;
     delete fes_op;
@@ -348,33 +321,38 @@ CNS::~CNS()
 
 void CNS::Step()
 {
-      b->Assemble();
+    u_sol->ExchangeFaceNbrData();
+    f_inv->ExchangeFaceNbrData();
 
-      double dt_real = min(dt, t_final - t);
-      ode_solver->Step(u_sol, t, dt_real);
-      ti++;
+    b->Assemble();
 
-      u_max = getUMax(dim, u_sol);
-      cout << "time step: " << ti << ", dt: " << dt_real << ", time: " << 
-                t << ", max_speed " << u_max << ", fes_size " << fes->GetVSize() << endl;
+    double dt_real = min(dt, t_final - t);
+    ode_solver->Step(*U, t, dt_real);
+    ti++;
 
-      if (time_adapt)
-      {
-          dt = cfl*((h_min/(2.0*order + 1))/u_max); 
-      }
-      else
-      {
-          dt = dt_const; 
-      }
+    MPI_Comm comm = pmesh->GetComm();
+      
+    double loc_u_max = getUMax(dim, *U); // Get u_max on local processor
 
-      getInvFlux(dim, u_sol, f_inv); // To update f_vec
+    MPI_Allreduce(&loc_u_max, &glob_u_max, 1, MPI_DOUBLE, MPI_MAX, comm); // Get global u_max across processors
+
+    if (myid == 0)
+    {
+        cout << "time step: " << ti << ", dt: " << dt_real << ", time: " << 
+            t << ", max_speed " << glob_u_max << ", fes_size " << fes->GlobalTrueVSize() << endl;
+    }
+
+    dt = dt_const; 
+
+    *u_sol = *U;
+    getInvFlux(dim, *u_sol, *f_inv); // To update f_vec
 }
 
 
 
 // Implementation of class FE_Evolution
-FE_Evolution::FE_Evolution(SparseMatrix &_M, SparseMatrix &_K_inv_x, SparseMatrix &_K_inv_y, SparseMatrix &_K_inv_z, 
-                            SparseMatrix &_K_vis_x, SparseMatrix &_K_vis_y, SparseMatrix &_K_vis_z,
+FE_Evolution::FE_Evolution(HypreParMatrix &_M, HypreParMatrix &_K_inv_x, HypreParMatrix &_K_inv_y, HypreParMatrix &_K_inv_z, 
+                            HypreParMatrix &_K_vis_x, HypreParMatrix &_K_vis_y, HypreParMatrix &_K_vis_z,
                             Vector &_b)
    : TimeDependentOperator(_b.Size()), M(_M), K_inv_x(_K_inv_x), K_inv_y(_K_inv_y), K_inv_z(_K_inv_z),
                             K_vis_x(_K_vis_x), K_vis_y(_K_vis_y), K_vis_z(_K_vis_z), b(_b)
@@ -393,7 +371,7 @@ FE_Evolution::FE_Evolution(SparseMatrix &_M, SparseMatrix &_K_inv_x, SparseMatri
 
 void FE_Evolution::Mult(const Vector &x, Vector &y) const
 {
-    int dim = x.Size()/K_inv_x.Size() - 2;
+    int dim = x.Size()/K_inv_x.GetNumRows() - 2;
     int var_dim = dim + 2;
 
     y.SetSize(x.Size()); // Needed since by default ode_init will set it as size of K
@@ -404,7 +382,7 @@ void FE_Evolution::Mult(const Vector &x, Vector &y) const
     Vector f(dim*x.Size());
     getInvFlux(dim, x, f);
 
-    int offset  = K_inv_x.Size();
+    int offset  = K_inv_x.GetNumRows();
     Array<int> offsets[dim*var_dim];
     for(int i = 0; i < dim*var_dim; i++)
     {
@@ -442,18 +420,6 @@ void FE_Evolution::Mult(const Vector &x, Vector &y) const
     }
     y += y_temp;
 
-    if (dim == 3)
-    {
-        for(int i = 2*var_dim + 0; i < 3*var_dim; i++)
-        {
-            f.GetSubVector(offsets[i], f_sol);
-            K_inv_z.Mult(f_sol, f_x);
-            M_solver.Mult(f_x, f_x_m);
-            y_temp.SetSubVector(offsets[i - 2*var_dim], f_x_m);
-        }
-        y += y_temp;
-    }
-    
     //////////////////////////////////////////////
     //Get viscous contribution
     Vector f_vis(dim*x.Size());
@@ -524,6 +490,7 @@ double getUMax(int dim, const Vector &u)
             v_sq += pow(vel[i], 2);
         }
         double rho_E = u[(var_dim - 1)*offset + j];
+
         double e  = (rho_E - 0.5*rho*v_sq)/rho;
         double Cv = R_gas/(gamm - 1);
 
@@ -591,7 +558,7 @@ void getInvFlux(int dim, const Vector &u, Vector &f)
 
 
 // Get gradient of auxilliary variable 
-void getAuxGrad(int dim, const SparseMatrix &K_x, const SparseMatrix &K_y, const SparseMatrix &K_z, 
+void getAuxGrad(int dim, const HypreParMatrix &K_x, const HypreParMatrix &K_y, const HypreParMatrix &K_z, 
         const CGSolver &M_solver, const Vector &u, Vector &aux_grad)
 {
     int var_dim = dim + 2; 
@@ -933,96 +900,45 @@ void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, V
 
 
 
-// Returns the max residual of the componenent of the vector specified by vDim
-void ComputeMaxResidual(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, int vDim, Vector &maxResi)
+
+void postProcess(ParMesh &mesh, ParGridFunction &u_sol, ParGridFunction &aux_grad,
+                int cycle, double time)
 {
-   const FiniteElement *el;
-   ElementTransformation *T;
-
-   int dim;
-
-   Vector vals;
-   for (int i = 0; i < fes.GetNE(); i++)
-   {
-       T = fes.GetElementTransformation(i);
-
-       el = fes.GetFE(i);
-   
-       dim = el->GetDim();
-
-       Array<int> vdofs;
-       fes.GetElementVDofs(i, vdofs);
-
-       int dof = el->GetDof();
-
-       int var_dim = uD.VectorDim(); 
-
-       vals.SetSize(dof);
-
-       for(int j = 0; j < dof ; j++)
-       {
-           int subscript = vdofs[0*dof + j]; // The dofs have first rho, then rho.u, rho.v, E
-           vals[j] = abs(uD[subscript]); 
-       }
-       maxResi[i] = vals.Max();
-
-//       cout << i << "\t" <<  dof  << "\t" << vdofs.Size() << "\t" << maxResi[i] << endl;
-
-   }
-}
-
-
-void postProcess(Mesh &mesh, VarL2_FiniteElementCollection &vfec, GridFunction &u_sol, GridFunction &aux_grad,
-        GridFunction &eleOrder, int cycle, double time)
-{
-   Mesh new_mesh(mesh, true);
+   ParMesh new_mesh(mesh, true);
 
    int dim     = new_mesh.Dimension();
    int var_dim = dim + 2;
 
    DG_FECollection fec(order + 1, dim);
-   FiniteElementSpace fes_post(&new_mesh, &fec, var_dim);
-   FiniteElementSpace fes_post_grad(&new_mesh, &fec, (dim+1)*dim);
+   ParFiniteElementSpace fes_post(&new_mesh, &fec, var_dim);
+   ParFiniteElementSpace fes_post_grad(&new_mesh, &fec, (dim+1)*dim);
 
-   GridFunction u_post(&fes_post);
+   ParGridFunction u_post(&fes_post);
    u_post.GetValuesFrom(u_sol); // Create a temp variable to get the previous space solution
  
-   GridFunction aux_grad_post(&fes_post_grad);
+   ParGridFunction aux_grad_post(&fes_post_grad);
    aux_grad_post.GetValuesFrom(aux_grad); // Create a temp variable to get the previous space solution
-
-   FiniteElementSpace fes_order(&new_mesh, &fec);
-   GridFunction order_post(&fes_order);
-   order_post.GetValuesFrom(eleOrder); // Create a temp variable to get the previous space solution
 
 //   new_mesh.UniformRefinement();
    fes_post.Update();
    u_post.Update();
    aux_grad_post.Update();
 
-   fes_order.Update();
-   order_post.Update();
-
-
    VisItDataCollection dc("CNS", &new_mesh);
    dc.SetPrecision(8);
  
-   FiniteElementSpace fes_fields(&new_mesh, &fec);
-   GridFunction rho(&fes_fields);
-   GridFunction M(&fes_fields);
-   GridFunction p(&fes_fields);
-   GridFunction vort(&fes_fields);
-   GridFunction q(&fes_fields);
-
-   GridFunction newEleOrder(&fes_fields);
-   newEleOrder.GetValuesFrom(order_post); // Create a temp variable to get the previous space solution
+   ParFiniteElementSpace fes_fields(&new_mesh, &fec);
+   ParGridFunction rho(&fes_fields);
+   ParGridFunction M(&fes_fields);
+   ParGridFunction p(&fes_fields);
+   ParGridFunction vort(&fes_fields);
+   ParGridFunction q(&fes_fields);
 
    dc.RegisterField("rho", &rho);
    dc.RegisterField("M", &M);
    dc.RegisterField("p", &p);
    dc.RegisterField("vort", &vort);
    dc.RegisterField("q_criterion", &q);
-
-//   dc.RegisterField("order", &newEleOrder);
 
    getFields(u_post, aux_grad_post, rho, M, p, vort, q);
 
@@ -1035,32 +951,3 @@ void postProcess(Mesh &mesh, VarL2_FiniteElementCollection &vfec, GridFunction &
 
 
 
-// Creates a gridfunction with the element order for post processing 
-void getEleOrder(FiniteElementSpace &fes, Array<int> &newEleOrder, GridFunction &eleOrder)
-{
-   const FiniteElement *el;
-   ElementTransformation *T;
-
-   int dim;
-
-   Vector vals;
-   for (int i = 0; i < fes.GetNE(); i++)
-   {
-       T = fes.GetElementTransformation(i);
-
-       el = fes.GetFE(i);
-   
-       dim = el->GetDim();
-
-       Array<int> vdofs;
-       fes.GetElementVDofs(i, vdofs);
-
-       int dof = el->GetDof();
-
-       for(int j = 0; j < dof ; j++)
-       {
-           int subscript       = vdofs[j];
-           eleOrder[subscript] = newEleOrder[i];
-       }
-   }
-}

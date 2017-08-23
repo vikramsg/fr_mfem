@@ -17,7 +17,8 @@ CONFIG_MK = $(MFEM_BUILD_DIR)/config/config.mk
 MFEM_LIB_FILE = mfem_is_not_built
 -include $(CONFIG_MK)
 
-SEQ_EXAMPLES = tgv 
+SEQ_EXAMPLES = tgv test 
+PAR_EXAMPLES = tgvp 
 ifeq ($(MFEM_USE_MPI),NO)
    EXAMPLES = $(SEQ_EXAMPLES)
 else
@@ -43,7 +44,7 @@ clean: clean-build clean-exec
 
 clean-build:
 	rm -f *.o *~ $(SEQ_EXAMPLES) $(PAR_EXAMPLES)
-	rm -rf *.dSYM *.TVD.*breakpoints
+	rm -rf *.dSYM *.TVD.*breakpoints CNS_*
 
 clean-exec:
 	@rm -f CNS_* 
