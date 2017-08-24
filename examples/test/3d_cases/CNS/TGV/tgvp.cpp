@@ -14,17 +14,17 @@ const double   Pr  = 0.72;
 
 //Run parameters
 const char *mesh_file        =  "periodic-cube.mesh";
-const int    order           =  2;
-const double t_final         =  0.20000;
+const int    order           =  1;
+const double t_final         =  0.00000;
 const int    problem         =  1;
-const int    ref_levels      =  2;
+const int    ref_levels      =  0;
 
 const bool   time_adapt      =  false;
 const double cfl             =  0.20;
 const double dt_const        =  0.001  ;
 const int    ode_solver_type =  2; // 1. Forward Euler 2. TVD SSP 3 Stage
 
-const int    vis_steps       =   50 ;
+const int    vis_steps       =  1000;
 
 const bool   adapt           =  false;
 const int    adapt_iter      =  200  ; // Time steps after which adaptation is done
@@ -278,6 +278,9 @@ CNS::CNS()
 
        adv  = new FE_Evolution(*M, *K_inv_x, *K_inv_y, *K_inv_z, 
                    *K_vis_x, *K_vis_y, *K_vis_z, *b);
+       
+       getAuxGrad(dim, *K_vis_x, *K_vis_y, *K_vis_z, 
+           adv->GetMSolver(), *U, aux_grad);
    }
    else if (dim == 2)
    {
@@ -306,12 +309,28 @@ CNS::CNS()
 
    dt = dt_const; 
 
+   StopWatch chrono;
+   chrono.Clear();
+   chrono.Start();
+
    bool done = false;
    for (ti = 0; !done; )
    {
       Step(); // Step in time
 
       done = (t >= t_final - 1e-8*dt);
+
+      if (done || ti % 25 == 0) // Check time
+      {
+          chrono.Stop();
+          if (myid == 0)
+          {
+              cout << "25 Steps took "<< chrono.RealTime() << " s "<< endl;
+          }
+
+          chrono.Clear();
+          chrono.Start();
+      }
     
       if (done || ti % vis_steps == 0) // Visualize
       {
@@ -319,6 +338,11 @@ CNS::CNS()
           {
               HypreParMatrix dummyMat;
               getAuxGrad(dim, *K_vis_x, *K_vis_y, dummyMat, 
+                      adv->GetMSolver(), *U, aux_grad);
+          }
+          else if (dim == 3)
+          {
+              getAuxGrad(dim, *K_vis_x, *K_vis_y, *K_vis_z, 
                       adv->GetMSolver(), *U, aux_grad);
           }
 
@@ -947,7 +971,6 @@ void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, V
         }
             
         q[i]      = 0.5*(omega_sq - s_sq);
-
     }
 }
 
@@ -957,14 +980,12 @@ void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, V
 void postProcess(ParMesh &mesh, ParGridFunction &u_sol, ParGridFunction &aux_grad,
                 int cycle, double time)
 {
-   ParMesh new_mesh(mesh, true);
-
-   int dim     = new_mesh.Dimension();
+   int dim     = mesh.Dimension();
    int var_dim = dim + 2;
 
    DG_FECollection fec(order + 1, dim);
-   ParFiniteElementSpace fes_post(&new_mesh, &fec, var_dim);
-   ParFiniteElementSpace fes_post_grad(&new_mesh, &fec, (dim+1)*dim);
+   ParFiniteElementSpace fes_post(&mesh, &fec, var_dim);
+   ParFiniteElementSpace fes_post_grad(&mesh, &fec, (dim+1)*dim);
 
    ParGridFunction u_post(&fes_post);
    u_post.GetValuesFrom(u_sol); // Create a temp variable to get the previous space solution
@@ -972,15 +993,14 @@ void postProcess(ParMesh &mesh, ParGridFunction &u_sol, ParGridFunction &aux_gra
    ParGridFunction aux_grad_post(&fes_post_grad);
    aux_grad_post.GetValuesFrom(aux_grad); // Create a temp variable to get the previous space solution
 
-//   new_mesh.UniformRefinement();
    fes_post.Update();
    u_post.Update();
    aux_grad_post.Update();
 
-   VisItDataCollection dc("CNS", &new_mesh);
+   VisItDataCollection dc("CNS", &mesh);
    dc.SetPrecision(8);
  
-   ParFiniteElementSpace fes_fields(&new_mesh, &fec);
+   ParFiniteElementSpace fes_fields(&mesh, &fec);
    ParGridFunction rho(&fes_fields);
    ParGridFunction M(&fes_fields);
    ParGridFunction p(&fes_fields);
