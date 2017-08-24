@@ -15,7 +15,7 @@ const double   Pr  = 0.72;
 //Run parameters
 const char *mesh_file        =  "periodic-cube.mesh";
 const int    order           =  1;
-const double t_final         =  0.00000;
+const double t_final         =  0.01000;
 const int    problem         =  1;
 const int    ref_levels      =  0;
 
@@ -43,8 +43,7 @@ void getAuxGrad(int dim, const HypreParMatrix &K_x, const HypreParMatrix &K_y, c
         const CGSolver &M_solver, const Vector &u, Vector &aux_grad);
 void getAuxVar(int dim, const Vector &u, Vector &aux_sol);
 
-
-void ComputeMaxResidual(ParMesh &mesh, FiniteElementSpace &fes, GridFunction &uD, int vDim, Vector &maxResi);
+double ComputeTKE(FiniteElementSpace &fes, const Vector &uD);
 
 void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, Vector &u1, Vector &u2, 
                 Vector &E, Vector &u_x, Vector &u_y, Vector &v_x, Vector &v_y);
@@ -106,6 +105,8 @@ private:
     double h_min, h_max;  // Minimum, maximum element size
     double dt, t, glob_u_max;
     int ti;
+
+    ofstream tke_file;
 public:
    CNS();
 
@@ -145,12 +146,12 @@ CNS::CNS()
    int var_dim = dim + 2;
    int aux_dim = dim + 1; //Auxiliary variables for the viscous terms
 
-   pmesh = new ParMesh(MPI_COMM_WORLD, *mesh);
-   delete mesh;
    for (int lev = 0; lev < ref_levels; lev++)
    {
-      pmesh->UniformRefinement();
+      mesh->UniformRefinement();
    }
+   pmesh = new ParMesh(MPI_COMM_WORLD, *mesh);
+   delete mesh;
 
    double kappa_min, kappa_max;
    pmesh->GetCharacteristics(h_min, h_max, kappa_min, kappa_max);
@@ -313,6 +314,8 @@ CNS::CNS()
    chrono.Clear();
    chrono.Start();
 
+   tke_file.open("tke.dat");
+
    bool done = false;
    for (ti = 0; !done; )
    {
@@ -320,7 +323,7 @@ CNS::CNS()
 
       done = (t >= t_final - 1e-8*dt);
 
-      if (done || ti % 25 == 0) // Check time
+      if (ti % 25 == 0) // Check time
       {
           chrono.Stop();
           if (myid == 0)
@@ -350,7 +353,7 @@ CNS::CNS()
       }
    
    }
-
+   
 //   // Print all nodes in the finite element space 
 //   FiniteElementSpace fes_nodes(mesh, vfec, dim);
 //   GridFunction nodes(&fes_nodes);
@@ -364,6 +367,8 @@ CNS::CNS()
 ////       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << "\t" << u_out(sub1) << endl;      
 //   }
 //
+   
+   tke_file.close();
    delete adv;
    delete M, K_inv_x, K_inv_y, K_inv_z;
    delete K_vis_x, K_vis_y, K_vis_z;
@@ -372,6 +377,8 @@ CNS::CNS()
 
 CNS::~CNS()
 {
+    delete u_sol, f_inv;
+    delete U;
     delete b;
     delete ode_solver;
     delete pmesh;
@@ -397,11 +404,15 @@ void CNS::Step()
     MPI_Comm comm = pmesh->GetComm();
       
     double loc_u_max = getUMax(dim, *U); // Get u_max on local processor
-
     MPI_Allreduce(&loc_u_max, &glob_u_max, 1, MPI_DOUBLE, MPI_MAX, comm); // Get global u_max across processors
+    
+    double loc_tke   = ComputeTKE(*fes, *U); // Get TKE 
+    double glob_tke;
+    MPI_Allreduce(&loc_tke, &glob_tke, 1, MPI_DOUBLE, MPI_SUM, comm); // Get global u_max across processors
 
     if (myid == 0)
     {
+        tke_file << ti << "\t" << t << "\t" << glob_tke << endl;
         cout << "time step: " << ti << ", dt: " << dt_real << ", time: " << 
             t << ", max_speed " << glob_u_max << ", fes_size " << fes->GlobalTrueVSize() << endl;
     }
@@ -1022,5 +1033,56 @@ void postProcess(ParMesh &mesh, ParGridFunction &u_sol, ParGridFunction &aux_gra
 }
 
 
+// Returns TKE 
+double ComputeTKE(FiniteElementSpace &fes, const Vector &uD)
+{
+   const FiniteElement *el;
+   ElementTransformation *T;
 
+   int num_procs, myid;
+   MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
+   MPI_Comm_rank(MPI_COMM_WORLD, &myid);
+ 
+   int dim;
+
+   double tke = 0.0;
+
+   for (int i = 0; i < fes.GetNE(); i++)
+   {
+       T  = fes.GetElementTransformation(i);
+       el = fes.GetFE(i);
+   
+       dim = el->GetDim();
+
+       int dof = el->GetDof();
+       Array<int> vdofs;
+       fes.GetElementVDofs(i, vdofs);
+
+       const IntegrationRule *ir ;
+       int   order;
+
+       order = 2*el->GetOrder() + 1;
+       ir    = &IntRules.Get(el->GetGeomType(), order);
+
+       double local_ke = 0.0;
+       for (int p = 0; p < ir->GetNPoints(); p++)
+       {
+           const IntegrationPoint &ip = ir->IntPoint(p);
+
+           double rho    = uD[vdofs[p]];
+           double irho   = 1.0/rho; 
+
+           double point_ke = 0.0;       
+           for (int j = 0; j < dim; j++)
+           {
+               point_ke +=  irho*0.5*(uD[vdofs[(1 + j)*dof + p]] * uD[vdofs[(1 + j)*dof + p]]);
+           }
+           local_ke += ip.weight*T->Weight()*point_ke;
+
+           tke += ip.weight*T->Weight()*point_ke;
+       }
+   }
+
+   return tke;
+}
 

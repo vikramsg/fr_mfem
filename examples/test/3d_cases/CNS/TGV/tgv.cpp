@@ -14,10 +14,10 @@ const double   Pr  = 0.72;
 
 //Run parameters
 const char *mesh_file        =  "periodic-cube.mesh";
-const int    order           =  2;
-const double t_final         = 10.00000;
+const int    order           =  1;
+const double t_final         =  0.00000;
 const int    problem         =  1;
-const int    ref_levels      =  2;
+const int    ref_levels      =  0;
 
 const bool   time_adapt      =  false;
 const double cfl             =  0.20;
@@ -44,7 +44,8 @@ void getAuxGrad(int dim, const SparseMatrix &K_x, const SparseMatrix &K_y, const
 void getAuxVar(int dim, const Vector &u, Vector &aux_sol);
 
 
-void ComputeMaxResidual(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, int vDim, Vector &maxResi);
+void   ComputeMaxResidual(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, int vDim, Vector &maxResi);
+double ComputeTKE(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, int vDim);
 
 void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, Vector &u1, Vector &u2, 
                 Vector &E, Vector &u_x, Vector &u_y, Vector &v_x, Vector &v_y);
@@ -302,7 +303,10 @@ CNS::CNS()
       Step(); // Step in time
 
       done = (t >= t_final - 1e-8*dt);
-      
+
+      ComputeTKE(*mesh, *fes, u_sol, var_dim);
+
+            
       if (done || ti % vis_steps == 0) // Visualize
       {
           getAuxGrad(dim, k_vis_x->SpMat(), k_vis_y->SpMat(), k_vis_z->SpMat(), 
@@ -929,6 +933,55 @@ void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, V
         q[i]      = 0.5*(omega_sq - s_sq);
 
     }
+}
+
+
+// Returns TKE 
+double ComputeTKE(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, int vDim)
+{
+   const FiniteElement *el;
+   ElementTransformation *T;
+
+   int dim;
+
+   double tke = 0.0;
+
+   for (int i = 0; i < fes.GetNE(); i++)
+   {
+       T  = fes.GetElementTransformation(i);
+       el = fes.GetFE(i);
+   
+       dim = el->GetDim();
+
+       int dof = el->GetDof();
+       Array<int> vdofs;
+       fes.GetElementVDofs(i, vdofs);
+
+       const IntegrationRule *ir ;
+       int   order;
+
+       order = 2*el->GetOrder() + 1;
+       ir    = &IntRules.Get(el->GetGeomType(), order);
+
+       double sigma_weight = 0.0;
+       for (int p = 0; p < ir->GetNPoints(); p++)
+       {
+           const IntegrationPoint &ip = ir->IntPoint(p);
+
+           double rho    = uD[vdofs[p]];
+           double irho   = 1.0/rho; 
+
+           double point_ke = 0.0;       
+           for (int j = 0; j < dim; j++)
+           {
+               point_ke +=  irho*0.5*uD[vdofs[(1 + j)*dof + p]] * uD[vdofs[(1 + j)*dof + p]];
+           }
+
+           tke += ip.weight*T->Weight()*point_ke;
+       }
+   }
+
+   return tke;
 }
 
 
