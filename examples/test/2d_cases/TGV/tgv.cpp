@@ -8,47 +8,51 @@ using namespace mfem;
 
 //Constants
 const double gamm  = 1.4;
-const double   mu  = 0.0001989436788648692; 
+const double   mu  = 0.100;
 const double R_gas = 287;
 const double   Pr  = 0.72;
 
 //Run parameters
-const char *mesh_file        =  "periodic-cube.mesh";
-const int    order           =  1;
+const char *mesh_file        =  "periodic-square.mesh";
+const int    order           =  2;
 const double t_final         =  0.00000;
 const int    problem         =  1;
-const int    ref_levels      =  0;
+const int    ref_levels      =  2;
 
 const bool   time_adapt      =  false;
 const double cfl             =  0.20;
-const double dt_const        =  0.0004 ;
+const double dt_const        =  0.0001 ;
 const int    ode_solver_type =  2; // 1. Forward Euler 2. TVD SSP 3 Stage
 
-const int    vis_steps       =   200;
+const int    vis_steps       =   100;
 
-const bool   adapt           =  false;
-const int    adapt_iter      =  200  ; // Time steps after which adaptation is done
-const double tolerance       =  5e-4 ; // Tolerance for adaptation
+const bool   adapt           =  true;
+const int    adapt_iter      =  1    ; // Time steps after which adaptation is done
+const double tolerance       =  5e-2 ; // Tolerance for adaptation
 
 
 // Velocity coefficient
 void init_function(const Vector &x, Vector &v);
 
+double rho_init(const Vector &x);
+
 double getUMax(int dim, const Vector &u);
 
 void getInvFlux(int dim, const Vector &u, Vector &f);
+
 void getVisFlux(int dim, const Vector &u, const Vector &aux_grad, Vector &f);
 
-void getAuxGrad(int dim, const SparseMatrix &K_x, const SparseMatrix &K_y, const SparseMatrix &K_z,
-        const CGSolver &M_solver, const Vector &u, Vector &aux_grad);
+void getAuxGrad(int dim, const SparseMatrix &K_x, const SparseMatrix &K_y, const CGSolver &M_solver, 
+        const Vector &u, const Vector &b_aux_x, const Vector &b_aux_y, Vector &aux_grad);
+
 void getAuxVar(int dim, const Vector &u, Vector &aux_sol);
-
-
-void   ComputeMaxResidual(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, int vDim, Vector &maxResi);
-double ComputeTKE(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, int vDim);
 
 void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, Vector &u1, Vector &u2, 
                 Vector &E, Vector &u_x, Vector &u_y, Vector &v_x, Vector &v_y);
+
+void getVort(const Vector &aux_grad, int dim, Vector &vort);
+void ComputeMaxResidual(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, int vDim, Vector &maxResi);
+
 void postProcess(Mesh &mesh, VarL2_FiniteElementCollection &vfec, GridFunction &u_sol, GridFunction &aux_grad,
         GridFunction &eleOrder, int cycle, double time);
 
@@ -62,16 +66,17 @@ void getEleOrder(FiniteElementSpace &fes, Array<int> &newEleOrder, GridFunction 
 class FE_Evolution : public TimeDependentOperator
 {
 private:
-   SparseMatrix &M, &K_inv_x, &K_inv_y, &K_inv_z;
-   SparseMatrix     &K_vis_x, &K_vis_y, &K_vis_z;
+   SparseMatrix &M, &K_inv_x, &K_inv_y;
+   SparseMatrix &K_vis_x, &K_vis_y;
    const Vector &b;
+   const Vector &b_aux_x, &b_aux_y;
    DSmoother M_prec;
    CGSolver M_solver;
 
 public:
-   FE_Evolution(SparseMatrix &_M, SparseMatrix &_K_inv_x, SparseMatrix &_K_inv_y, SparseMatrix &_K_inv_z, 
-                            SparseMatrix &_K_vis_x, SparseMatrix &_K_vis_y, SparseMatrix &_K_vis_z,
-                            Vector &_b);
+   FE_Evolution(SparseMatrix &_M, SparseMatrix &_K_inv_x, SparseMatrix &_K_inv_y, 
+                            SparseMatrix &_K_vis_x, SparseMatrix &_K_vis_y, Vector &_b,
+                            Vector &_b_aux_x, Vector &_b_aux_y);
 
    void GetSize() ;
 
@@ -91,9 +96,10 @@ private:
     Array<int> eleOrder;
     VarL2_FiniteElementCollection *vfec;
     FiniteElementSpace *fes, *fes_vec, *fes_op;
+    FiniteElementSpace *fes_aux_grad;
    
-    BilinearForm *m, *k_inv_x, *k_inv_y, *k_inv_z;
-    BilinearForm     *k_vis_x, *k_vis_y, *k_vis_z;
+    BilinearForm *m, *k_inv_x, *k_inv_y;
+    BilinearForm     *k_vis_x, *k_vis_y;
 
     ODESolver *ode_solver; 
 
@@ -103,6 +109,7 @@ private:
     LinearForm *b;
 
     GridFunction rhs;   
+    GridFunction vort;   
 
     double h_min, h_max;  // Minimum, maximum element size
     double dt, t, u_max;
@@ -111,6 +118,9 @@ public:
    CNS();
 
    void Step();
+   void Update(Array<int> &newEleOrder);
+
+   void UpdateElementOrder(Vector &error, double tolerance, Array<int> &newEleOrder);
 
    ~CNS(); 
 };
@@ -150,7 +160,10 @@ CNS::CNS()
 
    for (int i = 0; i < ne; i++) 
    {
-       eleOrder[i] = order; // Initializing with uniform order
+       if (adapt)
+           eleOrder[i] = order + 2; // Initializing with uniform order + 1 when doing adaptation
+       else
+           eleOrder[i] = order; // Initializing with uniform order
    }
 
    //    Define the discontinuous DG finite element space 
@@ -160,6 +173,9 @@ CNS::CNS()
 
    cout << "Number of unknowns: " << fes->GetVSize() << endl;
 
+   rhs.SetSpace(fes);
+   vort.SetSpace(fes);
+
    VectorFunctionCoefficient u0(var_dim, init_function);
    u_sol.SetSpace(fes);
    u_sol.ProjectCoefficient(u0);
@@ -168,15 +184,24 @@ CNS::CNS()
    f_inv.SetSpace(fes_vec);
    getInvFlux(dim, u_sol, f_inv);
 
-   FiniteElementSpace fes_aux_grad(mesh, vfec, dim*aux_dim);
-   GridFunction aux_grad(&fes_aux_grad);
+   FiniteElementSpace fes_aux(mesh, vfec, aux_dim);
+   fes_aux_grad = new FiniteElementSpace(mesh, vfec, dim*aux_dim);
+
+   GridFunction aux_grad(fes_aux_grad);
+   GridFunction f_vis(fes_vec);
+
+   LinearForm b_aux_x(&fes_aux);
+   LinearForm b_aux_y(&fes_aux);
+
+   b_aux_x *= 0.0;  // Initialize to 0
+   b_aux_y *= 0.0; 
 
    ///////////////////////////////////////////////////////////
    // Setup bilinear form for x derivative and the mass matrix
-   Vector dir(dim); 
-   dir = 0.0; dir(0) = 1.0;
+   Vector dir(dim);
+   dir(0) = 1.0; dir(1) = 0.0;
    VectorConstantCoefficient x_dir(dir);
-   dir = 0.0; dir(1) = 1.0;
+   dir(0) = 0.0; dir(1) = 1.0;
    VectorConstantCoefficient y_dir(dir);
 
    fes_op = new FiniteElementSpace(mesh, vfec);
@@ -207,7 +232,7 @@ CNS::CNS()
       new DGEulerIntegrator(R_gas, gamm, u_vec, f_vec, var_dim, -1.0));
    b->Assemble();
    ///////////////////////////////////////////////////////////
- 
+   
    ///////////////////////////////////////////////////////////
    // Setup bilinear form for viscous terms 
    k_vis_x = new BilinearForm(fes_op);
@@ -225,52 +250,23 @@ CNS::CNS()
    k_vis_y->Assemble(skip_zeros);
    k_vis_y->Finalize(skip_zeros);
 
-   if (dim == 3)
-   {
-       dir = 0.0; dir(2) = 1.0;
-       VectorConstantCoefficient z_dir(dir);
-      
-       k_inv_z = new BilinearForm(fes_op);
-       k_inv_y->AddDomainIntegrator(new ConvectionIntegrator(z_dir, -1.0));
-    
-       k_inv_z->Assemble(skip_zeros);
-       k_inv_z->Finalize(skip_zeros);
-       
-       k_vis_z = new BilinearForm(fes_op);
-       k_vis_z->AddDomainIntegrator(new ConvectionIntegrator(y_dir,  1.0));
-       k_vis_z->AddInteriorFaceIntegrator(
-          new TransposeIntegrator(new DGTraceIntegrator(y_dir, -1.0,  0.0)));// Beta 0 means central flux
-    
-       k_vis_z->Assemble(skip_zeros);
-       k_vis_z->Finalize(skip_zeros);
-   }
-
    ///////////////////////////////////////////////////////////////
    //Setup time stepping objects and do initial post-processing
-   
-   FE_Evolution *adv;
-   if (dim == 3)
-   {
-       adv  = new FE_Evolution(m->SpMat(), k_inv_x->SpMat(), k_inv_y->SpMat(), k_inv_z->SpMat(), 
-                   k_vis_x->SpMat(), k_vis_y->SpMat(), k_vis_z->SpMat(), *b);
-   }
-   else if (dim == 2)
-   {
-       SparseMatrix dummyMat(1, 1);
-       adv  = new FE_Evolution(m->SpMat(), k_inv_x->SpMat(), k_inv_y->SpMat(), dummyMat,
-                                k_vis_x->SpMat(), k_vis_y->SpMat(), dummyMat, *b);
 
-   }
-
+   FE_Evolution *adv  = new FE_Evolution(m->SpMat(), k_inv_x->SpMat(), k_inv_y->SpMat(), 
+                                         k_vis_x->SpMat(), k_vis_y->SpMat(), *b, b_aux_x, b_aux_y);
+  
    GridFunction ele_order_pp(fes_op); // Get element order
    getEleOrder(*fes_op, eleOrder, ele_order_pp);
-   
+
    t = 0.0; ti = 0; // Initialize time and time iterations
-   getAuxGrad(dim, k_vis_x->SpMat(), k_vis_y->SpMat(), k_vis_z->SpMat(), 
-           adv->GetMSolver(), u_sol, aux_grad);
+   getAuxGrad(dim, k_vis_x->SpMat(), k_vis_y->SpMat(), adv->GetMSolver(), u_sol, 
+                  b_aux_x, b_aux_y, aux_grad);
    postProcess(*mesh, *vfec, u_sol, aux_grad, ele_order_pp, ti, t);
 
    adv->SetTime(t);
+
+   Vector maxResi(fes->GetNE()); // Max residual in each element
 
    switch (ode_solver_type)
    {
@@ -296,21 +292,47 @@ CNS::CNS()
    }
 
    Array<int> newEleOrder(fes->GetNE());
+   newEleOrder.Assign(eleOrder); // Initialize
 
    bool done = false;
    for (ti = 0; !done; )
    {
       Step(); // Step in time
 
+      if (ti % adapt_iter == 0 && adapt) // Update operators for p-adaptation 
+      {
+          adv->Mult(u_sol, rhs);
+
+          ComputeMaxResidual(*mesh, *fes, rhs, 1, maxResi);
+          UpdateElementOrder(maxResi, tolerance, newEleOrder);
+
+          getAuxGrad(dim, k_vis_x->SpMat(), k_vis_y->SpMat(), adv->GetMSolver(), u_sol, 
+                  b_aux_x, b_aux_y, aux_grad);
+          getVort(aux_grad, dim, vort);
+
+          Update(newEleOrder);      
+
+          delete adv;
+       
+          b_aux_x.Update();
+          b_aux_y.Update();
+          b_aux_x *= 0.0;  // Initialize to 0
+          b_aux_y *= 0.0; 
+
+          adv = new FE_Evolution(m->SpMat(), k_inv_x->SpMat(), k_inv_y->SpMat(), 
+                                         k_vis_x->SpMat(), k_vis_y->SpMat(), *b, b_aux_x, b_aux_y);
+          adv->SetTime(t);
+          ode_solver->Init(*adv);
+      }
+
       done = (t >= t_final - 1e-8*dt);
-
-      ComputeTKE(*mesh, *fes, u_sol, var_dim);
-
-            
+      
       if (done || ti % vis_steps == 0) // Visualize
       {
-          getAuxGrad(dim, k_vis_x->SpMat(), k_vis_y->SpMat(), k_vis_z->SpMat(), 
-                  adv->GetMSolver(), u_sol, aux_grad);
+          aux_grad.Update();
+
+          getAuxGrad(dim, k_vis_x->SpMat(), k_vis_y->SpMat(), adv->GetMSolver(), u_sol, 
+                  b_aux_x, b_aux_y, aux_grad);
 
           GridFunction ele_order_temp(fes_op);
           getEleOrder(*fes_op, newEleOrder, ele_order_temp);
@@ -318,6 +340,14 @@ CNS::CNS()
       }
  
    }
+
+//   FunctionCoefficient rho0(rho_init);
+//   GridFunction rho_sol(fes_op);
+
+//   for (int i = 0; i < fes_op->GetVSize(); i++) rho_sol[i] = u_sol[i];
+//   cout << "rho L2 Error :" << rho_sol.ComputeL2Error(rho0) << endl;
+//
+//   cout << "u_sol L2 Error :" << u_sol.ComputeL2Error(u0) << endl;
 
    // Print all nodes in the finite element space 
    FiniteElementSpace fes_nodes(mesh, vfec, dim);
@@ -345,9 +375,10 @@ CNS::~CNS()
     delete fes;
     delete fes_vec;
     delete fes_op;
+    delete fes_aux_grad;
     delete m;
-    delete k_inv_x, k_inv_y, k_inv_z;
-    delete k_vis_x, k_vis_y, k_vis_z;
+    delete k_inv_x, k_inv_y;
+    delete k_vis_x, k_vis_y;
 }
 
 void CNS::Step()
@@ -375,13 +406,107 @@ void CNS::Step()
 }
 
 
+void CNS::Update(Array<int> &newEleOrder)
+{
+   int var_dim = dim + 2; 
+   int ne = mesh->GetNE();
+   Array<int> eleOrder_temp(ne);
+
+   bool isUpdate = false; // Only change the FESpace if atleast one eleOrder is different
+   for (int i = 0; i < ne; i++) 
+   {
+       eleOrder_temp[i] = eleOrder[i]; 
+       if (eleOrder[i] != newEleOrder[i])
+       {
+           isUpdate = true;
+       }
+   }
+
+   if (isUpdate)
+   {
+       VarL2_FiniteElementCollection vfec_temp(mesh, eleOrder_temp);
+       FiniteElementSpace fes_temp(mesh, &vfec_temp, var_dim);
+    
+       GridFunction u_temp(&fes_temp);
+       u_temp.GetValuesFrom(u_sol); // Create a temp variable to get the previous space solution
+    
+       for (int i = 0; i < ne; i++) eleOrder[i] = newEleOrder[i]; 
+    
+       vfec->Update(eleOrder);
+       fes->Update();
+       fes_vec->Update();
+       fes_op->Update();
+       fes_aux_grad->Update();
+    
+       u_sol.Update();
+       u_sol.GetValuesFrom(u_temp);   // Update solution to new space using temp variable
+    
+       f_inv.Update();
+       getInvFlux(dim, u_sol, f_inv); // To update f_vec
+       
+       rhs.Update();
+       vort.Update();
+    
+       m->Update();
+       m->Assemble();
+       m->Finalize();
+    
+       int skip_zeros = 1;
+       k_inv_x->Update();
+       k_inv_x->Assemble(skip_zeros);
+       k_inv_x->Finalize(skip_zeros);
+       k_inv_y->Update();
+       k_inv_y->Assemble(skip_zeros);
+       k_inv_y->Finalize(skip_zeros);
+ 
+       k_vis_x->Update();
+       k_vis_x->Assemble(skip_zeros);
+       k_vis_x->Finalize(skip_zeros);
+       k_vis_y->Update();
+       k_vis_y->Assemble(skip_zeros);
+       k_vis_y->Finalize(skip_zeros);
+   
+       b->Update();
+       b->Assemble();
+    
+   }
+
+}
+
+// error is a Vector of size fes->GetNE
+// If magnitude of error is greater than tolerance, 
+// order of the element is increased to 4
+void CNS::UpdateElementOrder(Vector &error, double tolerance, Array<int> &newEleOrder)
+{
+   int ne = mesh->GetNE();
+
+   for (int i = 0; i < ne; i++) 
+   {
+       newEleOrder[i] = eleOrder[i]; 
+       if (abs(error[i]) > 10*tolerance)
+       {
+           newEleOrder[i] = order + 2; 
+       }
+       else if (abs(error[i]) > tolerance)
+       {
+           newEleOrder[i] = order + 1; 
+       }
+       else
+       {
+           newEleOrder[i] = order; 
+       }
+//       cout << i << "\t" << newEleOrder[i] << endl;
+   }
+}
+
+
 
 // Implementation of class FE_Evolution
-FE_Evolution::FE_Evolution(SparseMatrix &_M, SparseMatrix &_K_inv_x, SparseMatrix &_K_inv_y, SparseMatrix &_K_inv_z, 
-                            SparseMatrix &_K_vis_x, SparseMatrix &_K_vis_y, SparseMatrix &_K_vis_z,
-                            Vector &_b)
-   : TimeDependentOperator(_b.Size()), M(_M), K_inv_x(_K_inv_x), K_inv_y(_K_inv_y), K_inv_z(_K_inv_z),
-                            K_vis_x(_K_vis_x), K_vis_y(_K_vis_y), K_vis_z(_K_vis_z), b(_b)
+FE_Evolution::FE_Evolution(SparseMatrix &_M, SparseMatrix &_K_inv_x, SparseMatrix &_K_inv_y, 
+                            SparseMatrix &_K_vis_x, SparseMatrix &_K_vis_y, Vector &_b, 
+                            Vector &_b_aux_x, Vector &_b_aux_y)
+   : TimeDependentOperator(_b.Size()), M(_M), K_inv_x(_K_inv_x), K_inv_y(_K_inv_y), 
+                            K_vis_x(_K_vis_x), K_vis_y(_K_vis_y), b(_b), b_aux_x(_b_aux_x), b_aux_y(_b_aux_y)
 {
    M_solver.SetPreconditioner(M_prec);
    M_solver.SetOperator(M);
@@ -403,7 +528,7 @@ void FE_Evolution::Mult(const Vector &x, Vector &y) const
     y.SetSize(x.Size()); // Needed since by default ode_init will set it as size of K
 
     Vector y_temp;
-    y_temp.SetSize(x.Size()); 
+    y_temp.SetSize(x.Size()); // Needed since by default ode_init will set it as size of K
 
     Vector f(dim*x.Size());
     getInvFlux(dim, x, f);
@@ -445,25 +570,13 @@ void FE_Evolution::Mult(const Vector &x, Vector &y) const
         y_temp.SetSubVector(offsets[i - var_dim], f_x_m);
     }
     y += y_temp;
-
-    if (dim == 3)
-    {
-        for(int i = 2*var_dim + 0; i < 3*var_dim; i++)
-        {
-            f.GetSubVector(offsets[i], f_sol);
-            K_inv_z.Mult(f_sol, f_x);
-            M_solver.Mult(f_x, f_x_m);
-            y_temp.SetSubVector(offsets[i - 2*var_dim], f_x_m);
-        }
-        y += y_temp;
-    }
     
     //////////////////////////////////////////////
     //Get viscous contribution
     Vector f_vis(dim*x.Size());
     Vector aux_grad(dim*(dim + 1)*offset);
 
-    getAuxGrad(dim, K_vis_x, K_vis_y, K_vis_z, M_solver, x, aux_grad);
+    getAuxGrad(dim, K_vis_x, K_vis_y, M_solver, x, b_aux_x, b_aux_y, aux_grad);
     getVisFlux(dim, x, aux_grad, f_vis);
 
     for(int i = 0; i < var_dim; i++)
@@ -484,18 +597,6 @@ void FE_Evolution::Mult(const Vector &x, Vector &y) const
     }
     y += y_temp;
 
-    if (dim == 3)
-    {
-        for(int i = 2*var_dim + 0; i < 3*var_dim; i++)
-        {
-            f_vis.GetSubVector(offsets[i], f_sol);
-            K_vis_z.Mult(f_sol, f_x);
-            M_solver.Mult(f_x, f_x_m);
-            y_temp.SetSubVector(offsets[i - 2*var_dim], f_x_m);
-        }
-        y += y_temp;
-    }
- 
 }
 
 
@@ -528,6 +629,7 @@ double getUMax(int dim, const Vector &u)
             v_sq += pow(vel[i], 2);
         }
         double rho_E = u[(var_dim - 1)*offset + j];
+
         double e  = (rho_E - 0.5*rho*v_sq)/rho;
         double Cv = R_gas/(gamm - 1);
 
@@ -591,12 +693,14 @@ void getInvFlux(int dim, const Vector &u, Vector &f)
             f(j*var_dim*offset + (var_dim - 1)*offset + i)   = (E(i) + pres)*vel[j] ;//(E+p)*u
         }
     }
+
 }
 
 
+
 // Get gradient of auxilliary variable 
-void getAuxGrad(int dim, const SparseMatrix &K_x, const SparseMatrix &K_y, const SparseMatrix &K_z, 
-        const CGSolver &M_solver, const Vector &u, Vector &aux_grad)
+void getAuxGrad(int dim, const SparseMatrix &K_x, const SparseMatrix &K_y, const CGSolver &M_solver, 
+        const Vector &u, const Vector &b_aux_x, const Vector &b_aux_y, Vector &aux_grad)
 {
     int var_dim = dim + 2; 
     int aux_dim = dim + 1; // Auxilliary variables are {u, v, w, T}
@@ -621,25 +725,22 @@ void getAuxGrad(int dim, const SparseMatrix &K_x, const SparseMatrix &K_y, const
 
     aux_grad = 0.0;
 
-    Vector aux_var(offset), aux_x(offset);
+    Vector aux_var(offset), aux_x(offset), b_sub(offset);
     for(int i = 0; i < aux_dim; i++)
     {
         aux_sol.GetSubVector(offsets[i], aux_var);
 
         K_x.Mult(aux_var, aux_x);
+        b_aux_x.GetSubVector(offsets[i], b_sub);
+        add(b_sub, aux_x, aux_x);
         M_solver.Mult(aux_x, aux_x);
-        aux_grad.SetSubVector(offsets[0*aux_dim + i], aux_x);
+        aux_grad.SetSubVector(offsets[          i], aux_x);
 
         K_y.Mult(aux_var, aux_x);
+        b_aux_y.GetSubVector(offsets[i], b_sub);
+        add(b_sub, aux_x, aux_x);
         M_solver.Mult(aux_x, aux_x);
-        aux_grad.SetSubVector(offsets[1*aux_dim + i], aux_x);
-    
-        if (dim == 3)
-        {
-            K_z.Mult(aux_var, aux_x);
-            M_solver.Mult(aux_x, aux_x);
-            aux_grad.SetSubVector(offsets[2*aux_dim + i], aux_x);
-        }
+        aux_grad.SetSubVector(offsets[aux_dim + i], aux_x);
     }
 }
 
@@ -767,7 +868,6 @@ void getVisFlux(int dim, const Vector &u, const Vector &aux_grad, Vector &f)
 
 
 
-
 //  Initialize variables coefficient
 void init_function(const Vector &x, Vector &v)
 {
@@ -778,21 +878,7 @@ void init_function(const Vector &x, Vector &v)
    {
        double rho, u1, u2, p;
 
-       if (problem == 0) // Smooth periodic density. Exact solution to Euler 
-       {
-           rho =  1.0 + 0.2*sin(M_PI*(x(0) + x(1)));
-           p   =  1.0; 
-           u1  =  1.0;
-           u2  =  1.0;
-       }
-       else if (problem == 1) // Taylor Green Vortex; exact solution of incompressible NS
-       {
-           rho =  1.0;
-           p   =  100 + (rho/4.0)*(cos(2.0*M_PI*x(0)) + cos(2.0*M_PI*x(1)));
-           u1  =      sin(M_PI*x(0))*cos(M_PI*x(1));
-           u2  = -1.0*cos(M_PI*x(0))*sin(M_PI*x(1));
-       }
-       else if (problem == 2) // Isentropic vortex; exact solution for Euler
+       if (problem == 0) // Isentropic vortex; exact solution for Euler
        {
            double T, M;
            double beta, omega, f, du, dv, dT;
@@ -810,7 +896,13 @@ void init_function(const Vector &x, Vector &v)
            T     = 1 + dT;
            rho   = pow(T, 1/(gamm - 1));
            p     = rho*R_gas*T;
-
+       }
+       else if (problem == 1) // Taylor Green Vortex; exact solution of incompressible NS
+       {
+           rho =  1.0;
+           p   =  100 + (rho/4.0)*(cos(2.0*M_PI*x(0)) + cos(2.0*M_PI*x(1)));
+           u1  =      sin(M_PI*x(0))*cos(M_PI*x(1));
+           u2  = -1.0*cos(M_PI*x(0))*sin(M_PI*x(1));
        }
        
        double v_sq = pow(u1, 2) + pow(u2, 2);
@@ -820,76 +912,77 @@ void init_function(const Vector &x, Vector &v)
        v(2) = rho * u2;                //rho * v
        v(3) = p/(gamm - 1) + 0.5*rho*v_sq;
    }
-   else if (dim == 3)
+}
+
+//  Initialize variables coefficient
+double rho_init(const Vector &x)
+{
+   //Space dimensions 
+   int dim = x.Size();
+
+   if (dim == 2)
    {
-       double rho, u1, u2, u3, p;
+       double rho, u1, u2, p, T, M;
+       double R, beta, omega, f, du, dv, dT;
 
-       if (problem == 0) // Smooth periodic density. Exact solution to Euler 
-       {
-           rho =  1.0 + 0.2*sin(M_PI*(x(0) + x(1) + x(3)));
-           p   =  1.0; 
-           u1  =  1.0;
-           u2  =  1.0;
-           u3  =  1.0;
-       }
-       else if (problem == 1) // Taylor Green Vortex; exact solution of incompressible NS
-       {
-           rho =  1.0;
-           p   =  100 + (rho/16.0)*(cos(2.0*M_PI*x(0)) + cos(2.0*M_PI*x(1)))*(cos(2.0*M_PI*x(2) + 2));
-           u1  =      sin(M_PI*x(0))*cos(M_PI*x(1))*cos(M_PI*x(2));
-           u2  = -1.0*cos(M_PI*x(0))*sin(M_PI*x(1))*cos(M_PI*x(2));
-           u3  =  0.0;
-       }
+       beta = 5;
 
-       double v_sq = pow(u1, 2) + pow(u2, 2) + pow(u3, 2);
-    
-       v(0) = rho;                     //rho
-       v(1) = rho * u1;                //rho * u
-       v(2) = rho * u2;                //rho * v
-       v(3) = rho * u3;                //rho * v
-       v(4) = p/(gamm - 1) + 0.5*rho*v_sq;
+       f     = (pow(x(0), 2) + pow(x(1), 2));
+       omega = (beta/(2*M_PI))*exp(0.5*(1 - f));
+       du    = -x(1)*omega;
+       dv    =  x(0)*omega;
+       dT    = - (gamm - 1)*beta*beta/(8*gamm*M_PI*M_PI) * exp(1 - f);
+
+       u1    = 1 + du;
+       u2    = dv;
+       T     = 1 + dT;
+       rho   = pow(T, 1/(gamm - 1));
+
+       return rho;
    }
-
 }
 
 
-void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, Vector &M,
-                Vector &p, Vector &vort, Vector &q)
+void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, Vector &u1, Vector &u2, 
+                Vector &E, Vector &u_x, Vector &u_y, Vector &v_x, Vector &v_y)
 {
 
     int vDim    = u_sol.VectorDim();
     int dofs    = u_sol.Size()/vDim;
-    int dim     = vDim - 2;
 
     int aux_dim = vDim - 1;
 
-    double u_grad[dim][dim], omega_sq, s_sq;
+    for (int i = 0; i < dofs; i++)
+    {
+        rho[i] = u_sol[         i];        
+        u1 [i] = u_sol[  dofs + i]/rho[i];        
+        u2 [i] = u_sol[2*dofs + i]/rho[i];        
+        E  [i] = u_sol[3*dofs + i];        
+        
+        u_x[i] = aux_grad[(0          )*dofs + i];
+        u_y[i] = aux_grad[(aux_dim    )*dofs + i];
+
+        v_x[i] = aux_grad[(1          )*dofs + i];
+        v_y[i] = aux_grad[(aux_dim + 1)*dofs + i];
+    }
+}
+
+
+// Compute vorticity 
+void getVort(const Vector &aux_grad, int dim, Vector &vort)
+{
+    int aux_dim = dim + 1;
+    int dofs    = aux_grad.Size()/(aux_dim*dim);
+
+    double u_grad[dim][dim];
 
     for (int i = 0; i < dofs; i++)
     {
-        rho[i]   = u_sol[         i];        
-        double vel[dim]; 
-        for (int j = 0; j < dim; j++)
-        {
-            vel[j] =  u_sol[(1 + j)*dofs + i]/rho[i];        
-        }
-        double E  = u_sol[(vDim - 1)*dofs + i];        
-
-        double v_sq = 0.0;    
-        for (int j = 0; j < dim; j++)
-        {
-            v_sq += pow(vel[j], 2); 
-        }
-
-        p[i]     = (E - 0.5*rho[i]*v_sq)*(gamm - 1);
-
-        M[i]     = sqrt(v_sq)/sqrt(gamm*p[i]/rho[i]);
-        
         for (int j = 0; j < dim; j++)
         {
             for (int k = 0; k < dim; k++)
             {
-                u_grad[j][k] = aux_grad[(k*aux_dim + j  )*dofs + i];
+                u_grad[j][k] = aux_grad[(k*aux_dim + j)*dofs + i];
             }
         }
     
@@ -906,84 +999,16 @@ void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, V
 
             vort[i]   = sqrt(w_sq);
         }
-        if (dim == 2)
-        {
-            double s_z      = u_grad[1][0] + u_grad[0][1];     
-                   s_sq     = pow(s_z, 2); 
-                   omega_sq = s_sq; // q criterion makes sense in 3D only
-        }
-        else if (dim == 3)
-        {
-            double omega_x  = 0.5*(u_grad[2][1] - u_grad[1][2]);
-            double omega_y  = 0.5*(u_grad[0][2] - u_grad[2][0]);
-            double omega_z  = 0.5*(u_grad[1][0] - u_grad[0][1]);
-                   omega_sq = 2*(pow(omega_x, 2) + pow(omega_y, 2) + pow(omega_z, 2)); 
+    
+        double u_x = aux_grad[(0          )*dofs + i];
+        double u_y = aux_grad[(aux_dim    )*dofs + i];
 
-            double s_23  = 0.5*(u_grad[2][1] + u_grad[1][2]);
-            double s_13  = 0.5*(u_grad[0][2] + u_grad[2][0]);
-            double s_12  = 0.5*(u_grad[1][0] + u_grad[0][1]);
+        double v_x = aux_grad[(1          )*dofs + i];
+        double v_y = aux_grad[(aux_dim + 1)*dofs + i];
 
-            double s_11  = u_grad[0][0]; 
-            double s_22  = u_grad[1][1]; 
-            double s_33  = u_grad[2][2]; 
-
-                   s_sq = 2*(pow(s_12, 2) + pow(s_13, 2) + pow(s_23, 2)) + s_11*s_11 + s_22*s_22 + s_33*s_33; 
-        }
-            
-        q[i]      = 0.5*(omega_sq - s_sq);
-
+        cout << u_x - u_grad[0][0] << "\t" << u_y - u_grad[0][1] << "\t" << v_x - u_grad[1][0] << "\t" << v_y - u_grad[1][1] << endl;
     }
 }
-
-
-// Returns TKE 
-double ComputeTKE(FiniteElementSpace &fes, GridFunction &uD)
-{
-   const FiniteElement *el;
-   ElementTransformation *T;
-
-   int dim;
-
-   double tke = 0.0;
-   for (int i = 0; i < fes.GetNE(); i++)
-   {
-       T  = fes.GetElementTransformation(i);
-       el = fes.GetFE(i);
-   
-       dim = el->GetDim();
-
-       int dof = el->GetDof();
-       Array<int> vdofs;
-       fes.GetElementVDofs(i, vdofs);
-
-       const IntegrationRule *ir ;
-       int   order;
-
-       order = 2*el->GetOrder() + 1;
-       ir    = &IntRules.Get(el->GetGeomType(), order);
-
-       double local_ke = 0.0;
-       for (int p = 0; p < ir->GetNPoints(); p++)
-       {
-           const IntegrationPoint &ip = ir->IntPoint(p);
-
-           double rho    = uD[vdofs[p]];
-           double irho   = 1.0/rho; 
-
-           double point_ke = 0.0;       
-           for (int j = 0; j < dim; j++)
-           {
-               point_ke +=  irho*0.5*(uD[vdofs[(1 + j)*dof + p]] * uD[vdofs[(1 + j)*dof + p]]);
-           }
-           local_ke += ip.weight*T->Weight()*point_ke;
-
-           tke += ip.weight*T->Weight()*point_ke;
-       }
-   }
-
-   return tke;
-}
-
 
 
 // Returns the max residual of the componenent of the vector specified by vDim
@@ -1025,6 +1050,7 @@ void ComputeMaxResidual(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, i
 }
 
 
+
 void postProcess(Mesh &mesh, VarL2_FiniteElementCollection &vfec, GridFunction &u_sol, GridFunction &aux_grad,
         GridFunction &eleOrder, int cycle, double time)
 {
@@ -1047,7 +1073,7 @@ void postProcess(Mesh &mesh, VarL2_FiniteElementCollection &vfec, GridFunction &
    GridFunction order_post(&fes_order);
    order_post.GetValuesFrom(eleOrder); // Create a temp variable to get the previous space solution
 
-//   new_mesh.UniformRefinement();
+   new_mesh.UniformRefinement();
    fes_post.Update();
    u_post.Update();
    aux_grad_post.Update();
@@ -1061,32 +1087,35 @@ void postProcess(Mesh &mesh, VarL2_FiniteElementCollection &vfec, GridFunction &
  
    FiniteElementSpace fes_fields(&new_mesh, &fec);
    GridFunction rho(&fes_fields);
-   GridFunction M(&fes_fields);
-   GridFunction p(&fes_fields);
-   GridFunction vort(&fes_fields);
-   GridFunction q(&fes_fields);
+   GridFunction u1(&fes_fields);
+   GridFunction u2(&fes_fields);
+   GridFunction E(&fes_fields);
+   GridFunction u_x(&fes_fields);
+   GridFunction u_y(&fes_fields);
+   GridFunction v_x(&fes_fields);
+   GridFunction v_y(&fes_fields);
 
    GridFunction newEleOrder(&fes_fields);
    newEleOrder.GetValuesFrom(order_post); // Create a temp variable to get the previous space solution
 
    dc.RegisterField("rho", &rho);
-   dc.RegisterField("M", &M);
-   dc.RegisterField("p", &p);
-   dc.RegisterField("vort", &vort);
-   dc.RegisterField("q_criterion", &q);
+   dc.RegisterField("u1", &u1);
+   dc.RegisterField("u2", &u2);
+   dc.RegisterField("E", &E);
+   dc.RegisterField("u_x", &u_x);
+   dc.RegisterField("u_y", &u_y);
+   dc.RegisterField("v_x", &v_x);
+   dc.RegisterField("v_y", &v_y);
 
-//   dc.RegisterField("order", &newEleOrder);
+   dc.RegisterField("order", &newEleOrder);
 
-   getFields(u_post, aux_grad_post, rho, M, p, vort, q);
+   getFields(u_post, aux_grad_post, rho, u1, u2, E, u_x, u_y, v_x, v_y);
 
    dc.SetCycle(cycle);
    dc.SetTime(time);
    dc.Save();
   
 }
-
-
-
 
 // Creates a gridfunction with the element order for post processing 
 void getEleOrder(FiniteElementSpace &fes, Array<int> &newEleOrder, GridFunction &eleOrder)

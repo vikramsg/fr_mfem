@@ -940,7 +940,7 @@ void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, V
         {
             for (int k = 0; k < dim; k++)
             {
-                u_grad[j][k] = aux_grad[(k*dim + j  )*dofs + i];
+                u_grad[j][k] = aux_grad[(k*aux_dim + j  )*dofs + i];
             }
         }
     
@@ -1039,14 +1039,9 @@ double ComputeTKE(FiniteElementSpace &fes, const Vector &uD)
    const FiniteElement *el;
    ElementTransformation *T;
 
-   int num_procs, myid;
-   MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
-   MPI_Comm_rank(MPI_COMM_WORLD, &myid);
- 
    int dim;
 
    double tke = 0.0;
-
    for (int i = 0; i < fes.GetNE(); i++)
    {
        T  = fes.GetElementTransformation(i);
