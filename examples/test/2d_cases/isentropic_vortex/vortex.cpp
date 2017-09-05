@@ -3,20 +3,22 @@
 #include <iostream>
 #include <algorithm>
 
+#include "../../../../general/text.hpp"
+
 using namespace std;
 using namespace mfem;
 
 //Constants
 const double gamm  = 1.4;
-const double   mu  = 0.010;
-const double R_gas = 287;
+const double   mu  = 0.000;
+const double R_gas = 1;
 const double   Pr  = 0.72;
 
 //Run parameters
-const char *mesh_file        =  "periodic-square.mesh";
-const int    order           =  2;
-const double t_final         =  0.10000;
-const int    problem         =  1;
+const char *mesh_file        =  "per_5.mesh";
+const int    order           =  4;
+const double t_final         = 10.00000;
+const int    problem         =  0;
 const int    ref_levels      =  4;
 
 const bool   time_adapt      =  false;
@@ -24,7 +26,7 @@ const double cfl             =  0.20;
 const double dt_const        =  0.0001  ;
 const int    ode_solver_type =  2; // 1. Forward Euler 2. TVD SSP 3 Stage
 
-const int    vis_steps       =  100 ;
+const int    vis_steps       =  1000;
 
 const bool   adapt           =  false; 
 const int    adapt_iter      =  40   ; // Time steps after which adaptation is done
@@ -331,7 +333,7 @@ CNS::CNS()
       exact_solution.ProjectCoefficient(ex);
       ComputeError(dim, u_sol, exact_solution, error);
 
-      cout << "Max error " << error.Max() << endl;
+//      cout << "Max error " << error.Max() << endl;
 
       if (ti % adapt_iter == 0 && adapt) // Update operators for p-adaptation 
       {
@@ -392,6 +394,8 @@ CNS::CNS()
           postProcess(*mesh, *vfec, u_sol, aux_grad, ele_order_temp, error, entr_dot_resi, rhs, ti, t);
       }
    }
+
+   cout << error.Sum() << endl;
 
    // Print all nodes in the finite element space 
    FiniteElementSpace fes_nodes(mesh, vfec, dim);
@@ -1185,8 +1189,6 @@ void ComputeMaxError(FiniteElementSpace &fes, GridFunction &uD, int vDim, Vector
            vals[j] = abs(uD[subscript]); 
        }
        maxError[i] = vals.Max();
-//       cout << i << "\t" <<  dof  << "\t" << vdofs.Size() << "\t" << maxResi[i] << endl;
-
    }
 }
 
@@ -1196,56 +1198,19 @@ void postProcess(Mesh &mesh, VarL2_FiniteElementCollection &vfec, GridFunction &
         GridFunction &eleOrder, GridFunction &error, GridFunction &entr_dot_resi, GridFunction &rhs,
         int cycle, double time)
 {
-   Mesh new_mesh(mesh, true);
-
-   int dim     = new_mesh.Dimension();
+   int dim     = mesh.Dimension();
    int var_dim = dim + 2;
 
-//   DG_FECollection fec(order + 1, dim);
    DG_FECollection fec(order , dim);
-   FiniteElementSpace fes_post(&new_mesh, &fec, var_dim);
-   FiniteElementSpace fes_post_grad(&new_mesh, &fec, (dim+1)*dim);
-
-   GridFunction u_post(&fes_post);
-   u_post.GetValuesFrom(u_sol); // Create a temp variable to get the previous space solution
- 
-   GridFunction aux_grad_post(&fes_post_grad);
-   aux_grad_post.GetValuesFrom(aux_grad); // Create a temp variable to get the previous space solution
-
-   FiniteElementSpace fes_scalar(&new_mesh, &fec);
-   GridFunction order_post(&fes_scalar);
-   order_post.GetValuesFrom(eleOrder); // Create a temp variable to get the previous space solution
-
-   GridFunction error_post(&fes_scalar);
-   error_post.GetValuesFrom(error); // Create a temp variable to get the previous space solution
-
-   GridFunction entr_dot_post(&fes_scalar);
-   entr_dot_post.GetValuesFrom(entr_dot_resi); // Create a temp variable to get the previous space solution
+   FiniteElementSpace fes_post(&mesh, &fec, var_dim);
+   FiniteElementSpace fes_scalar(&mesh, &fec);
 
    GridFunction rhs_temp(&fes_post);
    rhs_temp.GetValuesFrom(rhs); 
    int dofs = rhs_temp.Size()/var_dim;
    for (int i = 0; i < dofs; i ++) rhs_temp[i] = abs(rhs_temp[i + 0*dofs]);
 
-   GridFunction rhs_post(&fes_scalar);
-   rhs_post.GetValuesFrom(rhs_temp); // Create a temp variable to get the previous space solution
-
-//   for (int i = 0; i < 1; i ++)
-//   {
-//       new_mesh.UniformRefinement();
-//       fes_post.Update();
-//       u_post.Update();
-//       aux_grad_post.Update();
-//    
-//       fes_scalar.Update();
-//       order_post.Update();
-//    
-//       error_post.Update();
-//    
-//       entr_dot_post.Update();
-//   }
-
-   VisItDataCollection dc("CNS", &new_mesh);
+   VisItDataCollection dc("CNS", &mesh);
    dc.SetPrecision(8);
  
    GridFunction rho (&fes_scalar);
@@ -1254,22 +1219,38 @@ void postProcess(Mesh &mesh, VarL2_FiniteElementCollection &vfec, GridFunction &
    GridFunction E   (&fes_scalar);
    GridFunction vort(&fes_scalar);
 
-   GridFunction newEleOrder(&fes_scalar);
-   newEleOrder.GetValuesFrom(order_post); // Create a temp variable to get the previous space solution
-
    dc.RegisterField("rho", &rho);
    dc.RegisterField("u1", &u1);
    dc.RegisterField("u2", &u2);
    dc.RegisterField("E", &E);
    dc.RegisterField("vort", &vort);
-   dc.RegisterField("error", &error_post);
-   dc.RegisterField("Entropy_Dot_Residual", &entr_dot_post);
-   dc.RegisterField("RHS", &rhs_post);
+   dc.RegisterField("error", &error);
+   dc.RegisterField("Entropy_Dot_Residual", &entr_dot_resi);
+   dc.RegisterField("RHS", &rhs_temp);
 
-   dc.RegisterField("order", &newEleOrder);
+   dc.RegisterField("order", &eleOrder);
 
-   getFields(u_post, rho, u1, u2, E);
-   getVort(dim, aux_grad_post, vort);
+   getFields(u_sol, rho, u1, u2, E);
+   getVort(dim, aux_grad, vort);
+
+   FiniteElementSpace fes_nodes(&mesh, &fec, dim);
+   GridFunction nodes(&fes_nodes);
+   mesh.GetNodes(nodes);
+
+   ofstream error_file;
+   error_file.open("error_" + to_padded_string(cycle, 5) + ".dat" );
+
+   for (int i = 0; i < dofs; i ++) 
+   {
+       if ((nodes[1*dofs + i] < 0.50) && (nodes[1*dofs + i] > 0.40))
+       {
+           error_file << nodes[i] << "\t" << nodes[dofs + i ] << "\t" << error[i] << "\t" 
+               << rhs_temp[i] << "\t" << entr_dot_resi[i] << "\t" << vort[i] << endl;
+       }
+   }
+
+   error_file.close();
+
 
    dc.SetCycle(cycle);
    dc.SetTime(time);
