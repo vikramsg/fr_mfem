@@ -237,9 +237,9 @@ CNS::CNS()
        k_inv_z->Finalize(skip_zeros);
        
        k_vis_z = new BilinearForm(fes_op);
-       k_vis_z->AddDomainIntegrator(new ConvectionIntegrator(y_dir,  1.0));
+       k_vis_z->AddDomainIntegrator(new ConvectionIntegrator(z_dir,  1.0));
        k_vis_z->AddInteriorFaceIntegrator(
-          new TransposeIntegrator(new DGTraceIntegrator(y_dir, -1.0,  0.0)));// Beta 0 means central flux
+          new TransposeIntegrator(new DGTraceIntegrator(z_dir, -1.0,  0.0)));// Beta 0 means central flux
     
        k_vis_z->Assemble(skip_zeros);
        k_vis_z->Finalize(skip_zeros);
