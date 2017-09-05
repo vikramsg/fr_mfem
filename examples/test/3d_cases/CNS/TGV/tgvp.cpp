@@ -132,6 +132,8 @@ int main(int argc, char *argv[])
 
    CNS run;
 
+   MPI_Finalize();
+
    return 0;
 }
 
@@ -292,6 +294,9 @@ CNS::CNS()
        getAuxGrad(dim, *K_vis_x, *K_vis_y, dummyMat, 
            adv->GetMSolver(), *U, aux_grad);
    }
+   delete m;
+   delete k_inv_x, k_inv_y, k_inv_z;
+   delete k_vis_x, k_vis_y, k_vis_z; // Cleanup memory
 
    t = 0.0; ti = 0; // Initialize time and time iterations
    postProcess(*pmesh, *u_sol, aux_grad, ti, t);
@@ -385,15 +390,13 @@ CNS::~CNS()
     delete fes;
     delete fes_vec;
     delete fes_op;
-    delete m;
-    delete k_inv_x, k_inv_y, k_inv_z;
-    delete k_vis_x, k_vis_y, k_vis_z;
 }
 
 void CNS::Step()
 {
+    *u_sol = *U;
     u_sol->ExchangeFaceNbrData();
-    f_inv->ExchangeFaceNbrData();
+    getInvFlux(dim, *u_sol, *f_inv); // To update f_vec
 
     b->Assemble();
 
@@ -418,9 +421,6 @@ void CNS::Step()
     }
 
     dt = dt_const; 
-
-    *u_sol = *U;
-    getInvFlux(dim, *u_sol, *f_inv); // To update f_vec
 }
 
 
@@ -432,6 +432,7 @@ FE_Evolution::FE_Evolution(HypreParMatrix &_M, HypreParMatrix &_K_inv_x, HyprePa
    : TimeDependentOperator(_b.Size()), M(_M), K_inv_x(_K_inv_x), K_inv_y(_K_inv_y), K_inv_z(_K_inv_z),
                             K_vis_x(_K_vis_x), K_vis_y(_K_vis_y), K_vis_z(_K_vis_z), b(_b)
 {
+   M_prec.SetType(HypreSmoother::Jacobi); 
    M_solver.SetPreconditioner(M_prec);
    M_solver.SetOperator(M);
 
@@ -994,19 +995,7 @@ void postProcess(ParMesh &mesh, ParGridFunction &u_sol, ParGridFunction &aux_gra
    int dim     = mesh.Dimension();
    int var_dim = dim + 2;
 
-   DG_FECollection fec(order + 1, dim);
-   ParFiniteElementSpace fes_post(&mesh, &fec, var_dim);
-   ParFiniteElementSpace fes_post_grad(&mesh, &fec, (dim+1)*dim);
-
-   ParGridFunction u_post(&fes_post);
-   u_post.GetValuesFrom(u_sol); // Create a temp variable to get the previous space solution
- 
-   ParGridFunction aux_grad_post(&fes_post_grad);
-   aux_grad_post.GetValuesFrom(aux_grad); // Create a temp variable to get the previous space solution
-
-   fes_post.Update();
-   u_post.Update();
-   aux_grad_post.Update();
+   DG_FECollection fec(order, dim);
 
    VisItDataCollection dc("CNS", &mesh);
    dc.SetPrecision(8);
@@ -1024,7 +1013,7 @@ void postProcess(ParMesh &mesh, ParGridFunction &u_sol, ParGridFunction &aux_gra
    dc.RegisterField("vort", &vort);
    dc.RegisterField("q_criterion", &q);
 
-   getFields(u_post, aux_grad_post, rho, M, p, vort, q);
+   getFields(u_sol, aux_grad, rho, M, p, vort, q);
 
    dc.SetCycle(cycle);
    dc.SetTime(time);

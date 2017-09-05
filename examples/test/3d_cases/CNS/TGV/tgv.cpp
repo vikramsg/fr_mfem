@@ -45,7 +45,7 @@ void getAuxVar(int dim, const Vector &u, Vector &aux_sol);
 
 
 void   ComputeMaxResidual(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, int vDim, Vector &maxResi);
-double ComputeTKE(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, int vDim);
+double ComputeTKE(FiniteElementSpace &fes, GridFunction &uD);
 
 void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, Vector &u1, Vector &u2, 
                 Vector &E, Vector &u_x, Vector &u_y, Vector &v_x, Vector &v_y);
@@ -304,7 +304,7 @@ CNS::CNS()
 
       done = (t >= t_final - 1e-8*dt);
 
-      ComputeTKE(*mesh, *fes, u_sol, var_dim);
+      ComputeTKE(*fes, u_sol);
 
             
       if (done || ti % vis_steps == 0) // Visualize
