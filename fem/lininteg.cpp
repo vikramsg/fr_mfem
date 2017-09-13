@@ -1019,6 +1019,9 @@ void DGEulerIntegrator::AssembleRHSElementVect(
 }
 
 
+
+
+
 void FaceInt::AssembleRHSElementVect(
    const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
 {
@@ -1958,6 +1961,151 @@ void DG_CNS_Vis_Adiabatic_Integrator::AssembleRHSElementVect(
    }// for ir loop
 
 }
+
+
+
+void DGCNSIntegrator::AssembleRHSElementVect(
+   const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
+{
+   mfem_error("DGEulerIntegrator::AssembleRHSElementVect");
+}
+
+void DGCNSIntegrator::AssembleRHSElementVect(
+   const FiniteElement &el, FaceElementTransformations &Tr, Vector &elvect)
+{
+   mfem_error("DGEEulerIntegrator::AssembleRHSElementVect");
+}
+
+
+
+
+void DGCNSIntegrator::AssembleRHSElementVect(
+   const FiniteElement &el1, const FiniteElement &el2, FaceElementTransformations &Trans, Vector &elvect)
+{
+   int dim, var_dim, aux_dim, ndof1, ndof2;
+
+   double un, a, b, w;
+
+   Vector shape1, shape2;
+
+   dim      = el1.GetDim();
+   var_dim  = dim + 2; 
+   aux_dim  = dim + 2; 
+   ndof1    = el1.GetDof();
+   ndof2    = el2.GetDof();
+   
+   Vector vu(dim), nor(dim);
+
+   elvect.SetSize(var_dim*(ndof1 + ndof2));
+   elvect = 0.0;
+
+   shape1.SetSize(ndof1);
+   shape2.SetSize(ndof2);
+
+   const IntegrationRule *ir = IntRule;
+   if (ir == NULL)
+   {
+      int order;
+      // Assuming order(u)==order(mesh)
+      if (Trans.Elem2No >= 0)
+         order = (std::min(Trans.Elem1->OrderW(), Trans.Elem2->OrderW()) +
+                  2*std::max(el1.GetOrder(), el2.GetOrder()));
+      else
+      {
+         order = Trans.Elem1->OrderW() + 2*el1.GetOrder();
+      }
+      if (el1.Space() == FunctionSpace::Pk)
+      {
+         order++;
+      }
+      ir = &IntRules.Get(Trans.FaceGeom, order);
+   }
+
+   for (int p = 0; p < ir->GetNPoints(); p++)
+   {
+      const IntegrationPoint &ip = ir->IntPoint(p);
+      IntegrationPoint eip1, eip2;
+      Trans.Loc1.Transform(ip, eip1);
+      if (ndof2)
+      {
+         Trans.Loc2.Transform(ip, eip2);
+      }
+
+      Trans.Face->SetIntPoint(&ip);
+      Trans.Elem1->SetIntPoint(&eip1);
+      Trans.Elem2->SetIntPoint(&eip2);
+
+      el1.CalcShape(eip1, shape1);
+      el2.CalcShape(eip2, shape2);
+
+      if (dim == 1)
+      {
+         nor(0) = 2*eip1.x - 1.0;
+      }
+      else
+      {
+         CalcOrtho(Trans.Face->Jacobian(), nor);
+      }
+
+      Vector u1_dir(var_dim), u2_dir(var_dim);
+      uD.Eval(u1_dir, *Trans.Elem1, eip1);
+      uD.Eval(u2_dir, *Trans.Elem2, eip2);
+
+      Vector aux1_dir(dim*aux_dim), aux2_dir(dim*aux_dim);
+      auxD.Eval(aux1_dir, *Trans.Elem1, eip1);
+      auxD.Eval(aux2_dir, *Trans.Elem2, eip2);
+
+      Vector fL_dir(dim*var_dim), fR_dir(dim*var_dim);
+      getViscousCNSFlux(R, gamm, u1_dir, aux1_dir, mu, Pr, fL_dir);
+      getViscousCNSFlux(R, gamm, u2_dir, aux2_dir, mu, Pr, fR_dir);
+
+//      Vector f_dir(dim*var_dim);
+//      add(0.5, fL_dir, fR_dir, f_dir); //Common flux is taken as average
+
+      Vector f1_dir(dim*var_dim), f2_dir(dim*var_dim);
+      fD.Eval(f1_dir, *Trans.Elem1, eip1); // Get discontinuous flux at face
+      fD.Eval(f2_dir, *Trans.Elem2, eip2);
+
+      Vector f_dir(dim*var_dim);
+      add(0.5, f1_dir, f2_dir, f_dir); //Common flux is taken as average
+
+
+      Vector face_f(var_dim), face_f1(var_dim), face_f2(var_dim); //Face fluxes (dot product with normal)
+      face_f = 0.0; face_f1 = 0.0; face_f2 = 0.0;
+      for (int i = 0; i < dim; i++)
+      {
+          for (int j = 0; j < var_dim; j++)
+          {
+              face_f1(j) += f1_dir(i*var_dim + j)*nor(i);
+              face_f2(j) += f2_dir(i*var_dim + j)*nor(i);
+              face_f (j) += f_dir (i*var_dim + j)*nor(i);
+          }
+      }
+
+      w = ip.weight * alpha; 
+
+      subtract(face_f, face_f1, face_f1); //f_comm - f1
+      for (int j = 0; j < var_dim; j++)
+      {
+          for (int i = 0; i < ndof1; i++)
+          {
+              elvect(j*ndof1 + i)              += face_f1(j)*w*shape1(i); 
+          }
+      }
+
+      subtract(face_f, face_f2, face_f2); //fcomm - f2
+      for (int j = 0; j < var_dim; j++)
+      {
+          for (int i = 0; i < ndof2; i++)
+          {
+              elvect(var_dim*ndof1 + j*ndof2 + i) -= face_f2(j)*w*shape2(i); 
+          }
+      }
+
+   }// for ir loop
+
+}
+
 
 
 }

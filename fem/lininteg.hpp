@@ -720,6 +720,53 @@ public:
 };
 
 
+/** Interior face CNS integrator
+    */
+class DGCNSIntegrator : public LinearFormIntegrator, public CNSIntegrator
+{
+protected:
+   VectorCoefficient &uD;
+   VectorCoefficient &fD;
+   VectorCoefficient &auxD;
+
+   double gamm;
+   double R   ;
+
+   double alpha; // b = alpha*b
+
+   double mu, Pr;
+
+#ifndef MFEM_THREAD_SAFE
+   Vector shape;
+   DenseMatrix dshape;
+   DenseMatrix adjJ;
+   DenseMatrix dshape_ps;
+   Vector nor;
+   Vector dshape_dn;
+   Vector dshape_du;
+   Vector u_dir;
+#endif
+
+public:
+   DGCNSIntegrator(double R_, double gamm_, double mu_, double Pr_,
+                   VectorCoefficient &uD_, VectorCoefficient &fD_, VectorCoefficient &auxD_, 
+                   double alpha_)
+      : uD(uD_), fD(fD_), auxD(auxD_), alpha(alpha_), R(R_), gamm(gamm_), mu(mu_), Pr(Pr_) { }
+
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       ElementTransformation &Tr,
+                                       Vector &elvect);
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       FaceElementTransformations &Tr,
+                                       Vector &elvect);
+   //For interior faces
+   virtual void AssembleRHSElementVect(const FiniteElement &el1,
+                                       const FiniteElement &el2,
+                                       FaceElementTransformations &Tr,
+                                       Vector &elvect);
+
+};
+
 
 
 
