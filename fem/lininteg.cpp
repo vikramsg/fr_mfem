@@ -1964,13 +1964,13 @@ void DG_CNS_Vis_Adiabatic_Integrator::AssembleRHSElementVect(
 
 
 
-void DGCNSIntegrator::AssembleRHSElementVect(
+void DG_Viscous_Integrator::AssembleRHSElementVect(
    const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
 {
    mfem_error("DGEulerIntegrator::AssembleRHSElementVect");
 }
 
-void DGCNSIntegrator::AssembleRHSElementVect(
+void DG_Viscous_Integrator::AssembleRHSElementVect(
    const FiniteElement &el, FaceElementTransformations &Tr, Vector &elvect)
 {
    mfem_error("DGEEulerIntegrator::AssembleRHSElementVect");
@@ -1979,7 +1979,7 @@ void DGCNSIntegrator::AssembleRHSElementVect(
 
 
 
-void DGCNSIntegrator::AssembleRHSElementVect(
+void DG_Viscous_Integrator::AssembleRHSElementVect(
    const FiniteElement &el1, const FiniteElement &el2, FaceElementTransformations &Trans, Vector &elvect)
 {
    int dim, var_dim, aux_dim, ndof1, ndof2;
@@ -2099,6 +2099,125 @@ void DGCNSIntegrator::AssembleRHSElementVect(
           for (int i = 0; i < ndof2; i++)
           {
               elvect(var_dim*ndof1 + j*ndof2 + i) -= face_f2(j)*w*shape2(i); 
+          }
+      }
+
+   }// for ir loop
+
+}
+
+void DG_Viscous_Aux_Integrator::AssembleRHSElementVect(
+   const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
+{
+   mfem_error("DGEulerIntegrator::AssembleRHSElementVect");
+}
+
+void DG_Viscous_Aux_Integrator::AssembleRHSElementVect(
+   const FiniteElement &el, FaceElementTransformations &Tr, Vector &elvect)
+{
+   mfem_error("DGEEulerIntegrator::AssembleRHSElementVect");
+}
+
+
+
+void DG_Viscous_Aux_Integrator::AssembleRHSElementVect(
+   const FiniteElement &el1, const FiniteElement &el2, FaceElementTransformations &Trans, Vector &elvect)
+{
+   int dim, aux_dim, ndof1, ndof2;
+
+   double un, a, b, w;
+
+   Vector shape1, shape2;
+
+   dim = el1.GetDim();
+   aux_dim = dim + 1;
+
+   ndof1 = el1.GetDof();
+   ndof2 = el2.GetDof();
+   
+   Vector vu(dim), nor(dim);
+
+   elvect.SetSize(aux_dim*(ndof1 + ndof2));
+   elvect = 0.0;
+
+   shape1.SetSize(ndof1);
+   shape2.SetSize(ndof2);
+
+   const IntegrationRule *ir = IntRule;
+   if (ir == NULL)
+   {
+      int order;
+      // Assuming order(u)==order(mesh)
+      if (Trans.Elem2No >= 0)
+         order = (std::min(Trans.Elem1->OrderW(), Trans.Elem2->OrderW()) +
+                  2*std::max(el1.GetOrder(), el2.GetOrder()));
+      else
+      {
+         order = Trans.Elem1->OrderW() + 2*el1.GetOrder();
+      }
+      if (el1.Space() == FunctionSpace::Pk)
+      {
+         order++;
+      }
+      ir = &IntRules.Get(Trans.FaceGeom, order);
+   }
+
+   for (int p = 0; p < ir->GetNPoints(); p++)
+   {
+      const IntegrationPoint &ip = ir->IntPoint(p);
+      IntegrationPoint eip1, eip2;
+      Trans.Loc1.Transform(ip, eip1);
+      if (ndof2)
+      {
+         Trans.Loc2.Transform(ip, eip2);
+      }
+
+      Trans.Face->SetIntPoint(&ip);
+      Trans.Elem1->SetIntPoint(&eip1);
+      Trans.Elem2->SetIntPoint(&eip2);
+
+      el1.CalcShape(eip1, shape1);
+      el2.CalcShape(eip2, shape2);
+
+      if (dim == 1)
+      {
+         nor(0) = 2*eip1.x - 1.0;
+      }
+      else
+      {
+         CalcOrtho(Trans.Face->Jacobian(), nor);
+      }
+
+      Vector u1_dir(aux_dim), u2_dir(aux_dim);
+      uD.Eval(u1_dir, *Trans.Elem1, eip1);
+      uD.Eval(u2_dir, *Trans.Elem2, eip2);
+
+      Vector dir_(dim);
+      dir.Eval(dir_, *Trans.Elem1, eip1);
+
+      double un = dir_*nor;
+
+      w = ip.weight * alpha * un; 
+
+      Vector u_common(aux_dim);
+
+      add(0.5, u1_dir, u2_dir, u_common);
+
+      subtract(u_common, u1_dir, u1_dir); //f_comm - f1
+      for (int j = 0; j < aux_dim; j++)
+      {
+          for (int i = 0; i < ndof1; i++)
+          {
+              elvect(j*ndof1 + i)                   += u1_dir(j)*w*shape1(i); 
+          }
+      }
+
+      subtract(u_common, u2_dir, u2_dir); //fcomm - f2
+      for (int j = 0; j < aux_dim; j++)
+      {
+          for (int i = 0; i < ndof2; i++)
+          {
+              elvect(aux_dim*ndof1 + j*ndof2 + i)  -= u2_dir(j)*w*shape2(i); 
           }
       }
 
