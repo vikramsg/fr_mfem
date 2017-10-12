@@ -47,7 +47,7 @@ void ParLinearForm::AssembleSharedFaces()
 {
    int myid; 
    MPI_Comm_rank(MPI_COMM_WORLD, &myid);
-
+   
    ParMesh *pmesh = pfes->GetParMesh();
    FaceElementTransformations *T;
    Array<int> vdofs1, vdofs2, vdofs_all;
@@ -60,6 +60,10 @@ void ParLinearForm::AssembleSharedFaces()
       pfes->GetElementVDofs(T->Elem1No, vdofs1);
       pfes->GetFaceNbrElementVDofs(T->Elem2No, vdofs2);
 
+      vdofs_all.LoseData();
+      vdofs_all.Append(vdofs1);
+      vdofs_all.Append(vdofs2);
+      
       Array<int> offset; 
       offset.SetSize(vdofs1.Size());
       for (int k = 0; k < vdofs1.Size(); k++) offset[k] = k; 
@@ -69,6 +73,10 @@ void ParLinearForm::AssembleSharedFaces()
           ilfi[k] -> AssembleRHSElementVect (*pfes->GetFE(T -> Elem1No),
                                              *pfes->GetFaceNbrFE(T -> Elem2No),
                                               *T, elemvect);
+
+          ilfi[k] -> AssembleRHSElementVect (*pfes->GetFE(T -> Elem1No),
+                                             *pfes->GetFaceNbrFE(T -> Elem2No),
+                                             *T, vdofs_all, true, elemvect);
 
           //Assemble Shared Faces is called from each processor for the same faces
           //Therefore only the local vector on this processor needs to be updated 

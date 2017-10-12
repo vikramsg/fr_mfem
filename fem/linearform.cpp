@@ -65,6 +65,7 @@ void LinearForm::Assemble()
          for (int k=0; k < dlfi.Size(); k++)
          {
             dlfi[k]->AssembleRHSElementVect(*fes->GetFE(i), *eltrans, elemvect);
+            dlfi[k]->AssembleRHSElementVect(*fes->GetFE(i), *eltrans, vdofs, elemvect);
             AddElementVector (vdofs, elemvect);
          }
       }
@@ -95,13 +96,15 @@ void LinearForm::Assemble()
             fes -> GetElementVDofs (tr -> Elem2No, vdofs2);
             vdofs.Append(vdofs2);
 
-//            for (int k = 0; k < vdofs2.Size(); k++) std::cout << k << '\t' << vdofs2[k] << std::endl;
-
             for (int k = 0; k < ilfi.Size(); k++)
             {
                ilfi[k] -> AssembleRHSElementVect (*fes->GetFE(tr -> Elem1No),
                                                   *fes->GetFE(tr -> Elem2No),
                                                   *tr, elemvect);
+               
+               ilfi[k] -> AssembleRHSElementVect (*fes->GetFE(tr -> Elem1No),
+                                                  *fes->GetFE(tr -> Elem2No),
+                                                  *tr, vdofs, false, elemvect);
 
                AddElementVector (vdofs, elemvect);
             }

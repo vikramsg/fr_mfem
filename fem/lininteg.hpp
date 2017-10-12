@@ -33,6 +33,12 @@ public:
    virtual void AssembleRHSElementVect(const FiniteElement &el,
                                        ElementTransformation &Tr,
                                        Vector &elvect) = 0;
+   
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       ElementTransformation &Tr,
+                                       const Array<int> &vdofs,
+                                       Vector &elvect) ; // Added for DG CNS 
+
    virtual void AssembleRHSElementVect(const FiniteElement &el,
                                        FaceElementTransformations &Tr,
                                        Vector &elvect);
@@ -41,6 +47,12 @@ public:
                                        const FiniteElement &el2,
                                        FaceElementTransformations &Tr,
                                        Vector &elvect);
+
+   virtual void AssembleRHSElementVect(const FiniteElement &el1,
+                                       const FiniteElement &el2,
+                                       FaceElementTransformations &Tr,
+                                       const Array<int> &vdofs, const bool nbr,
+                                       Vector &elvect); // Added for DG CNS 
 
    void SetIntRule(const IntegrationRule *ir) { IntRule = ir; }
 
@@ -371,6 +383,14 @@ public:
     */
 class EulerIntegrator
 {
+private:
+
+    Vector vel;
+    Vector vel_L, vel_R;
+    Vector nor_dim;
+    Vector fl, fr;
+    Vector f_diss; //Rusanov dissipation 
+
 public:
    EulerIntegrator(){};
 
@@ -388,30 +408,40 @@ public:
 class DGEulerIntegrator : public LinearFormIntegrator, public EulerIntegrator
 {
 protected:
-   VectorCoefficient &uD;
-   VectorCoefficient &fD;
+   VectorCoefficient *uD;
+   VectorCoefficient *fD;
+
+   Vector *u_D, *u_D_nbr; // _nbr contains data from face neighbour elements in case of MPI process
+   Vector *f_D, *f_D_nbr;
+
+   int dim;
 
    double gamm;
    double R   ;
 
-   int vDim;//Vector dimension 
-
    double alpha; // b = alpha*b
 
-#ifndef MFEM_THREAD_SAFE
-   Vector shape;
-   DenseMatrix dshape;
-   DenseMatrix adjJ;
-   DenseMatrix dshape_ps;
-   Vector nor;
-   Vector dshape_dn;
-   Vector dshape_du;
-   Vector u_dir;
-#endif
+   Vector shape1, shape2;
+   Vector u1_dir, u2_dir;
+   Vector f_dir;
+   Vector f1_dir, f2_dir;
+   Vector face_f, face_f1, face_f2; //Face fluxes (dot product with normal)
+
+   Vector vu, nor;
 
 public:
-   DGEulerIntegrator(double R_, double gamm_, VectorCoefficient &uD_, VectorCoefficient &fD_, int vDim_, double alpha_)
-      : uD(uD_), fD(fD_), vDim(vDim_), alpha(alpha_), R(R_), gamm(gamm_) { }
+   
+   DGEulerIntegrator(double R_, double gamm_, VectorCoefficient &uD_, VectorCoefficient &fD_, 
+           double alpha_) // Use coefficients
+      : uD(&uD_), fD(&fD_), u_D(NULL), f_D(NULL), u_D_nbr(NULL), f_D_nbr(NULL), 
+        alpha(alpha_), R(R_), gamm(gamm_) { }
+
+
+   DGEulerIntegrator(double R_, double gamm_, 
+                     Vector &u_D_, Vector &f_D_, Vector &u_D_nbr_, Vector &f_D_nbr_,
+                     double alpha_) // Use Vectors
+      : uD(NULL), fD(NULL), u_D(&u_D_), f_D(&f_D_), u_D_nbr(&u_D_nbr_), f_D_nbr(&f_D_nbr_), 
+        alpha(alpha_), R(R_), gamm(gamm_) { }
 
    virtual void AssembleRHSElementVect(const FiniteElement &el,
                                        ElementTransformation &Tr,
@@ -423,6 +453,13 @@ public:
    virtual void AssembleRHSElementVect(const FiniteElement &el1,
                                        const FiniteElement &el2,
                                        FaceElementTransformations &Tr,
+                                       Vector &elvect);
+
+   //For interior faces
+   virtual void AssembleRHSElementVect(const FiniteElement &el1,
+                                       const FiniteElement &el2,
+                                       FaceElementTransformations &Tr,
+                                       const Array<int> &vdofs, const bool nbr,
                                        Vector &elvect);
 
 };
@@ -725,9 +762,9 @@ public:
 class DG_Viscous_Integrator : public LinearFormIntegrator, public CNSIntegrator
 {
 protected:
-   VectorCoefficient &uD;
-   VectorCoefficient &fD;
-   VectorCoefficient &auxD;
+   VectorCoefficient *uD;
+   VectorCoefficient *fD;
+   VectorCoefficient *auxD;
 
    double gamm;
    double R   ;
@@ -751,7 +788,7 @@ public:
    DG_Viscous_Integrator(double R_, double gamm_, double mu_, double Pr_,
                    VectorCoefficient &uD_, VectorCoefficient &fD_, VectorCoefficient &auxD_, 
                    double alpha_)
-      : uD(uD_), fD(fD_), auxD(auxD_), alpha(alpha_), R(R_), gamm(gamm_), mu(mu_), Pr(Pr_) { }
+      : uD(&uD_), fD(&fD_), auxD(&auxD_), alpha(alpha_), R(R_), gamm(gamm_), mu(mu_), Pr(Pr_) { }
 
    virtual void AssembleRHSElementVect(const FiniteElement &el,
                                        ElementTransformation &Tr,
@@ -765,14 +802,24 @@ public:
                                        FaceElementTransformations &Tr,
                                        Vector &elvect);
 
+   //For interior faces using Vectors instead of coefficient
+   virtual void AssembleRHSElementVect(const FiniteElement &el1,
+                                       const FiniteElement &el2,
+                                       FaceElementTransformations &Tr,
+                                       const Array<int> &vdofs, const bool nbr,
+                                       Vector &elvect);
 };
 
 
 class DG_Viscous_Aux_Integrator: public LinearFormIntegrator
 {
 protected:
-   VectorCoefficient &uD;
-   VectorCoefficient &dir;
+   VectorCoefficient *uD;
+   VectorCoefficient *dir;
+
+   Vector *u_D;
+   Vector *u_D_nbr;
+   Vector *vec_dir;
 
    double alpha; // b = alpha*b
 
@@ -789,7 +836,13 @@ protected:
 
 public:
    DG_Viscous_Aux_Integrator(VectorCoefficient &dir_, VectorCoefficient &uD_, double alpha_)
-      : uD(uD_), dir(dir_), alpha(alpha_) { }
+      : uD(&uD_), dir(&dir_), 
+        u_D(NULL), u_D_nbr(NULL), vec_dir(NULL),      
+        alpha(alpha_) { }
+
+   DG_Viscous_Aux_Integrator(Vector &vec_dir_, Vector &u_D_, Vector &u_D_nbr_, double alpha_)
+      : u_D(&u_D_), u_D_nbr(&u_D_nbr_), vec_dir(&vec_dir_),      
+        alpha(alpha_) { }
 
    virtual void AssembleRHSElementVect(const FiniteElement &el,
                                        ElementTransformation &Tr,
@@ -803,7 +856,71 @@ public:
                                        const FiniteElement &el2,
                                        FaceElementTransformations &Tr,
                                        Vector &elvect);
+   
+   //For interior faces using Vectors instead of coefficient
+   virtual void AssembleRHSElementVect(const FiniteElement &el1,
+                                       const FiniteElement &el2,
+                                       FaceElementTransformations &Tr,
+                                       const Array<int> &vdofs, const bool nbr,
+                                       Vector &elvect);
 };
+
+
+
+/** Test DG integrator for experimentation 
+    */
+class DG_Test_Integrator : public LinearFormIntegrator, public CNSIntegrator
+{
+protected:
+   VectorCoefficient &uD;
+
+   Vector            &u_D;
+
+   double alpha; // b = alpha*b
+
+#ifndef MFEM_THREAD_SAFE
+   Vector shape;
+   DenseMatrix dshape;
+   DenseMatrix adjJ;
+   DenseMatrix dshape_ps;
+   Vector nor;
+   Vector dshape_dn;
+   Vector dshape_du;
+   Vector u_dir;
+#endif
+
+public:
+   DG_Test_Integrator(VectorCoefficient &uD_, Vector &u_D_, 
+                   double alpha_)
+      : uD(uD_), u_D(u_D_), alpha(alpha_) { }
+
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       ElementTransformation &Tr,
+                                       Vector &elvect);
+   
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       ElementTransformation &Tr,
+                                       const Array<int> &vdofs,
+                                       Vector &elvect);
+
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       FaceElementTransformations &Tr,
+                                       Vector &elvect);
+   //For interior faces
+   virtual void AssembleRHSElementVect(const FiniteElement &el1,
+                                       const FiniteElement &el2,
+                                       FaceElementTransformations &Tr,
+                                       Vector &elvect);
+
+   //For interior faces
+   virtual void AssembleRHSElementVect(const FiniteElement &el1,
+                                       const FiniteElement &el2,
+                                       FaceElementTransformations &Tr,
+                                       const Array<int> &vdofs, const bool nbr,
+                                       Vector &elvect);
+
+};
+
 
 
 }
