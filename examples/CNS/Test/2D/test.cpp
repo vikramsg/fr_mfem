@@ -17,7 +17,7 @@ bool viscous       = true ; // True if mu is not zero
 
 //Run parameters
 const char *mesh_file        =  "periodic-square.mesh";
-const int    order           =  4;
+const int    order           =  2;
 const double t_final         =  0.01000;
 const int    problem         =  1;
 const int    ref_levels      =  4;
@@ -247,18 +247,18 @@ CNS::CNS()
    // Linear form
    b = new ParLinearForm(fes);
    b->AddFaceIntegrator(
-////      new DGEulerIntegrator(dim, R_gas, gamm, u_vec, f_vec, 
+//      new DGEulerIntegrator(R_gas, gamm, u_vec, f_vec, 
       new DGEulerIntegrator(R_gas, gamm, u_sol, f_inv, u_sol.FaceNbrData(),  f_inv.FaceNbrData(),
           - 1.0));
-//   b->AddFaceIntegrator(
+   b->AddFaceIntegrator(
 //      new DG_Viscous_Integrator(R_gas, gamm, mu, Pr, u_vec, f_vis_vec, aux_grad_vec,  1.0));
-//      new DG_Viscous_Integrator(R_gas, gamm, mu, Pr, 
-//                                u_vec, f_vis_vec, aux_grad_vec,  
-//                                u_sol, f_vis, aux_grad,  
-//                                1.0));
+      new DG_Viscous_Integrator(R_gas, gamm, mu, Pr, 
+                                u_sol, f_vis, aux_grad,  
+                                u_sol.FaceNbrData(), f_vis.FaceNbrData(), aux_grad.FaceNbrData(),  
+                                1.0));
 //   b->AddFaceIntegrator(
 //      new DG_Test_Integrator(u_vec, u_sol, 1.0));
-   b->Assemble();
+//   b->Assemble();
    ///////////////////////////////////////////////////////////
    b_aux_x = new ParLinearForm(&fes_aux);
    b_aux_y = new ParLinearForm(&fes_aux);
@@ -301,9 +301,6 @@ CNS::CNS()
         f_vis.ExchangeFaceNbrData(); 
    }
    /////////////////////////////////////////////////////////////
-//   b->Assemble();
-//   cout << b->Min() << "\t" << b->Max() << "\t" << b->Sum() << endl;
-   ///////////////////////////////////////////////////////////
 
    t = 0.0; ti = 0; // Initialize time and time iterations
    adv->SetTime(t);
@@ -380,21 +377,21 @@ CNS::CNS()
 //   }
 //
 
-//   delete adv;
-//   delete M, K_inv_x, K_inv_y;
+   delete adv;
+   delete M, K_inv_x, K_inv_y;
 }
 
 
 CNS::~CNS()
 {
-//    delete b;
-//    delete b_aux_x, b_aux_y;
-//    delete ode_solver;
-//    delete pmesh;
-//    delete fes;
-//    delete fes_vec;
-//    delete fes_op;
-//    delete fes_aux_grad;
+    delete b;
+    delete b_aux_x, b_aux_y;
+    delete ode_solver;
+    delete pmesh;
+    delete fes;
+    delete fes_vec;
+    delete fes_op;
+    delete fes_aux_grad;
 }
 
 void CNS::Step()
