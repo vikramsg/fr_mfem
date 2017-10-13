@@ -1936,30 +1936,30 @@ void CNSIntegrator::getViscousCNSFlux(double R, double gamm, const Vector &u, co
 
     double rho = u[0], E = u[var_dim - 1];
 
-    double rho_vel[dim];
+    rho_vel.SetSize(dim);
     for(int i = 0; i < dim; i++) rho_vel[i] = u[1 + i];
 
-    double vel[dim];        
+    vel.SetSize(dim);        
     for(int j = 0; j < dim; j++) vel[j]   = rho_vel[j]/rho;
 
-    double vel_grad[dim][dim];
+    vel_grad.SetSize(dim*dim);
     for (int k = 0; k < dim; k++)
         for (int j = 0; j < dim; j++)
         {
-            vel_grad[j][k]      =  aux_grad[k*(aux_dim) + j];
+            vel_grad[j*dim + k]      =  aux_grad[k*(aux_dim) + j];
         }
 
     double divergence = 0.0;            
-    for (int k = 0; k < dim; k++) divergence += vel_grad[k][k];
+    for (int k = 0; k < dim; k++) divergence += vel_grad[k*dim + k];
 
-    double tau[dim][dim];
+    tau.SetSize(dim*dim);
     for (int j = 0; j < dim; j++) 
         for (int k = 0; k < dim; k++) 
-            tau[j][k] = mu*(vel_grad[j][k] + vel_grad[k][j]);
+            tau[j*dim + k] = mu*(vel_grad[j*dim + k] + vel_grad[k*dim + j]);
 
-    for (int j = 0; j < dim; j++) tau[j][j] -= 2.0*mu*divergence/3.0; 
+    for (int j = 0; j < dim; j++) tau[j*dim + j] -= 2.0*mu*divergence/3.0; 
 
-    double int_en_grad[dim];
+    int_en_grad.SetSize(dim);
     for (int j = 0; j < dim; j++)
     {
         int_en_grad[j] = (R/(gamm - 1))*aux_grad[j*(aux_dim) + (aux_dim - 1)] ; // Cv*T_x
@@ -1971,12 +1971,12 @@ void CNSIntegrator::getViscousCNSFlux(double R, double gamm, const Vector &u, co
 
         for (int k = 0; k < dim ; k++)
         {
-            f(j*var_dim + (k + 1))        = tau[j][k];
+            f(j*var_dim + (k + 1))        = tau[j*dim + k];
         }
         f(j*var_dim + (var_dim - 1))      =  (mu/Pr)*gamm*int_en_grad[j]; 
         for (int k = 0; k < dim ; k++)
         {
-            f(j*var_dim + (var_dim - 1)) += vel[k]*tau[j][k]; 
+            f(j*var_dim + (var_dim - 1)) += vel[k]*tau[j*dim + k]; 
         }
     }
 }
@@ -2163,6 +2163,9 @@ void DG_Viscous_Integrator::AssembleRHSElementVect(
 void DG_Viscous_Integrator::AssembleRHSElementVect(
    const FiniteElement &el1, const FiniteElement &el2, FaceElementTransformations &Trans, Vector &elvect)
 {
+   if (u_D) // Condition to check whether we are using coefficient or vector
+       return;
+
    int dim, var_dim, aux_dim, ndof1, ndof2;
 
    double un, a, b, w;
@@ -2170,8 +2173,8 @@ void DG_Viscous_Integrator::AssembleRHSElementVect(
    Vector shape1, shape2;
 
    dim      = el1.GetDim();
+   aux_dim  = dim + 1; 
    var_dim  = dim + 2; 
-   aux_dim  = dim + 2; 
    ndof1    = el1.GetDof();
    ndof2    = el2.GetDof();
    
@@ -2293,25 +2296,38 @@ void DG_Viscous_Integrator::AssembleRHSElementVect(
         const Array<int> &vdofs, const bool nbr,
         Vector &elvect)
 {
+   if (!u_D) // Condition to check whether we are using coefficient or vector
+       return;
+
    int dim, var_dim, aux_dim, ndof1, ndof2;
+   int offset1, offset2;
 
    double un, a, b, w;
 
-   Vector shape1, shape2;
-
    dim      = el1.GetDim();
+   aux_dim  = dim + 1; 
    var_dim  = dim + 2; 
-   aux_dim  = dim + 2; 
    ndof1    = el1.GetDof();
    ndof2    = el2.GetDof();
+
+   offset1  = u_D->Size()/var_dim;
+   offset2  = u_D_nbr->Size()/var_dim;
    
-   Vector vu(dim), nor(dim);
+   vu.SetSize(dim); nor.SetSize(dim);
 
    elvect.SetSize(var_dim*(ndof1 + ndof2));
    elvect = 0.0;
 
    shape1.SetSize(ndof1);
    shape2.SetSize(ndof2);
+
+   u1_dir.SetSize(var_dim); u2_dir.SetSize(var_dim);
+   aux1_dir.SetSize(dim*aux_dim); aux2_dir.SetSize(dim*aux_dim);
+   fL_dir.SetSize(dim*var_dim); fR_dir.SetSize(dim*var_dim);
+   f1_dir.SetSize(dim*var_dim); f2_dir.SetSize(dim*var_dim);
+   f_dir.SetSize(dim*var_dim);
+   face_f.SetSize(var_dim); face_f1.SetSize(var_dim); face_f2.SetSize(var_dim); 
+
 
    const IntegrationRule *ir = IntRule;
    if (ir == NULL)
@@ -2358,30 +2374,76 @@ void DG_Viscous_Integrator::AssembleRHSElementVect(
          CalcOrtho(Trans.Face->Jacobian(), nor);
       }
 
-      Vector u1_dir(var_dim), u2_dir(var_dim);
-      uD->Eval(u1_dir, *Trans.Elem1, eip1);
-      uD->Eval(u2_dir, *Trans.Elem2, eip2);
+      u1_dir = 0.0; u2_dir = 0.0;
+      for (int j = 0; j < var_dim; j++)
+      {
+          for (int i = 0; i < ndof1; i++)
+          {
+              u1_dir[j] += shape1[i]*(*u_D)[vdofs[j*ndof1 + i]]; // Extrapolate to boundary points
+          }
+          for (int i = 0; i < ndof2; i++)
+          {
+              if (!nbr)
+                  u2_dir[j] += shape2[i]*(*u_D)[vdofs[ndof1*var_dim + j*ndof2 + i]]; // Extrapolate to boundary points
+              else
+                  u2_dir[j] += shape2[i]*(*u_D_nbr)[vdofs[ndof1*var_dim + j*ndof2 + i]]; // Extrapolate to boundary points
+          }
+      }
 
-      Vector aux1_dir(dim*aux_dim), aux2_dir(dim*aux_dim);
-      auxD->Eval(aux1_dir, *Trans.Elem1, eip1);
-      auxD->Eval(aux2_dir, *Trans.Elem2, eip2);
+      aux1_dir = 0.0; aux2_dir = 0.0;
+      for (int j = 0; j < dim*aux_dim; j++)
+      {
+          for (int i = 0; i < ndof1; i++)
+          {
+              aux1_dir[j] += shape1[i]*(*aux_D)[j*offset1 + vdofs[i]]; // Extrapolate to boundary points
+          }
+          for (int i = 0; i < ndof2; i++)
+          {
+              if (!nbr)
+                  aux2_dir[j] += shape2[i]*(*aux_D)[j*offset1 + vdofs[ndof1*var_dim + i]]; // Extrapolate to boundary points
+              else
+              {
+                  int cell   = vdofs[ndof1*var_dim]/(ndof2*var_dim); 
+                  aux2_dir[j] += shape2[i]*(*aux_D_nbr)[cell*dim*aux_dim*ndof2 + j*ndof2 + i]; // Extrapolate to boundary pts
+              }
+          }
+      }
 
-      Vector fL_dir(dim*var_dim), fR_dir(dim*var_dim);
       getViscousCNSFlux(R, gamm, u1_dir, aux1_dir, mu, Pr, fL_dir);
       getViscousCNSFlux(R, gamm, u2_dir, aux2_dir, mu, Pr, fR_dir);
 
 //      Vector f_dir(dim*var_dim);
 //      add(0.5, fL_dir, fR_dir, f_dir); //Common flux is taken as average
 
-      Vector f1_dir(dim*var_dim), f2_dir(dim*var_dim);
-      fD->Eval(f1_dir, *Trans.Elem1, eip1); // Get discontinuous flux at face
-      fD->Eval(f2_dir, *Trans.Elem2, eip2);
+      f1_dir = 0.0; f2_dir = 0.0;
+      for (int j = 0; j < dim*var_dim; j++)
+      {
+          for (int i = 0; i < ndof1; i++)
+          {
+              f1_dir[j] += shape1[i]*(*f_D)[j*offset1 + vdofs[i]]; // Extrapolate to boundary points
+          }
+          for (int i = 0; i < ndof2; i++)
+          {
+              if (!nbr)
+                  f2_dir[j] += shape2[i]*(*f_D)[j*offset1 + vdofs[ndof1*var_dim + i]]; // Extrapolate to boundary points
+              else
+              {
+                  // nbr data structures have a different layout
+                  // While the u_D vector has all rho for all cells first, then rho*U, then rho*V and so on
+                  // u_D_nbr has all rho for current cell then rho*U and then again for next cell
+                  // So we have to use vdofs only as a marker for the cell
 
-      Vector f_dir(dim*var_dim);
+                  int cell   = vdofs[ndof1*var_dim]/(ndof2*var_dim); 
+                  f2_dir[j] += shape2[i]*(*f_D_nbr)[cell*dim*var_dim*ndof2 + j*ndof2 + i]; // Extrapolate to boundary points
+              }
+          }
+      }
+
+
+      //FIXME: Common flux is taken as average of discont extrapolated flux 
+      //not flux of discont extrapolated u
       add(0.5, f1_dir, f2_dir, f_dir); //Common flux is taken as average
 
-
-      Vector face_f(var_dim), face_f1(var_dim), face_f2(var_dim); //Face fluxes (dot product with normal)
       face_f = 0.0; face_f1 = 0.0; face_f2 = 0.0;
       for (int i = 0; i < dim; i++)
       {
@@ -2404,18 +2466,22 @@ void DG_Viscous_Integrator::AssembleRHSElementVect(
           }
       }
 
-      subtract(face_f, face_f2, face_f2); //fcomm - f2
-      for (int j = 0; j < var_dim; j++)
+      if (!nbr)
       {
-          for (int i = 0; i < ndof2; i++)
+          subtract(face_f, face_f2, face_f2); //fcomm - f2
+          for (int j = 0; j < var_dim; j++)
           {
-              elvect(var_dim*ndof1 + j*ndof2 + i) -= face_f2(j)*w*shape2(i); 
+              for (int i = 0; i < ndof2; i++)
+              {
+                  elvect(var_dim*ndof1 + j*ndof2 + i) -= face_f2(j)*w*shape2(i); 
+              }
           }
       }
 
    }// for ir loop
-
 }
+
+
 
 void DG_Viscous_Aux_Integrator::AssembleRHSElementVect(
    const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
@@ -2559,10 +2625,10 @@ void DG_Viscous_Aux_Integrator::AssembleRHSElementVect(
    ndof1 = el1.GetDof();
    ndof2 = el2.GetDof();
 
-   Vector u1_dir(aux_dim), u2_dir(aux_dim);
-   Vector u_common(aux_dim);
+   u1_dir.SetSize(aux_dim); u2_dir.SetSize(aux_dim);
+   u_common.SetSize(aux_dim);
   
-   Vector vu(dim), nor(dim);
+   vu.SetSize(dim); nor.SetSize(dim);
 
    elvect.SetSize(aux_dim*(ndof1 + ndof2));
    elvect = 0.0;
@@ -2645,12 +2711,15 @@ void DG_Viscous_Aux_Integrator::AssembleRHSElementVect(
           }
       }
 
-      subtract(u_common, u2_dir, u2_dir); //fcomm - f2
-      for (int j = 0; j < aux_dim; j++)
+      if (!nbr)
       {
-          for (int i = 0; i < ndof2; i++)
+          subtract(u_common, u2_dir, u2_dir); //fcomm - f2
+          for (int j = 0; j < aux_dim; j++)
           {
-              elvect(aux_dim*ndof1 + j*ndof2 + i)  -= u2_dir(j)*w*shape2(i); 
+              for (int i = 0; i < ndof2; i++)
+              {
+                  elvect(aux_dim*ndof1 + j*ndof2 + i)  -= u2_dir(j)*w*shape2(i); 
+              }
           }
       }
    }// for ir loop

@@ -703,6 +703,13 @@ public:
     */
 class CNSIntegrator
 {
+private:
+    Vector rho_vel;
+    Vector vel;        
+    Vector int_en_grad;
+    Vector tau;
+    Vector vel_grad;
+
 public:
    CNSIntegrator(){};
 
@@ -766,6 +773,10 @@ protected:
    VectorCoefficient *fD;
    VectorCoefficient *auxD;
 
+   Vector *u_D, *u_D_nbr;
+   Vector *f_D, *f_D_nbr;
+   Vector *aux_D, *aux_D_nbr;
+
    double gamm;
    double R   ;
 
@@ -773,22 +784,35 @@ protected:
 
    double mu, Pr;
 
-#ifndef MFEM_THREAD_SAFE
-   Vector shape;
-   DenseMatrix dshape;
-   DenseMatrix adjJ;
-   DenseMatrix dshape_ps;
-   Vector nor;
-   Vector dshape_dn;
-   Vector dshape_du;
-   Vector u_dir;
-#endif
+   Vector shape1, shape2;
+
+   Vector u1_dir, u2_dir;
+   Vector aux1_dir, aux2_dir;
+   Vector fL_dir, fR_dir;
+   Vector f1_dir, f2_dir;
+   Vector f_dir;
+   Vector face_f, face_f1, face_f2; //Face fluxes (dot product with normal)
+   
+   Vector vu, nor;
 
 public:
    DG_Viscous_Integrator(double R_, double gamm_, double mu_, double Pr_,
                    VectorCoefficient &uD_, VectorCoefficient &fD_, VectorCoefficient &auxD_, 
                    double alpha_)
-      : uD(&uD_), fD(&fD_), auxD(&auxD_), alpha(alpha_), R(R_), gamm(gamm_), mu(mu_), Pr(Pr_) { }
+      : uD(&uD_), fD(&fD_), auxD(&auxD_), 
+        u_D(NULL),     f_D(NULL),     aux_D(NULL), 
+        u_D_nbr(NULL), f_D_nbr(NULL), aux_D_nbr(NULL), 
+        alpha(alpha_), R(R_), gamm(gamm_), mu(mu_), Pr(Pr_) { }
+
+   DG_Viscous_Integrator(double R_, double gamm_, double mu_, double Pr_,
+                   VectorCoefficient &uD_, VectorCoefficient &fD_, VectorCoefficient &auxD_, 
+                   Vector &u_D_,     Vector &f_D_,     Vector &aux_D_, 
+                   Vector &u_D_nbr_, Vector &f_D_nbr_, Vector &aux_D_nbr_, 
+                   double alpha_)
+      : uD(&uD_), fD(&fD_), auxD(&auxD_), 
+        u_D(&u_D_),         f_D(&f_D_),         aux_D(&aux_D_), 
+        u_D_nbr(&u_D_nbr_), f_D_nbr(&f_D_nbr_), aux_D_nbr(&aux_D_nbr_), 
+        alpha(alpha_), R(R_), gamm(gamm_), mu(mu_), Pr(Pr_) { }
 
    virtual void AssembleRHSElementVect(const FiniteElement &el,
                                        ElementTransformation &Tr,
@@ -821,18 +845,12 @@ protected:
    Vector *u_D_nbr;
    Vector *vec_dir;
 
-   double alpha; // b = alpha*b
+   Vector u1_dir, u2_dir;
+   Vector u_common;
 
-#ifndef MFEM_THREAD_SAFE
-   Vector shape;
-   DenseMatrix dshape;
-   DenseMatrix adjJ;
-   DenseMatrix dshape_ps;
-   Vector nor;
-   Vector dshape_dn;
-   Vector dshape_du;
-   Vector u_dir;
-#endif
+   Vector vu, nor;
+
+   double alpha; // b = alpha*b
 
 public:
    DG_Viscous_Aux_Integrator(VectorCoefficient &dir_, VectorCoefficient &uD_, double alpha_)
