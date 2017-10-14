@@ -422,6 +422,8 @@ protected:
    double alpha; // b = alpha*b
 
    Vector shape1, shape2;
+   IntegrationPoint eip1, eip2;
+
    Vector u1_dir, u2_dir;
    Vector f_dir;
    Vector f1_dir, f2_dir;
@@ -785,6 +787,7 @@ protected:
    double mu, Pr;
 
    Vector shape1, shape2;
+   IntegrationPoint eip1, eip2;
 
    Vector u1_dir, u2_dir;
    Vector aux1_dir, aux2_dir;
@@ -805,11 +808,10 @@ public:
         alpha(alpha_), R(R_), gamm(gamm_), mu(mu_), Pr(Pr_) { }
 
    DG_Viscous_Integrator(double R_, double gamm_, double mu_, double Pr_,
-                   VectorCoefficient &uD_, VectorCoefficient &fD_, VectorCoefficient &auxD_, 
                    Vector &u_D_,     Vector &f_D_,     Vector &aux_D_, 
                    Vector &u_D_nbr_, Vector &f_D_nbr_, Vector &aux_D_nbr_, 
                    double alpha_)
-      : uD(&uD_), fD(&fD_), auxD(&auxD_), 
+      : uD(NULL), fD(NULL), auxD(NULL), 
         u_D(&u_D_),         f_D(&f_D_),         aux_D(&aux_D_), 
         u_D_nbr(&u_D_nbr_), f_D_nbr(&f_D_nbr_), aux_D_nbr(&aux_D_nbr_), 
         alpha(alpha_), R(R_), gamm(gamm_), mu(mu_), Pr(Pr_) { }
@@ -849,6 +851,8 @@ protected:
    Vector u_common;
 
    Vector vu, nor;
+
+   IntegrationPoint eip1, eip2;
 
    double alpha; // b = alpha*b
 

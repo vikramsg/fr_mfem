@@ -51,8 +51,10 @@ void LinearForm::Assemble()
    Array<int> vdofs;
    Array<int> vdofs2;
    ElementTransformation *eltrans;
+   Mesh *mesh ;
+   FaceElementTransformations *tr;
    Vector elemvect;
-
+   
    int i;
 
    Vector::operator=(0.0);
@@ -84,8 +86,7 @@ void LinearForm::Assemble()
 
    if (ilfi.Size())
    {
-      FaceElementTransformations *tr;
-      Mesh *mesh = fes->GetMesh();
+      mesh = fes->GetMesh();
 
       for (i = 0; i < mesh->GetNumFaces(); i++)
       {
@@ -114,8 +115,7 @@ void LinearForm::Assemble()
 
    if (flfi.Size())
    {
-      FaceElementTransformations *tr;
-      Mesh *mesh = fes->GetMesh();
+      mesh = fes->GetMesh();
 
       // Which boundary attributes need to be processed?
       Array<int> bdr_attr_marker(mesh->bdr_attributes.Size() ?
