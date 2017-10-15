@@ -429,6 +429,8 @@ protected:
    Vector f1_dir, f2_dir;
    Vector face_f, face_f1, face_f2; //Face fluxes (dot product with normal)
 
+   Vector u_vect, f_vect;
+
    Vector vu, nor;
 
 public:
@@ -795,6 +797,8 @@ protected:
    Vector f1_dir, f2_dir;
    Vector f_dir;
    Vector face_f, face_f1, face_f2; //Face fluxes (dot product with normal)
+
+   Vector u_vect, f_vect;
    
    Vector vu, nor;
 

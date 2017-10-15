@@ -1056,21 +1056,40 @@ void DGEulerIntegrator::AssembleRHSElementVect(
    var_dim = dim + 2;
    ndof1   = el1.GetDof();
    ndof2   = el2.GetDof();
+ 
+   elvect.SetSize(var_dim*(ndof1 + ndof2));
+   elvect = 0.0;
    
    offset   = u_D->Size()/var_dim;
 
    u1_dir.SetSize(var_dim); u2_dir.SetSize(var_dim);
    f_dir.SetSize(dim*var_dim);
    f1_dir.SetSize(dim*var_dim); f2_dir.SetSize(dim*var_dim);
-   face_f.SetSize(var_dim), face_f1.SetSize(var_dim), face_f2.SetSize(var_dim); //Face fluxes (dot product with normal)
+   face_f1.SetSize(var_dim), face_f2.SetSize(var_dim); //Face fluxes (dot product with normal)
 
    vu.SetSize(dim); nor.SetSize(dim);
 
-   elvect.SetSize(var_dim*(ndof1 + ndof2));
-   elvect = 0.0;
-
    shape1.SetSize(ndof1);
    shape2.SetSize(ndof2);
+   
+   u_vect.SetSize(var_dim*(ndof1 + ndof2));
+   u_D->GetSubVector(vdofs, u_vect);
+
+   f_vect.SetSize(dim*var_dim*(ndof1 + ndof2));
+   for (int j = 0; j < dim*var_dim; j++)
+   {
+       for (int i = 0; i < ndof1; i++)
+       {
+           f_vect[j*ndof1 + i] =(*f_D)[j*offset + vdofs[i]]; // Extrapolate to boundary points
+       }
+       if (!nbr)
+       {
+           for (int i = 0; i < ndof2; i++)
+           {
+               f_vect[dim*var_dim*ndof1 + j*ndof2 + i] = (*f_D)[j*offset + vdofs[ndof1*var_dim + i]]; 
+           }
+       }
+   }
 
    const IntegrationRule *ir = IntRule;
    if (ir == NULL)
@@ -1110,12 +1129,12 @@ void DGEulerIntegrator::AssembleRHSElementVect(
       {
           for (int i = 0; i < ndof1; i++)
           {
-              u1_dir[j] += shape1[i]*(*u_D)[vdofs[j*ndof1 + i]]; // Extrapolate to boundary points
+              u1_dir[j] += shape1[i]*u_vect[j*ndof1 + i]; // Extrapolate to boundary points
           }
           for (int i = 0; i < ndof2; i++)
           {
               if (!nbr)
-                  u2_dir[j] += shape2[i]*(*u_D)[vdofs[ndof1*var_dim + j*ndof2 + i]]; // Extrapolate to boundary points
+                  u2_dir[j] += shape2[i]*u_vect[ndof1*var_dim + j*ndof2 + i]; // Extrapolate to boundary points
               else
                   u2_dir[j] += shape2[i]*(*u_D_nbr)[vdofs[ndof1*var_dim + j*ndof2 + i]]; // Extrapolate to boundary points
           }
@@ -1128,12 +1147,12 @@ void DGEulerIntegrator::AssembleRHSElementVect(
       {
           for (int i = 0; i < ndof1; i++)
           {
-              f1_dir[j] += shape1[i]*(*f_D)[j*offset + vdofs[i]]; // Extrapolate to boundary points
+              f1_dir[j] += shape1[i]*f_vect[j*ndof1 + i]; // Extrapolate to boundary points
           }
           for (int i = 0; i < ndof2; i++)
           {
               if (!nbr)
-                  f2_dir[j] += shape2[i]*(*f_D)[j*offset + vdofs[ndof1*var_dim + i]]; // Extrapolate to boundary points
+                  f2_dir[j] += shape2[i]*f_vect[dim*var_dim*ndof1 + j*ndof2 + i]; // Extrapolate to boundary points
               else
               {
                   // FIXME: Assemble in parallel does not require the f2 part
@@ -1143,20 +1162,18 @@ void DGEulerIntegrator::AssembleRHSElementVect(
           }
       }
 
-      face_f = 0.0; face_f1 = 0.0; face_f2 = 0.0;
+      face_f1 = 0.0; face_f2 = 0.0;
       for (int i = 0; i < dim; i++)
       {
           for (int j = 0; j < var_dim; j++)
           {
-              face_f1(j) += f1_dir(i*var_dim + j)*nor(i);
-              face_f2(j) += f2_dir(i*var_dim + j)*nor(i);
-              face_f (j) += f_dir (i*var_dim + j)*nor(i);
+              face_f1(j) += (f_dir(i*var_dim + j) - f1_dir(i*var_dim + j))*nor(i);
+              face_f2(j) += (f_dir(i*var_dim + j) - f2_dir(i*var_dim + j))*nor(i);
           }
       }
 
       w = ip.weight * alpha; 
 
-      subtract(face_f, face_f1, face_f1); //f_comm - f1
       for (int j = 0; j < var_dim; j++)
       {
           for (int i = 0; i < ndof1; i++)
@@ -1167,7 +1184,6 @@ void DGEulerIntegrator::AssembleRHSElementVect(
 
       if (!nbr)
       {
-          subtract(face_f, face_f2, face_f2); //fcomm - f2
           for (int j = 0; j < var_dim; j++)
           {
               for (int i = 0; i < ndof2; i++)
@@ -2314,7 +2330,26 @@ void DG_Viscous_Integrator::AssembleRHSElementVect(
    fL_dir.SetSize(dim*var_dim); fR_dir.SetSize(dim*var_dim);
    f1_dir.SetSize(dim*var_dim); f2_dir.SetSize(dim*var_dim);
    f_dir.SetSize(dim*var_dim);
-   face_f.SetSize(var_dim); face_f1.SetSize(var_dim); face_f2.SetSize(var_dim); 
+   face_f1.SetSize(var_dim); face_f2.SetSize(var_dim); 
+
+   u_vect.SetSize(var_dim*(ndof1 + ndof2));
+   u_D->GetSubVector(vdofs, u_vect);
+
+   f_vect.SetSize(dim*var_dim*(ndof1 + ndof2));
+   for (int j = 0; j < dim*var_dim; j++)
+   {
+       for (int i = 0; i < ndof1; i++)
+       {
+           f_vect[j*ndof1 + i] =(*f_D)[j*offset1 + vdofs[i]]; // Extrapolate to boundary points
+       }
+       if (!nbr)
+       {
+           for (int i = 0; i < ndof2; i++)
+           {
+               f_vect[dim*var_dim*ndof1 + j*ndof2 + i] = (*f_D)[j*offset1 + vdofs[ndof1*var_dim + i]]; 
+           }
+       }
+   }
 
    const IntegrationRule *ir = IntRule;
    if (ir == NULL)
@@ -2395,12 +2430,12 @@ void DG_Viscous_Integrator::AssembleRHSElementVect(
       {
           for (int i = 0; i < ndof1; i++)
           {
-              f1_dir[j] += shape1[i]*(*f_D)[j*offset1 + vdofs[i]]; // Extrapolate to boundary points
+              f1_dir[j] += shape1[i]*f_vect[j*ndof1 + i]; // Extrapolate to boundary points
           }
           for (int i = 0; i < ndof2; i++)
           {
               if (!nbr)
-                  f2_dir[j] += shape2[i]*(*f_D)[j*offset1 + vdofs[ndof1*var_dim + i]]; // Extrapolate to boundary points
+                  f2_dir[j] += shape2[i]*f_vect[dim*var_dim*ndof1 + j*ndof2 + i]; // Extrapolate to boundary points
               else
               {
                   // nbr data structures have a different layout
@@ -2419,20 +2454,18 @@ void DG_Viscous_Integrator::AssembleRHSElementVect(
       //not flux of discont extrapolated u
       add(0.5, f1_dir, f2_dir, f_dir); //Common flux is taken as average
 
-      face_f = 0.0; face_f1 = 0.0; face_f2 = 0.0;
+      face_f1 = 0.0; face_f2 = 0.0;
       for (int i = 0; i < dim; i++)
       {
           for (int j = 0; j < var_dim; j++)
           {
-              face_f1(j) += f1_dir(i*var_dim + j)*nor(i);
-              face_f2(j) += f2_dir(i*var_dim + j)*nor(i);
-              face_f (j) += f_dir (i*var_dim + j)*nor(i);
+              face_f1(j) += (f_dir (i*var_dim + j) - f1_dir(i*var_dim + j))*nor(i);
+              face_f2(j) += (f_dir (i*var_dim + j) - f2_dir(i*var_dim + j))*nor(i);
           }
       }
 
       w = ip.weight * alpha; 
 
-      subtract(face_f, face_f1, face_f1); //f_comm - f1
       for (int j = 0; j < var_dim; j++)
       {
           for (int i = 0; i < ndof1; i++)
@@ -2443,7 +2476,6 @@ void DG_Viscous_Integrator::AssembleRHSElementVect(
 
       if (!nbr)
       {
-          subtract(face_f, face_f2, face_f2); //fcomm - f2
           for (int j = 0; j < var_dim; j++)
           {
               for (int i = 0; i < ndof2; i++)
