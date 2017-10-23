@@ -34,10 +34,10 @@ class ConvertPer:
     def writeVertices(self, ndim, vert, fileName):
         '''
         Write vertices in the GEOMETRY format of MFEM v1.0
+        Experimental. Only works for quads
         They are specified for each element with increasing x for each y
         '''
         fop = open(fileName, 'r')
-
         lns = fop.readlines()
 
         for it, i in enumerate(lns):
@@ -47,15 +47,18 @@ class ConvertPer:
         num_ele = int(lns[cn])
         cn = cn + 1
 
-        st = 'nodes\nFiniteElementSpace\nFiniteElementCollection: L2_T1_2D_P1\n'
-        st = st + 'VDim: 2\nOrdering: 1\n \n'
+        if ndim == 2:
+            st = 'nodes\nFiniteElementSpace\nFiniteElementCollection: L2_T1_2D_P1\n'
+            st = st + 'VDim: 2\nOrdering: 1\n \n'
+        elif ndim == 3:
+            st = 'nodes\nFiniteElementSpace\nFiniteElementCollection: L2_T1_3D_P1\n'
+            st = st + 'VDim: 3\nOrdering: 1\n \n'
 
         coun = 0
         for it, i in enumerate(lns[cn:]):
             if len(i.strip()) == 0: #Skip empty lines
                 continue
             ln  = i.split()
-
             tag = int(ln[1])
 
             eleArray = np.zeros((len(ln) - 2, ndim))
@@ -75,10 +78,11 @@ class ConvertPer:
                         lnst = lnst + str(k) + '\t'
                     st = st + lnst.rstrip() + '\n'
                 st = st + '\n'
-    
-                coun = coun + 1
-                if coun == num_ele:
-                    break
+ 
+
+            coun = coun + 1
+            if coun == num_ele:
+                break
 
         st = st.rstrip() #Remove trailing whitespace
 
@@ -142,20 +146,20 @@ class ConvertPer:
             if coun == num_ele:
                 break
 
-
         for it, i in enumerate(lns[cn:]):
-            nop.write(i)
-            cn = cn + 1
             if re.search('vertices', i) is not None:
                 break
-            
-        nop.write(lns[cn] + '\n')
+            nop.write(i)
+            cn = cn + 1
 
-        st = self.writeVertices(ndim, vert, fileName)
-
-        nop.write(st)
-
-
+        for it, i in enumerate(lns[cn + 1:]):
+            if re.search('vertices', i) is not None:
+                break
+            cn = cn + 1
+        
+        for it, i in enumerate(lns[cn + 1:]):
+            nop.write(i)
+           
         fop.close()
         nop.close()
 
@@ -182,7 +186,8 @@ class ConvertPer:
                     per_bnd = True
                     break
 
-            ver   = np.zeros((ndim      ), dtype = int) 
+            nver  = i.shape[0] - 2
+            ver   = np.zeros((nver     ), dtype = int) 
             if tag == lo and per_bnd == True:
                 bd_vert[0].append([])
                 for jt, j in enumerate(i[2:]):
@@ -211,10 +216,20 @@ class ConvertPer:
                 for p in bd_vert[1]:
                     for q in p:
                         dist = self.vertDist(ndim, vert[j], vert[q])
-                        for m in dist:
-                            if m < self.eps:
-                                assoc.append([j, q])
+                        if ndim == 2:
+                            for m in dist:
+                                if m < self.eps: # One of two coordinates must be the same
+                                    assoc.append([j, q])
         
+                        elif ndim == 3:
+                            cn = 0
+                            for m in dist:
+                                if m < self.eps:
+                                    cn = cn + 1
+                            if cn == 2: # Two of three coordinates must be the same
+                                    assoc.append([j, q])
+
+
         assoc = np.array(assoc)
 
         assoc = np.vstack({tuple(row) for row in assoc}) # Get unique rows
@@ -250,8 +265,11 @@ class ConvertPer:
 
         cn      = cn + 1 
 
-        bds     = np.zeros((num_bds, ndim + 2), dtype = int) # This works only for 2D
-                                                             # Since it assumes only 2 points in a boundary
+        if ndim == 2:
+            bds     = np.zeros((num_bds, ndim + 2), dtype = int) # This works only for 2D
+        elif ndim == 3:
+            bds     = np.zeros((num_bds, ndim + 3), dtype = int) # This works only for quads on boundary
+
         coun    = 0
         for it, i in enumerate(lns[cn:]):
             if len(i.strip()) == 0:
@@ -276,6 +294,12 @@ class ConvertPer:
         op.close()
 
         for it, i in enumerate(lns):
+            if re.search('dimension', i) is not None:
+                break
+        cn = it + 1
+        ndim = int(lns[cn])
+
+        for it, i in enumerate(lns):
             if re.search('vertices', i) is not None:
                 break
 
@@ -295,8 +319,6 @@ class ConvertPer:
                 break
 
         cn   = cn + it 
-        ndim = int(lns[cn])
-
         cn   = cn + 1
 
         vert = np.zeros((num_vertices, ndim))
@@ -309,13 +331,15 @@ class ConvertPer:
                 vert[coun, jt] = j
 
             coun = coun + 1
+            if coun == num_vertices:
+                break
 
         return ndim, vert
 
 
 if __name__=="__main__":
-    fileName     = 'sq_mfem.mesh'
-    new_fileName = 'per_sq_mfem.mesh'
+    fileName     = 'cu_mfem.mesh'
+    new_fileName = 'per_cu_mfem.mesh'
 
     rn = ConvertPer()
     rn.convert(fileName, new_fileName)
