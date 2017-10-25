@@ -93,6 +93,8 @@ class ConvertPer:
 
 
     def modVertices(self, ndim, vert, bds, fileName, new_fileName):
+        print("Modifying elements for periodic topology")
+
         nvert   = vert.shape[0]
         nbds    = bds.shape[0]
 
@@ -113,7 +115,7 @@ class ConvertPer:
         num_ele = int(lns[cn])
         nop.write(lns[cn])
         cn = cn + 1
- 
+
         coun = 0
         for it, i in enumerate(lns[cn:]):
             if len(i.strip()) == 0: #Skip empty lines
@@ -137,7 +139,7 @@ class ConvertPer:
             st = st.rstrip()
 
             st = st + '\n'
-        
+
             nop.write(st)
 
             cn = cn + 1
@@ -147,11 +149,64 @@ class ConvertPer:
                 break
 
         for it, i in enumerate(lns[cn:]):
+            nop.write(i)
+            cn = cn + 1
+            if re.search('boundary', i) is not None:
+                break
+        cn = cn + 1
+
+        coun    = 0
+        bd_coun = 0 # Number of non periodic boundaries
+        st      = ''
+        for it, i in enumerate(lns[cn:]):
+            if len(i.strip()) == 0: #Skip empty lines
+                continue
+            ln  = i.split()
+
+            tag  = int(ln[0])
+            cn   = cn + 1
+            coun = coun + 1
+
+            period = False        
+            for j in self.periodic_tags:
+                if tag == j:
+                    period = True
+                    break
+            if period == True:
+                continue
+
+            bd_coun = bd_coun + 1
+
+            st = st + ln[0] + '\t' + ln[1] + '\t'
+
+            for j in ln[2:]:
+                notAssoc = True
+                assNode  = None 
+                for kt, k in enumerate(assoc):
+                    if (int(j) == k[1]):
+                        notAssoc = False
+                        assNode  = k[0]
+                if notAssoc == True:
+                    st = st + j + '\t'
+                else:
+                    st = st + str(assNode) + '\t'
+            st = st.rstrip()
+
+            st = st + '\n'
+
+            if coun == nbds:
+                break
+        st = str(bd_coun) + '\n' + st
+        nop.write(st)
+
+
+        for it, i in enumerate(lns[cn:]):
             if re.search('vertices', i) is not None:
                 break
             nop.write(i)
             cn = cn + 1
 
+        # Search for the second instance of vertices and only write those
         for it, i in enumerate(lns[cn + 1:]):
             if re.search('vertices', i) is not None:
                 break
@@ -169,6 +224,8 @@ class ConvertPer:
         '''
         Get boundary vertices that have periodic tags
         '''
+        print("Getting periodic elements")
+
         bd_vert = [[], []]
 
         lo = min(self.periodic_tags)
@@ -204,11 +261,15 @@ class ConvertPer:
         bd_vert = np.array(bd_vert)
 
         return bd_vert
+
  
     def getAssoc(self, ndim, bd_vert, vert):
         '''
         Get the periodic vertex associations 
         '''
+
+        print("Getting periodic assocations")
+
         assoc   = [] 
 
         for i in bd_vert[0]:
@@ -246,6 +307,8 @@ class ConvertPer:
 
 
     def getBoundaries(self, fileName, ndim):
+        print("Getting boundary elements")
+
         op  = open(fileName, 'r')
         lns = op.readlines()
         op.close()
@@ -289,6 +352,8 @@ class ConvertPer:
 
 
     def getVertices(self, fileName):
+        print("Getting vertices")
+
         op  = open(fileName, 'r')
         lns = op.readlines()
         op.close()
@@ -338,8 +403,8 @@ class ConvertPer:
 
 
 if __name__=="__main__":
-    fileName     = 'cu_mfem.mesh'
-    new_fileName = 'per_cu_mfem.mesh'
+    fileName     = 'cube_mfem.mesh'
+    new_fileName = 'test_cube.mesh'
 
     rn = ConvertPer()
     rn.convert(fileName, new_fileName)
