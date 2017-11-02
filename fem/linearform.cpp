@@ -95,8 +95,6 @@ void LinearForm::Assemble()
             fes -> GetElementVDofs (tr -> Elem2No, vdofs2);
             vdofs.Append(vdofs2);
 
-//            for (int k = 0; k < vdofs2.Size(); k++) std::cout << k << '\t' << vdofs2[k] << std::endl;
-
             for (int k = 0; k < ilfi.Size(); k++)
             {
                ilfi[k] -> AssembleRHSElementVect (*fes->GetFE(tr -> Elem1No),
@@ -141,6 +139,7 @@ void LinearForm::Assemble()
          if (bdr_attr_marker[bdr_attr-1] == 0) { continue; }
 
          tr = mesh->GetBdrFaceTransformations(i);
+//         std::cout << i << "\t" << tr->Elem1No << "\t" << flfi_marker[0]<< std::endl;
          if (tr != NULL)
          {
             fes -> GetElementVDofs (tr -> Elem1No, vdofs);

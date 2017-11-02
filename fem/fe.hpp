@@ -1417,6 +1417,11 @@ public:
    // { CalcLegendre(p, x, u); }
    { CalcChebyshev(p, x, u); }
 
+   // Evaluate the values of a hierarchical 1D basis at point x
+   // hierarchical = k-th basis function is degree k polynomial
+   static void CalcLegendreBasis(const int p, const double x, double *u)
+    { CalcLegendre(p, x, u); }
+
    // Evaluate the values and derivatives of a hierarchical 1D basis at point x
    static void CalcBasis(const int p, const double x, double *u, double *d)
    // { CalcMono(p, x, u, d); }

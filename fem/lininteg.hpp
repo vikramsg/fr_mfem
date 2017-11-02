@@ -377,6 +377,7 @@ public:
    void getEulerFlux(const double R, const double gamm, const Vector &u, Vector &f);
 
    void getLFFlux(const double R, const double gamm, const Vector &u1, const Vector &u2, const Vector &nor, Vector &f);
+   void getHLLFlux(const double R, const double gamm, const Vector &u1, const Vector &u2, const Vector &nor, Vector &f);
 
    void getConvectiveFlux(const double R, const double gamm, const Vector &u1, const Vector &u2, const Vector &nor, Vector &f);
 };
@@ -426,6 +427,52 @@ public:
                                        Vector &elvect);
 
 };
+
+
+/** Interior face Riemann integrator
+    */
+class mDGEulerIntegrator : public LinearFormIntegrator, public EulerIntegrator
+{
+protected:
+   VectorCoefficient &uD;
+   VectorCoefficient &fD;
+
+   double gamm;
+   double R   ;
+
+   int vDim;//Vector dimension 
+
+   double m_fac; // mDG factor alpha_m
+   double alpha; // b = alpha*b
+
+   Vector shape1, shape2;
+   Vector vu, nor;
+   Vector P;
+   DenseMatrix van1, van2, inv_van1, inv_van2;
+   
+   Vector mod_lag1_R, mod_lag1_L;
+   Vector mod_lag2_R, mod_lag2_L;
+   Vector mod_shape1, mod_shape2;
+   Vector shape_x, shape_y, shape_z;
+
+public:
+   mDGEulerIntegrator(double R_, double gamm_, VectorCoefficient &uD_, VectorCoefficient &fD_, double m_fac_, double alpha_)
+      : uD(uD_), fD(fD_), m_fac(m_fac_), alpha(alpha_), R(R_), gamm(gamm_) { }
+
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       ElementTransformation &Tr,
+                                       Vector &elvect);
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       FaceElementTransformations &Tr,
+                                       Vector &elvect);
+   //For interior faces
+   virtual void AssembleRHSElementVect(const FiniteElement &el1,
+                                       const FiniteElement &el2,
+                                       FaceElementTransformations &Tr,
+                                       Vector &elvect);
+
+};
+
 
 
 

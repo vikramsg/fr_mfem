@@ -808,6 +808,131 @@ void EulerIntegrator::getLFFlux(const double R, const double gamm, const Vector 
 }
 
 
+/*
+ * Get Interaction flux using the HLL 
+ * solver, u1 is the left value and u2 the right value
+ */
+void EulerIntegrator::getHLLFlux(const double R, const double gamm, const Vector &u1, const Vector &u2, 
+                                const Vector &nor, Vector &f)
+{
+    int var_dim = u1.Size();
+    int dim     = var_dim - 2;
+
+    double Cv   = R/(gamm - 1);
+
+    double rho_L = u1(0);
+    
+    Vector vel_L(dim);
+    for (int i = 0; i < dim; i++)
+    {
+        vel_L(i) = u1(1 + i)/rho_L;    
+    }
+    double E_L   = u1(var_dim - 1);
+
+    double vel_sq_L = 0.0;
+    for (int i = 0; i < dim; i++)
+    {
+        vel_sq_L += pow(vel_L(i), 2) ;
+    }
+    double T_L   = (E_L - 0.5*rho_L*vel_sq_L)/(rho_L*Cv);
+    double a_L   = sqrt(gamm * R * T_L);
+    double p_L   = rho_L*R*T_L; 
+    double H_L   = E_L + p_L; 
+
+    double rho_R = u2(0);
+    Vector vel_R(dim);
+    for (int i = 0; i < dim; i++)
+    {
+        vel_R(i) = u2(1 + i)/rho_R;    
+    }
+    double E_R   = u2(var_dim - 1);
+
+    double vel_sq_R = 0.0;
+    for (int i = 0; i < dim; i++)
+    {
+        vel_sq_R += pow(vel_R(i), 2) ;
+    }
+    double T_R   = (E_R - 0.5*rho_R*vel_sq_R)/(rho_R*Cv);
+    double a_R   = sqrt(gamm * R * T_R);
+    double p_R   = rho_R*R*T_R; 
+    double H_R   = E_R + p_R; 
+
+    Vector nor_dim(dim);
+    double nor_l2 = nor.Norml2();
+    nor_dim.Set(1/nor_l2, nor);
+
+    double vnl   = 0.0, vnr = 0.0;
+    for (int i = 0; i < dim; i++)
+    {
+        vnl += vel_L[i]*nor_dim(i); 
+        vnr += vel_R[i]*nor_dim(i); 
+    }
+    
+    double rho_half = (rho_L + rho_R)/2.0; 
+    double a_half   = (a_L + a_R)/2.0; 
+
+    double v_half   = (vnl + vnr)/2.0 - (p_R - p_L)/(2*rho_half*a_half); 
+    double p_half   = (p_L + p_R)/2.0 - (vnr - vnl)*rho_half*a_half/2.0; 
+
+    p_half = std::max(0.0, p_half);
+
+    double q_L, q_R;
+
+    if (p_half <= p_L)
+    {
+        q_L = 1.0   ;
+    }
+    else
+    {
+        q_L = sqrt(1 + ((gamm + 1)/(2*gamm))*(p_half/p_L - 1)  );
+    }
+    if (p_half <= p_R)
+    {
+        q_R = 1.0; 
+    }
+    else
+    {
+        q_R = sqrt(1 + ((gamm + 1)/(2*gamm))*(p_half/p_R - 1)  );
+    }
+
+    double s_L, s_R, s_half;
+
+    s_L = vnl - a_L*q_L;
+    s_R = vnr + a_R*q_R;
+
+    s_half = v_half;
+
+    Vector fl(dim*var_dim), fr(dim*var_dim);
+    getEulerFlux(R, gamm, u1, fl);
+    getEulerFlux(R, gamm, u2, fr);
+
+    if (0 <= s_L)
+    {
+        f = fl;
+    }
+    else if ((s_L < 0 ) && (0 < s_R))
+    {
+        fl *= s_R;    
+        fr *= -s_L;    
+        add(fl, fr, f);
+        f  *= 1/(s_R - s_L);
+        for (int i = 0; i < dim; i++)
+        {
+            for (int j = 0; j < var_dim; j++)
+            {
+                f(i*var_dim + j) += (s_L*s_R)*(u2(j) - u1(j))/(s_R - s_L); 
+            }
+        }
+    }
+    else
+    {
+        f = fr;
+    }
+
+}
+
+
+
 
 /*
  * Get Interaction flux using a simple central flux 
@@ -1018,6 +1143,315 @@ void DGEulerIntegrator::AssembleRHSElementVect(
 
 }
 
+
+void mDGEulerIntegrator::AssembleRHSElementVect(
+   const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
+{
+   mfem_error("mDGEulerIntegrator::AssembleRHSElementVect");
+}
+
+void mDGEulerIntegrator::AssembleRHSElementVect(
+   const FiniteElement &el, FaceElementTransformations &Tr, Vector &elvect)
+{
+   mfem_error("mDGEEulerIntegrator::AssembleRHSElementVect");
+}
+
+
+
+void mDGEulerIntegrator::AssembleRHSElementVect(
+   const FiniteElement &el1, const FiniteElement &el2, FaceElementTransformations &Trans, Vector &elvect)
+{
+   int dim, ndof1, ndof2;
+   double un, a, b, w;
+
+   dim  = el1.GetDim();
+   vDim = dim + 2; // CNS variable dimension
+   ndof1 = el1.GetDof();
+   ndof2 = el2.GetDof();
+   
+   vu.SetSize(dim); nor.SetSize(dim);
+
+   elvect.SetSize(vDim*(ndof1 + ndof2));
+   elvect = 0.0;
+
+   shape1.SetSize(ndof1);
+   shape2.SetSize(ndof2);
+
+   double tol = std::numeric_limits<double>::epsilon();
+
+   Poly_1D poly1, poly2;
+   int p1_basis = el1.GetOrder(), p2_basis = el2.GetOrder(), type = 0;
+   
+   int Np1 = p1_basis + 1, Np2 = p2_basis + 1;
+   Poly_1D::Basis &basis1(poly1.OpenBasis(p1_basis, type));
+   Poly_1D::Basis &basis2(poly2.OpenBasis(p2_basis, type));
+
+   const double *pts1 = poly1.GetPoints(p1_basis, type);
+   P.SetSize(Np1);
+   van1.SetSize(Np1);
+   for (int i = 0; i < Np1; i++)
+   {
+       poly1.CalcLegendreBasis(p1_basis, pts1[i], P);
+       van1.SetRow(i, P);
+   
+       for (int j = 0; j < Np1; j++)
+       {
+           double p_gamma = 2.0/(2.0*j + 1);
+           van1(i, j)   = van1(i, j)/sqrt(p_gamma);
+       }
+   }
+   const double *pts2 = poly2.GetPoints(p2_basis, type);
+   P.SetSize(Np2);
+   van2.SetSize(Np2);
+   for (int i = 0; i < Np2; i++)
+   {
+       poly2.CalcLegendreBasis(p2_basis, pts2[i], P);
+       van2.SetRow(i, P);
+   
+       for (int j = 0; j < Np2; j++)
+       {
+           double p_gamma = 2.0/(2.0*j + 1);
+           van2(i, j)   = van2(i, j)/sqrt(p_gamma);
+       }
+   }
+
+   van1.Transpose(); van1.Invert();
+   van2.Transpose(); van2.Invert();
+
+   mod_lag1_R.SetSize(Np1); mod_lag1_L.SetSize(Np1);
+   P.SetSize(Np1);
+   poly1.CalcLegendreBasis(p1_basis, 0.0, P);
+   for (int j = 0; j < Np1; j++)
+   {
+       double p_gamma = 2.0/(2.0*j + 1);
+       P[j] = P[j]/sqrt(p_gamma);
+   }
+   P[Np1 - 1] *= m_fac;
+   van1.Mult(P, mod_lag1_L);
+   poly1.CalcLegendreBasis(p1_basis, 1.0, P);
+   for (int j = 0; j < Np1; j++)
+   {
+       double p_gamma = 2.0/(2.0*j + 1);
+       P[j] = P[j]/sqrt(p_gamma);
+   }
+   P[Np1 - 1] *= m_fac;
+   van1.Mult(P, mod_lag1_R);
+
+   mod_lag2_R.SetSize(Np2); mod_lag2_L.SetSize(Np2);
+   P.SetSize(Np2);
+   poly2.CalcLegendreBasis(p2_basis, 0.0, P);
+   for (int j = 0; j < Np2; j++)
+   {
+       double p_gamma = 2.0/(2.0*j + 1);
+       P[j] = P[j]/sqrt(p_gamma);
+   }
+   P[Np2 - 1] *= m_fac;
+   van2.Mult(P, mod_lag2_L);
+   poly2.CalcLegendreBasis(p2_basis, 1.0, P);
+   for (int j = 0; j < Np2; j++)
+   {
+       double p_gamma = 2.0/(2.0*j + 1);
+       P[j] = P[j]/sqrt(p_gamma);
+   }
+   P[Np2 - 1] *= m_fac;
+   van2.Mult(P, mod_lag2_R);
+
+
+   const IntegrationRule *ir = IntRule;
+   if (ir == NULL)
+   {
+      int order;
+      // Assuming order(u)==order(mesh)
+      if (Trans.Elem2No >= 0)
+         order = (std::min(Trans.Elem1->OrderW(), Trans.Elem2->OrderW()) +
+                  2*std::max(el1.GetOrder(), el2.GetOrder()));
+      else
+      {
+         order = Trans.Elem1->OrderW() + 2*el1.GetOrder();
+      }
+      if (el1.Space() == FunctionSpace::Pk)
+      {
+         order++;
+      }
+      ir = &IntRules.Get(Trans.FaceGeom, order);
+   }
+   
+   mod_shape1.SetSize(ndof1); mod_shape2.SetSize(ndof2);
+
+   for (int p = 0; p < ir->GetNPoints(); p++)
+   {
+      const IntegrationPoint &ip = ir->IntPoint(p);
+      IntegrationPoint eip1, eip2;
+      Trans.Loc1.Transform(ip, eip1);
+      if (ndof2)
+      {
+         Trans.Loc2.Transform(ip, eip2);
+      }
+
+      Trans.Face->SetIntPoint(&ip);
+      Trans.Elem1->SetIntPoint(&eip1);
+      Trans.Elem2->SetIntPoint(&eip2);
+
+      el1.CalcShape(eip1, shape1);
+      el2.CalcShape(eip2, shape2);
+
+      if (dim == 1)
+      {
+         nor(0) = 2*eip1.x - 1.0;
+      }
+      else
+      {
+         CalcOrtho(Trans.Face->Jacobian(), nor);
+      }
+
+      Vector u1_dir(vDim), u2_dir(vDim);
+      uD.Eval(u1_dir, *Trans.Elem1, eip1);
+      uD.Eval(u2_dir, *Trans.Elem2, eip2);
+
+      Vector f_dir(dim*vDim);
+
+      getLFFlux(R, gamm, u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using local Lax Friedrichs
+
+      Vector f1_dir(dim*vDim), f2_dir(dim*vDim);
+      fD.Eval(f1_dir, *Trans.Elem1, eip1); // Get discontinuous flux at face
+      fD.Eval(f2_dir, *Trans.Elem2, eip2);
+
+
+      Vector face_f(vDim), face_f1(vDim), face_f2(vDim); //Face fluxes (dot product with normal)
+      face_f = 0.0; face_f1 = 0.0; face_f2 = 0.0;
+      for (int i = 0; i < dim; i++)
+      {
+          for (int j = 0; j < vDim; j++)
+          {
+              face_f1(j) += f1_dir(i*vDim + j)*nor(i);
+              face_f2(j) += f2_dir(i*vDim + j)*nor(i);
+              face_f (j) += f_dir (i*vDim + j)*nor(i);
+          }
+      }
+
+      w = ip.weight * alpha; 
+
+      shape_x.SetSize(Np1); shape_y.SetSize(Np1);
+
+      P.SetSize(Np1);
+      poly1.CalcLegendreBasis(p1_basis, eip1.x, P);
+      for (int j = 0; j < Np1; j++)
+      {
+          double p_gamma = 2.0/(2.0*j + 1);
+          P[j] = P[j]/sqrt(p_gamma);
+      }
+      P[Np1 - 1] *= m_fac;
+      van1.Mult(P, shape_x);
+      poly1.CalcLegendreBasis(p1_basis, eip1.y, P);
+      for (int j = 0; j < Np1; j++)
+      {
+          double p_gamma = 2.0/(2.0*j + 1);
+          P[j] = P[j]/sqrt(p_gamma);
+      }
+      P[Np1 - 1] *= m_fac;
+      van1.Mult(P, shape_y);
+
+      if (dim == 2)
+      {
+          mod_shape1 = 0.0;
+          for (int ot = 0, jt = 0; jt <= p1_basis; jt++)
+              for (int it = 0; it <= p1_basis; it++)
+              {
+                  mod_shape1(ot++) = shape_x(it)*shape_y(jt);
+              }
+      }
+      else if (dim == 3)
+      {
+          shape_z.SetSize(Np1); 
+          
+          poly1.CalcLegendreBasis(p1_basis, eip1.z, P);
+          for (int j = 0; j < Np1; j++)
+          {
+              double p_gamma = 2.0/(2.0*j + 1);
+              P[j] = P[j]/sqrt(p_gamma);
+          }
+          P[Np1 - 1] *= m_fac;
+          van1.Mult(P, shape_z);
+          
+          mod_shape1 = 0.0;
+          for (int ot = 0, kt = 0; kt <= p1_basis; kt++)
+              for (int jt = 0; jt <= p1_basis; jt++)
+                  for (int it = 0; it <= p1_basis; it++)
+                  {
+                      mod_shape1(ot++) = shape_x(it)*shape_y(jt)*shape_z(kt);                          
+                  }
+      }
+      
+      shape_x.SetSize(Np2); shape_y.SetSize(Np2);
+      P.SetSize(Np2);
+      poly2.CalcLegendreBasis(p2_basis, eip2.x, P);
+      for (int j = 0; j < Np2; j++)
+      {
+          double p_gamma = 2.0/(2.0*j + 1);
+          P[j] = P[j]/sqrt(p_gamma);
+      }
+      P[Np2 - 1] *= m_fac;
+      van2.Mult(P, shape_x);
+      poly2.CalcLegendreBasis(p2_basis, eip2.y, P);
+      for (int j = 0; j < Np2; j++)
+      {
+          double p_gamma = 2.0/(2.0*j + 1);
+          P[j] = P[j]/sqrt(p_gamma);
+      }
+      P[Np2 - 1] *= m_fac;
+      van2.Mult(P, shape_y);
+
+      if (dim == 2)
+      {
+          mod_shape2 = 0.0;
+          for (int ot = 0, jt = 0; jt <= p2_basis; jt++)
+              for (int it = 0; it <= p2_basis; it++)
+              {
+                  mod_shape2(ot++) = shape_x(it)*shape_y(jt);
+              }
+      }
+      else if (dim == 3)
+      {
+          shape_z.SetSize(Np2); 
+
+          poly2.CalcLegendreBasis(p2_basis, eip2.z, P);
+          for (int j = 0; j < Np2; j++)
+          {
+              double p_gamma = 2.0/(2.0*j + 1);
+              P[j] = P[j]/sqrt(p_gamma);
+          }
+          P[Np2 - 1] *= m_fac;
+          van2.Mult(P, shape_z);
+
+          mod_shape2 = 0.0;
+          for (int ot = 0, kt = 0; kt <= p2_basis; kt++)
+              for (int jt = 0; jt <= p2_basis; jt++)
+                  for (int it = 0; it <= p2_basis; it++)
+                  {
+                      mod_shape2(ot++) = shape_x(it)*shape_y(jt)*shape_z(kt);                          
+                  }
+      }
+
+      subtract(face_f, face_f1, face_f1); //f_comm - f1
+      for (int j = 0; j < vDim; j++)
+      {
+          for (int i = 0; i < ndof1; i++)
+          {
+              elvect(j*ndof1 + i)              += face_f1(j)*w*mod_shape1(i); 
+          }
+      }
+
+      subtract(face_f, face_f2, face_f2); //fcomm - f2
+      for (int j = 0; j < vDim; j++)
+      {
+          for (int i = 0; i < ndof2; i++)
+          {
+              elvect(vDim*ndof1 + j*ndof2 + i) -= face_f2(j)*w*mod_shape2(i); 
+          }
+      }
+
+   }// for ir loop
+}
 
 
 
@@ -1804,7 +2238,7 @@ void CNSIntegrator::getViscousCNSFlux(double R, double gamm, const Vector &u, co
 void DG_CNS_Vis_Adiabatic_Integrator::AssembleRHSElementVect(
    const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
 {
-   mfem_error("DGEulerIntegrator::AssembleRHSElementVect");
+   mfem_error("DG_CNS_Vis_Ad_Integrator::AssembleRHSElementVect");
 }
 
 
@@ -1967,13 +2401,13 @@ void DG_CNS_Vis_Adiabatic_Integrator::AssembleRHSElementVect(
 void DG_Viscous_Integrator::AssembleRHSElementVect(
    const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
 {
-   mfem_error("DGEulerIntegrator::AssembleRHSElementVect");
+   mfem_error("DG_Viscous_Integrator::AssembleRHSElementVect");
 }
 
 void DG_Viscous_Integrator::AssembleRHSElementVect(
    const FiniteElement &el, FaceElementTransformations &Tr, Vector &elvect)
 {
-   mfem_error("DGEEulerIntegrator::AssembleRHSElementVect");
+   mfem_error("DG_Viscous_Integrator::AssembleRHSElementVect");
 }
 
 
@@ -2109,13 +2543,13 @@ void DG_Viscous_Integrator::AssembleRHSElementVect(
 void DG_Viscous_Aux_Integrator::AssembleRHSElementVect(
    const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
 {
-   mfem_error("DGEulerIntegrator::AssembleRHSElementVect");
+   mfem_error("DG_Viscous_Aux_Integrator::AssembleRHSElementVect");
 }
 
 void DG_Viscous_Aux_Integrator::AssembleRHSElementVect(
    const FiniteElement &el, FaceElementTransformations &Tr, Vector &elvect)
 {
-   mfem_error("DGEEulerIntegrator::AssembleRHSElementVect");
+   mfem_error("DG_Viscous_Aux_Integrator::AssembleRHSElementVect");
 }
 
 
