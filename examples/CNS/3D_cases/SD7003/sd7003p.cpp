@@ -8,20 +8,20 @@ using namespace mfem;
 
 //Constants
 const double gamm  = 1.4;
-const double   mu  = 0.031;
+const double   mu  = 0.00031;
 const double R_gas = 287;
 const double   Pr  = 0.72;
 
 //Run parameters
-const char *mesh_file        =  "cylinder_visc.msh";
+const char *mesh_file        =  "3d_sd7003_per_v2.mesh";
 const int    order           =  2;
 const double t_final         =  0.003  ;
-const int    problem         =  1;
+const int    problem         =  0;
 const int    ref_levels      =  0;
 
-const bool   time_adapt      =  false;
-const double cfl             =  0.5  ;
-const double dt_const        =  0.00015;
+const bool   time_adapt      =  true ;
+const double cfl             =  0.25 ;
+const double dt_const        =  0.0001 ;
 const int    ode_solver_type =  3; // 1. Forward Euler 2. TVD SSP 3 Stage
 
 const int    vis_steps       = 1750;
@@ -243,10 +243,10 @@ CNS::CNS()
    // Define boundary terms
    // Each boundary should have its own marker since they are passed by ref
    Array<int> dir_bdr_char(pmesh->bdr_attributes.Max()); 
-   dir_bdr_char = 0; dir_bdr_char[1] = 1; 
+   dir_bdr_char = 0; dir_bdr_char[0] = 1; 
    Array<int> dir_bdr_wall(pmesh->bdr_attributes.Max());
    dir_bdr_wall    = 0; // Deactivate all boundaries
-   dir_bdr_wall[0] = 1; // Activate lid boundary 
+   dir_bdr_wall[1] = 1; // Activate lid boundary 
 
    VectorFunctionCoefficient u_char_bnd(var_dim, char_bnd_cnd); // Defines characterstic boundary condition
    VectorFunctionCoefficient u_wall_bnd(aux_dim, wall_bnd_cnd); // Defines wall boundary condition
@@ -297,10 +297,12 @@ CNS::CNS()
    k_vis_y->Assemble(skip_zeros);
    k_vis_y->Finalize(skip_zeros);
 
+   VectorConstantCoefficient z_dir(ydir);
    if (dim == 3)
    {
        zdir = 0.0; zdir(2) = 1.0;
-       VectorConstantCoefficient z_dir(zdir);
+       VectorConstantCoefficient temp_z_dir(zdir);
+       z_dir = temp_z_dir;
       
        k_inv_z = new ParBilinearForm(fes_op);
        k_inv_z->AddDomainIntegrator(new ConvectionIntegrator(z_dir, -1.0));
@@ -454,19 +456,19 @@ CNS::CNS()
    }
    force_file.close();
    
-//   // Print all nodes in the finite element space 
-//   FiniteElementSpace fes_nodes(mesh, vfec, dim);
-//   GridFunction nodes(&fes_nodes);
-//   mesh->GetNodes(nodes);
-//
-//   for (int i = 0; i < nodes.Size()/dim; i++)
-//   {
-//       int offset = nodes.Size()/dim;
-//       int sub1 = i, sub2 = offset + i, sub3 = 2*offset + i, sub4 = 3*offset + i;
-////       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << "\t" << rhs(sub2)<< endl;      
-////       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << "\t" << u_out(sub1) << endl;      
-//   }
-//
+////   // Print all nodes in the finite element space 
+////   FiniteElementSpace fes_nodes(mesh, vfec, dim);
+////   GridFunction nodes(&fes_nodes);
+////   mesh->GetNodes(nodes);
+////
+////   for (int i = 0; i < nodes.Size()/dim; i++)
+////   {
+////       int offset = nodes.Size()/dim;
+////       int sub1 = i, sub2 = offset + i, sub3 = 2*offset + i, sub4 = 3*offset + i;
+//////       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << "\t" << rhs(sub2)<< endl;      
+//////       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << "\t" << u_out(sub1) << endl;      
+////   }
+////
    
    delete adv;
    delete K_inv_z, K_vis_z;
@@ -596,12 +598,7 @@ void FE_Evolution::Mult(const GridFunction &x, GridFunction &y) const
     getInvFlux(dim, u, f_I); // To update f_vec
     
     getAuxVar(dim, x, u_aux);
-    getAuxGrad(dim, K_vis_x, K_vis_y, K_vis_z, M_solver, x, 
-            b_aux_x, b_aux_y, b_aux_z,
-            u_grad);
-    getVisFlux(dim, x, u_grad, f_V);
-
-    b.Assemble();
+    
     b_aux_x.Assemble();
     b_aux_y.Assemble();
     if (dim == 3)
@@ -609,13 +606,18 @@ void FE_Evolution::Mult(const GridFunction &x, GridFunction &y) const
         b_aux_z.Assemble();
     }
 
+
+    getAuxGrad(dim, K_vis_x, K_vis_y, K_vis_z, M_solver, x, 
+            b_aux_x, b_aux_y, b_aux_z,
+            u_grad);
+    getVisFlux(dim, x, u_grad, f_V);
+
+    b.Assemble();
+
     y.SetSize(x.Size()); // Needed since by default ode_init will set it as size of K
 
     Vector y_temp;
     y_temp.SetSize(x.Size()); 
-
-    Vector f(dim*x.Size());
-    getInvFlux(dim, x, f);
 
     int offset  = K_inv_x.GetNumRows();
     Array<int> offsets[dim*var_dim];
@@ -637,7 +639,7 @@ void FE_Evolution::Mult(const GridFunction &x, GridFunction &y) const
     y = 0.0;
     for(int i = 0; i < var_dim; i++)
     {
-        f.GetSubVector(offsets[i], f_sol);
+        f_I.GetSubVector(offsets[i], f_sol);
         K_inv_x.Mult(f_sol, f_x);
         b.GetSubVector(offsets[i], b_sub);
         f_x += b_sub; // Needs to be added only once
@@ -647,7 +649,7 @@ void FE_Evolution::Mult(const GridFunction &x, GridFunction &y) const
 
     for(int i = var_dim + 0; i < 2*var_dim; i++)
     {
-        f.GetSubVector(offsets[i], f_sol);
+        f_I.GetSubVector(offsets[i], f_sol);
         K_inv_y.Mult(f_sol, f_x);
         y_temp.SetSubVector(offsets[i - var_dim], f_x);
     }
@@ -658,7 +660,7 @@ void FE_Evolution::Mult(const GridFunction &x, GridFunction &y) const
     {
         for(int i = 2*var_dim + 0; i < 3*var_dim; i++)
         {
-            f.GetSubVector(offsets[i], f_sol);
+            f_I.GetSubVector(offsets[i], f_sol);
             K_inv_z.Mult(f_sol, f_x);
             y_temp.SetSubVector(offsets[i - 2*var_dim], f_x);
         }
@@ -991,7 +993,7 @@ void init_function(const Vector &x, Vector &v)
    {
        double rho, u1, u2, u3, p;
        rho = 1;
-       u1  = 3.10   ; u2 = 0.0   ; u3 = 0.0;
+       u1  = 3.0924; u2 = 0.2162; u3 = 0.0;
        p   = 172.2;
     
        double v_sq = pow(u1, 2) + pow(u2, 2) + pow(u3, 2);
@@ -1007,7 +1009,7 @@ void init_function(const Vector &x, Vector &v)
    {
        double rho, u1, u2, u3, p;
        rho = 1;
-       u1  = 3.1   ; u2 = 0.0   ; u3 = 0.0;
+       u1 = 3.0924; u2 = 0.2162; u3 = 0.0;
        p   = 172.2;
     
        double v_sq = pow(u1, 2) + pow(u2, 2);
@@ -1030,8 +1032,8 @@ void char_bnd_cnd(const Vector &x, Vector &v)
    {
        double rho, u1, u2, p;
        rho = 1;
-       u1 = 3.1; u2 = 0.0;
-       p   =172.2;
+       u1  = 3.0924; u2 = 0.2162; 
+       p   = 172.2;
     
        double v_sq = pow(u1, 2) + pow(u2, 2);
     
@@ -1044,7 +1046,7 @@ void char_bnd_cnd(const Vector &x, Vector &v)
    {
        double rho, u1, u2, u3, p;
        rho = 1;
-       u1 = 3.0924; u2 = 0.2162; u3 = 0.0;
+       u1  = 3.0924; u2 = 0.2162; u3 = 0.0;
        p   =172.2;
     
        double v_sq = pow(u1, 2) + pow(u2, 2) + pow(u3, 2);

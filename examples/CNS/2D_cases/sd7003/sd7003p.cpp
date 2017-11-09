@@ -8,23 +8,23 @@ using namespace mfem;
 
 //Constants
 const double gamm  = 1.4;
-const double   mu  = 0.031;
+const double   mu  = 0.00031;
 const double R_gas = 287;
 const double   Pr  = 0.72;
 
 //Run parameters
-const char *mesh_file        =  "cylinder_visc.msh";
-const int    order           =  2;
-const double t_final         =  0.003  ;
+const char *mesh_file        =  "sd7003_v2.msh";
+const int    order           =  3;
+const double t_final         =100.003  ;
 const int    problem         =  1;
 const int    ref_levels      =  0;
 
-const bool   time_adapt      =  false;
-const double cfl             =  0.5  ;
-const double dt_const        =  0.00015;
+const bool   time_adapt      =  true ;
+const double cfl             =  0.9  ;
+const double dt_const        =  0.000015;
 const int    ode_solver_type =  3; // 1. Forward Euler 2. TVD SSP 3 Stage
 
-const int    vis_steps       = 1750;
+const int    vis_steps       = 2000;
 
 const bool   adapt           =  false;
 const int    adapt_iter      =  200  ; // Time steps after which adaptation is done
@@ -73,13 +73,13 @@ private:
    HypreSmoother M_prec;
    CGSolver M_solver;
                             
-   GridFunction &u, &u_aux, &u_grad, &f_I, &f_V;
+   ParGridFunction &u, &u_aux, &u_grad, &f_I, &f_V;
                             
 public:
    FE_Evolution(HypreParMatrix &_M, HypreParMatrix &_K_inv_x, HypreParMatrix &_K_inv_y, HypreParMatrix &_K_inv_z, 
                             HypreParMatrix &_K_vis_x, HypreParMatrix &_K_vis_y, HypreParMatrix &_K_vis_z,
-                            GridFunction &u_,   GridFunction &u_aux, GridFunction &u_grad, 
-                            GridFunction &f_I_, GridFunction &f_V_,
+                            ParGridFunction &u_,   ParGridFunction &u_aux, ParGridFunction &u_grad, 
+                            ParGridFunction &f_I_, ParGridFunction &f_V_,
                             ParLinearForm &_b_aux_x, ParLinearForm &_b_aux_y, ParLinearForm &_b_aux_z, 
                             ParLinearForm &_b);
 
@@ -89,7 +89,7 @@ public:
 
    void Update();
 
-   virtual void Mult(const GridFunction &x, GridFunction &y) const;
+   virtual void Mult(const ParGridFunction &x, ParGridFunction &y) const;
 
    virtual ~FE_Evolution() { }
 };
@@ -423,7 +423,8 @@ CNS::CNS()
       if (ti % 25 == 0) // Check time
       {
           chrono.Stop();
-          cout << "25 Steps took "<< chrono.RealTime() << " s "<< endl;
+          if (myid == 0)
+              cout << "25 Steps took "<< chrono.RealTime() << " s "<< endl;
 
           chrono.Clear();
           chrono.Start();
@@ -566,8 +567,8 @@ void CNS::Step()
 // Implementation of class FE_Evolution
 FE_Evolution::FE_Evolution(HypreParMatrix &_M, HypreParMatrix &_K_inv_x, HypreParMatrix &_K_inv_y, HypreParMatrix &_K_inv_z, 
                             HypreParMatrix &_K_vis_x, HypreParMatrix &_K_vis_y, HypreParMatrix &_K_vis_z,
-                            GridFunction &u_,   GridFunction &u_aux_, GridFunction &u_grad_, 
-                            GridFunction &f_I_, GridFunction &f_V_,
+                            ParGridFunction &u_,   ParGridFunction &u_aux_, ParGridFunction &u_grad_, 
+                            ParGridFunction &f_I_, ParGridFunction &f_V_,
                             ParLinearForm &_b_aux_x, ParLinearForm &_b_aux_y, ParLinearForm &_b_aux_z, 
                             ParLinearForm &_b)
    : TimeDependentOperator(_b.Size()), M(_M), K_inv_x(_K_inv_x), K_inv_y(_K_inv_y), K_inv_z(_K_inv_z),
@@ -587,35 +588,36 @@ FE_Evolution::FE_Evolution(HypreParMatrix &_M, HypreParMatrix &_K_inv_x, HyprePa
 
 
 
-void FE_Evolution::Mult(const GridFunction &x, GridFunction &y) const
+void FE_Evolution::Mult(const ParGridFunction &x, ParGridFunction &y) const
 {
     int dim = x.Size()/K_inv_x.GetNumRows() - 2;
     int var_dim = dim + 2;
 
     u = x;
-    getInvFlux(dim, u, f_I); // To update f_vec
+   
+    u.ExchangeFaceNbrData(); //Exchange data across processors
+    getInvFlux(dim, u, f_I);  // To update f_vec
     
     getAuxVar(dim, x, u_aux);
-    getAuxGrad(dim, K_vis_x, K_vis_y, K_vis_z, M_solver, x, 
-            b_aux_x, b_aux_y, b_aux_z,
-            u_grad);
-    getVisFlux(dim, x, u_grad, f_V);
+    u_aux.ExchangeFaceNbrData(); //Exchange data across processors
 
-    b.Assemble();
     b_aux_x.Assemble();
     b_aux_y.Assemble();
     if (dim == 3)
     {
         b_aux_z.Assemble();
     }
+    getAuxGrad(dim, K_vis_x, K_vis_y, K_vis_z, M_solver, x, 
+            b_aux_x, b_aux_y, b_aux_z,
+            u_grad);
+    getVisFlux(dim, x, u_grad, f_V);
+
+    b.Assemble();
 
     y.SetSize(x.Size()); // Needed since by default ode_init will set it as size of K
 
     Vector y_temp;
     y_temp.SetSize(x.Size()); 
-
-    Vector f(dim*x.Size());
-    getInvFlux(dim, x, f);
 
     int offset  = K_inv_x.GetNumRows();
     Array<int> offsets[dim*var_dim];
@@ -637,7 +639,7 @@ void FE_Evolution::Mult(const GridFunction &x, GridFunction &y) const
     y = 0.0;
     for(int i = 0; i < var_dim; i++)
     {
-        f.GetSubVector(offsets[i], f_sol);
+        f_I.GetSubVector(offsets[i], f_sol);
         K_inv_x.Mult(f_sol, f_x);
         b.GetSubVector(offsets[i], b_sub);
         f_x += b_sub; // Needs to be added only once
@@ -647,7 +649,7 @@ void FE_Evolution::Mult(const GridFunction &x, GridFunction &y) const
 
     for(int i = var_dim + 0; i < 2*var_dim; i++)
     {
-        f.GetSubVector(offsets[i], f_sol);
+        f_I.GetSubVector(offsets[i], f_sol);
         K_inv_y.Mult(f_sol, f_x);
         y_temp.SetSubVector(offsets[i - var_dim], f_x);
     }
@@ -658,7 +660,7 @@ void FE_Evolution::Mult(const GridFunction &x, GridFunction &y) const
     {
         for(int i = 2*var_dim + 0; i < 3*var_dim; i++)
         {
-            f.GetSubVector(offsets[i], f_sol);
+            f_I.GetSubVector(offsets[i], f_sol);
             K_inv_z.Mult(f_sol, f_x);
             y_temp.SetSubVector(offsets[i - 2*var_dim], f_x);
         }
@@ -991,7 +993,7 @@ void init_function(const Vector &x, Vector &v)
    {
        double rho, u1, u2, u3, p;
        rho = 1;
-       u1  = 3.10   ; u2 = 0.0   ; u3 = 0.0;
+       u1 = 3.0924; u2 = 0.2162; u3 = 0.0;
        p   = 172.2;
     
        double v_sq = pow(u1, 2) + pow(u2, 2) + pow(u3, 2);
@@ -1007,7 +1009,7 @@ void init_function(const Vector &x, Vector &v)
    {
        double rho, u1, u2, u3, p;
        rho = 1;
-       u1  = 3.1   ; u2 = 0.0   ; u3 = 0.0;
+       u1 = 3.0924; u2 = 0.2162; u3 = 0.0;
        p   = 172.2;
     
        double v_sq = pow(u1, 2) + pow(u2, 2);
@@ -1030,7 +1032,7 @@ void char_bnd_cnd(const Vector &x, Vector &v)
    {
        double rho, u1, u2, p;
        rho = 1;
-       u1 = 3.1; u2 = 0.0;
+       u1 = 3.0924; u2 = 0.2162; 
        p   =172.2;
     
        double v_sq = pow(u1, 2) + pow(u2, 2);

@@ -1332,24 +1332,25 @@ void mDGEulerIntegrator::AssembleRHSElementVect(
       w = ip.weight * alpha; 
 
       shape_x.SetSize(Np1); shape_y.SetSize(Np1);
+      basis1.Eval(eip1.x, shape_x);
+      basis1.Eval(eip1.y, shape_y);
 
-      P.SetSize(Np1);
-      poly1.CalcLegendreBasis(p1_basis, eip1.x, P);
-      for (int j = 0; j < Np1; j++)
+      if (std::abs(eip1.x) < tol)
       {
-          double p_gamma = 2.0/(2.0*j + 1);
-          P[j] = P[j]/sqrt(p_gamma);
+          shape_x = mod_lag1_L;              
       }
-      P[Np1 - 1] *= m_fac;
-      van1.Mult(P, shape_x);
-      poly1.CalcLegendreBasis(p1_basis, eip1.y, P);
-      for (int j = 0; j < Np1; j++)
+      else if ( 1 - std::abs(eip1.x) < tol)
       {
-          double p_gamma = 2.0/(2.0*j + 1);
-          P[j] = P[j]/sqrt(p_gamma);
+          shape_x = mod_lag1_R;              
       }
-      P[Np1 - 1] *= m_fac;
-      van1.Mult(P, shape_y);
+      if (std::abs(eip1.y) < tol)
+      {
+          shape_y = mod_lag1_L;              
+      }
+      else if ( 1 - std::abs(eip1.y) < tol)
+      {
+          shape_y = mod_lag1_R;              
+      }
 
       if (dim == 2)
       {
@@ -1363,17 +1364,15 @@ void mDGEulerIntegrator::AssembleRHSElementVect(
       else if (dim == 3)
       {
           shape_z.SetSize(Np1); 
-          
-          poly1.CalcLegendreBasis(p1_basis, eip1.z, P);
-          for (int j = 0; j < Np1; j++)
+          basis1.Eval(eip1.z, shape_z);
+          if (std::abs(eip1.z) < tol)
           {
-              double p_gamma = 2.0/(2.0*j + 1);
-              P[j] = P[j]/sqrt(p_gamma);
+              shape_z = mod_lag1_L;              
           }
-          P[Np1 - 1] *= m_fac;
-          van1.Mult(P, shape_z);
-          
-          mod_shape1 = 0.0;
+          else if ( 1 - std::abs(eip1.z) < tol)
+          {
+              shape_z = mod_lag1_R;              
+          }
           for (int ot = 0, kt = 0; kt <= p1_basis; kt++)
               for (int jt = 0; jt <= p1_basis; jt++)
                   for (int it = 0; it <= p1_basis; it++)
@@ -1381,25 +1380,28 @@ void mDGEulerIntegrator::AssembleRHSElementVect(
                       mod_shape1(ot++) = shape_x(it)*shape_y(jt)*shape_z(kt);                          
                   }
       }
+//      std::cout << shape_x[0] << "\t" << shape_x[1] << std::endl;
       
       shape_x.SetSize(Np2); shape_y.SetSize(Np2);
-      P.SetSize(Np2);
-      poly2.CalcLegendreBasis(p2_basis, eip2.x, P);
-      for (int j = 0; j < Np2; j++)
+      basis2.Eval(eip2.x, shape_x);
+      basis2.Eval(eip2.y, shape_y);
+
+      if (std::abs(eip2.x) < tol)
       {
-          double p_gamma = 2.0/(2.0*j + 1);
-          P[j] = P[j]/sqrt(p_gamma);
+          shape_x = mod_lag2_L;              
       }
-      P[Np2 - 1] *= m_fac;
-      van2.Mult(P, shape_x);
-      poly2.CalcLegendreBasis(p2_basis, eip2.y, P);
-      for (int j = 0; j < Np2; j++)
+      else if ( 1 - std::abs(eip2.x) < tol)
       {
-          double p_gamma = 2.0/(2.0*j + 1);
-          P[j] = P[j]/sqrt(p_gamma);
+          shape_x = mod_lag2_R;              
       }
-      P[Np2 - 1] *= m_fac;
-      van2.Mult(P, shape_y);
+      if (std::abs(eip2.y) < tol)
+      {
+          shape_y = mod_lag2_L;              
+      }
+      else if ( 1 - std::abs(eip2.y) < tol)
+      {
+          shape_y = mod_lag2_R;              
+      }
 
       if (dim == 2)
       {
@@ -1413,17 +1415,15 @@ void mDGEulerIntegrator::AssembleRHSElementVect(
       else if (dim == 3)
       {
           shape_z.SetSize(Np2); 
-
-          poly2.CalcLegendreBasis(p2_basis, eip2.z, P);
-          for (int j = 0; j < Np2; j++)
+          basis2.Eval(eip2.z, shape_z);
+          if (std::abs(eip2.z) < tol)
           {
-              double p_gamma = 2.0/(2.0*j + 1);
-              P[j] = P[j]/sqrt(p_gamma);
+              shape_z = mod_lag2_L;              
           }
-          P[Np2 - 1] *= m_fac;
-          van2.Mult(P, shape_z);
-
-          mod_shape2 = 0.0;
+          else if ( 1 - std::abs(eip2.z) < tol)
+          {
+              shape_z = mod_lag2_R;              
+          }
           for (int ot = 0, kt = 0; kt <= p2_basis; kt++)
               for (int jt = 0; jt <= p2_basis; jt++)
                   for (int it = 0; it <= p2_basis; it++)
