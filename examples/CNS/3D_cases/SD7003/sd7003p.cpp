@@ -14,7 +14,7 @@ const double   Pr  = 0.72;
 
 //Run parameters
 const char *mesh_file        =  "3d_sd7003_per_v2.mesh";
-const int    order           =  2;
+const int    order           =  1;
 const double t_final         =  0.003  ;
 const int    problem         =  0;
 const int    ref_levels      =  0;
@@ -24,7 +24,7 @@ const double cfl             =  0.25 ;
 const double dt_const        =  0.0001 ;
 const int    ode_solver_type =  3; // 1. Forward Euler 2. TVD SSP 3 Stage
 
-const int    vis_steps       = 1750;
+const int    vis_steps       = 50;
 
 const bool   adapt           =  false;
 const int    adapt_iter      =  200  ; // Time steps after which adaptation is done
@@ -73,13 +73,13 @@ private:
    HypreSmoother M_prec;
    CGSolver M_solver;
                             
-   GridFunction &u, &u_aux, &u_grad, &f_I, &f_V;
+   ParGridFunction &u, &u_aux, &u_grad, &f_I, &f_V;
                             
 public:
    FE_Evolution(HypreParMatrix &_M, HypreParMatrix &_K_inv_x, HypreParMatrix &_K_inv_y, HypreParMatrix &_K_inv_z, 
                             HypreParMatrix &_K_vis_x, HypreParMatrix &_K_vis_y, HypreParMatrix &_K_vis_z,
-                            GridFunction &u_,   GridFunction &u_aux, GridFunction &u_grad, 
-                            GridFunction &f_I_, GridFunction &f_V_,
+                            ParGridFunction &u_,   ParGridFunction &u_aux, ParGridFunction &u_grad, 
+                            ParGridFunction &f_I_, ParGridFunction &f_V_,
                             ParLinearForm &_b_aux_x, ParLinearForm &_b_aux_y, ParLinearForm &_b_aux_z, 
                             ParLinearForm &_b);
 
@@ -89,7 +89,7 @@ public:
 
    void Update();
 
-   virtual void Mult(const GridFunction &x, GridFunction &y) const;
+   virtual void Mult(const ParGridFunction &x, ParGridFunction &y) const;
 
    virtual ~FE_Evolution() { }
 };
@@ -103,9 +103,6 @@ private:
 
     ParFiniteElementSpace  *fes, *fes_vec, *fes_op;
    
-    ParBilinearForm *m, *k_inv_x, *k_inv_y, *k_inv_z;
-    ParBilinearForm     *k_vis_x, *k_vis_y, *k_vis_z;
-
     ParGridFunction *u_sol, *f_inv, *f_vis;   
     ParGridFunction *aux_sol, *aux_grad;   
     ParGridFunction *u_b, *f_I_b;   // Used in calculating b
@@ -208,6 +205,9 @@ CNS::CNS()
    VectorConstantCoefficient x_dir(xdir);
    ydir = 0.0; ydir(1) = 1.0;
    VectorConstantCoefficient y_dir(ydir);
+
+   ParBilinearForm *m, *k_inv_x, *k_inv_y, *k_inv_z;
+   ParBilinearForm     *k_vis_x, *k_vis_y, *k_vis_z;
 
    fes_op = new ParFiniteElementSpace(pmesh, &fec);
    m      = new ParBilinearForm(fes_op);
@@ -366,6 +366,9 @@ CNS::CNS()
            *b_aux_x, *b_aux_y, *b_aux_z, 
            *aux_grad);
    }
+   delete m, k_inv_x, k_inv_y, k_inv_z;
+   delete    k_vis_x, k_vis_y, k_vis_z;
+
 
    getVisFlux(dim, *u_sol, *aux_grad, *f_vis);
 
@@ -422,7 +425,7 @@ CNS::CNS()
 
       done = (t >= t_final - 1e-8*dt);
 
-      if (ti % 25 == 0) // Check time
+      if ((ti % 25 == 0) && (myid == 0)) // Check time
       {
           chrono.Stop();
           cout << "25 Steps took "<< chrono.RealTime() << " s "<< endl;
@@ -471,6 +474,8 @@ CNS::CNS()
 ////
    
    delete adv;
+   delete K_inv_x, K_vis_x;
+   delete K_inv_y, K_vis_y;
    delete K_inv_z, K_vis_z;
 }
 
@@ -568,8 +573,8 @@ void CNS::Step()
 // Implementation of class FE_Evolution
 FE_Evolution::FE_Evolution(HypreParMatrix &_M, HypreParMatrix &_K_inv_x, HypreParMatrix &_K_inv_y, HypreParMatrix &_K_inv_z, 
                             HypreParMatrix &_K_vis_x, HypreParMatrix &_K_vis_y, HypreParMatrix &_K_vis_z,
-                            GridFunction &u_,   GridFunction &u_aux_, GridFunction &u_grad_, 
-                            GridFunction &f_I_, GridFunction &f_V_,
+                            ParGridFunction &u_,   ParGridFunction &u_aux_, ParGridFunction &u_grad_, 
+                            ParGridFunction &f_I_, ParGridFunction &f_V_,
                             ParLinearForm &_b_aux_x, ParLinearForm &_b_aux_y, ParLinearForm &_b_aux_z, 
                             ParLinearForm &_b)
    : TimeDependentOperator(_b.Size()), M(_M), K_inv_x(_K_inv_x), K_inv_y(_K_inv_y), K_inv_z(_K_inv_z),
@@ -589,15 +594,17 @@ FE_Evolution::FE_Evolution(HypreParMatrix &_M, HypreParMatrix &_K_inv_x, HyprePa
 
 
 
-void FE_Evolution::Mult(const GridFunction &x, GridFunction &y) const
+void FE_Evolution::Mult(const ParGridFunction &x, ParGridFunction &y) const
 {
     int dim = x.Size()/K_inv_x.GetNumRows() - 2;
     int var_dim = dim + 2;
 
     u = x;
     getInvFlux(dim, u, f_I); // To update f_vec
+    u.ExchangeFaceNbrData();
     
     getAuxVar(dim, x, u_aux);
+    u_aux.ExchangeFaceNbrData();
     
     b_aux_x.Assemble();
     b_aux_y.Assemble();
