@@ -8,21 +8,21 @@ using namespace mfem;
 
 //Constants
 const double gamm  = 1.4;
-const double   mu  = 0.0;
-const double R_gas = 1  ;
+const double   mu  = 0.000625;
+const double R_gas = 287;
 const double   Pr  = 0.72;
 
 //Run parameters
-//const char *mesh_file        =  "periodic-cube.mesh";
-const char *mesh_file        =  "per_5.mesh";
-const int    order           =  1;
-const double t_final         =  0.003  ;
-const int    problem         =  2;
-const int    ref_levels      =  0;
+const char *mesh_file        =  "periodic-cube.mesh";
+//const char *mesh_file        =  "per_5.mesh";
+const int    order           =  2;
+const double t_final         =  1.0    ;
+const int    problem         =  1;
+const int    ref_levels      =  2;
 
 const bool   time_adapt      =  false;
 const double cfl             =  1.1  ;
-const double dt_const        =  0.005  ;
+const double dt_const        =  0.001  ;
 const int    ode_solver_type =  3; // 1. Forward Euler 2. TVD SSP 3 Stage
 
 const int    vis_steps       = 50;
@@ -40,9 +40,11 @@ void wall_adi_bnd_cnd(const Vector &x, Vector &v);
 
 double getUMax(int dim, const Vector &u);
 
-void Assemble(Mesh &mesh, FiniteElementSpace &fes, FiniteElementSpace &fes_var,
-        VectorGridFunctionCoefficient &uD, VectorGridFunctionCoefficient &fD, 
-        Vector &u, Vector &f);
+int GetFacePtsSize(Mesh &mesh, FiniteElementSpace &fes);
+void AssembleFaceMatrices(Mesh &mesh, FiniteElementSpace &fes, FiniteElementSpace &fes_var,
+        Vector &u, Vector &f,
+        SparseMatrix &face_project_l, SparseMatrix &face_project_r, SparseMatrix &wts,
+        Vector &nor_face);
 void getVectorLFFlux(const double R, const double gamm, const int dim, const Vector &u1, const Vector &u2, 
                                 const Vector &nor, Vector &f);
 void getFaceDotNorm(int dim, const Vector &f, const Vector &nor_face, Vector &face_f);
@@ -82,6 +84,9 @@ private:
    HypreParMatrix &K_vis_x, &K_vis_y, &K_vis_z;
    ParLinearForm  &b, &b_aux_x, &b_aux_y, &b_aux_z;
 
+   SparseMatrix   &face_proj_l, &face_proj_r, &wts;
+   Vector         &nor_face;
+
    HypreSmoother M_prec;
    CGSolver M_solver;
                             
@@ -93,7 +98,9 @@ public:
                             ParGridFunction &u_,   ParGridFunction &u_aux, ParGridFunction &u_grad, 
                             ParGridFunction &f_I_, ParGridFunction &f_V_,
                             ParLinearForm &_b_aux_x, ParLinearForm &_b_aux_y, ParLinearForm &_b_aux_z, 
-                            ParLinearForm &_b);
+                            ParLinearForm &_b,
+                            SparseMatrix &face_proj_l_, SparseMatrix &face_proj_r_, SparseMatrix &wts_,
+                            Vector &nor_face_);
 
    void GetSize() ;
 
@@ -123,6 +130,9 @@ private:
     ODESolver *ode_solver; 
     FE_Evolution *adv;
     ParGridFunction *u_t, *k_t, *y_t;   
+
+    SparseMatrix *face_proj_l, *face_proj_r, *wts;
+    Vector nor_face;
 
     int dim;
 
@@ -258,7 +268,6 @@ CNS::CNS()
       new DGEulerIntegrator(R_gas, gamm, u_vec, f_vec, var_dim, -1.0));
 
    b->Assemble();
-   cout << b->Max() << "\t" << b->Min() << "\t" << b->Sum() << endl;
 
    getAuxVar(dim, *u_sol, *aux_sol);
    VectorGridFunctionCoefficient aux_vec(aux_sol);
@@ -317,6 +326,14 @@ CNS::CNS()
    HypreParMatrix *K_inv_z;
    HypreParMatrix *K_vis_z;
 
+   int n_face_pts = GetFacePtsSize(*pmesh, *fes_op); 
+   face_proj_l    = new SparseMatrix(n_face_pts, fes_op->GetVSize());
+   face_proj_r    = new SparseMatrix(n_face_pts, fes_op->GetVSize());
+   wts            = new SparseMatrix(n_face_pts);
+   nor_face.SetSize(dim*n_face_pts);
+   AssembleFaceMatrices(*pmesh, *fes_op, *fes, *u_sol, *f_inv, 
+           *face_proj_l, *face_proj_r, *wts, nor_face);
+
    ///////////////////////////////////////////////////////////////
    //Setup time stepping objects and do initial post-processing
    if (dim == 3)
@@ -328,7 +345,9 @@ CNS::CNS()
                             *K_vis_x, *K_vis_y, *K_vis_z, 
                             *u_b, *aux_sol, *aux_grad, *f_I_b, *f_vis,
                             *b_aux_x, *b_aux_y, *b_aux_z, 
-                            *b);
+                            *b,
+                            *face_proj_l, *face_proj_r, *wts,
+                            nor_face);
  
        getAuxGrad(dim, *K_vis_x, *K_vis_y, *K_vis_z, 
            adv->GetMSolver(), *u_b, 
@@ -341,7 +360,10 @@ CNS::CNS()
                             *K_vis_x, *K_vis_y, *K_vis_z, 
                             *u_b, *aux_sol, *aux_grad, *f_I_b, *f_vis,
                             *b_aux_x, *b_aux_y, *b_aux_z, 
-                            *b);
+                            *b,
+                            *face_proj_l, *face_proj_r, *wts,
+                            nor_face);
+
        
        getAuxGrad(dim, *K_vis_x, *K_vis_y, *K_vis_z, 
            adv->GetMSolver(), *u_b,
@@ -391,37 +413,34 @@ CNS::CNS()
    chrono.Clear();
    chrono.Start();
 
-//   cout << b->Max() << "\t" << b->Min() << "\t" << b->Sum() << endl;
-   Assemble(*pmesh, *fes_op, *fes, u_vec, f_vec, *u_sol, *f_inv);
+   bool done = false;
+   for (ti = 0; !done; )
+   {
+      Step(); // Step in time
 
-//   bool done = false;
-//   for (ti = 0; !done; )
-//   {
-//      Step(); // Step in time
-//
-//      done = (t >= t_final - 1e-8*dt);
-//
-//      if ((ti % 25 == 0) && (myid == 0)) // Check time
-//      {
-//          chrono.Stop();
-//          cout << "25 Steps took "<< chrono.RealTime() << " s "<< endl;
-//
-//          chrono.Clear();
-//          chrono.Start();
-//      }
-//    
-//      if (done || ti % vis_steps == 0) // Visualize
-//      {
-//       
-//          getAuxGrad(dim, *K_vis_x, *K_vis_y, *K_vis_z, 
-//          adv->GetMSolver(), *u_b,
-//          *b_aux_x, *b_aux_y, *b_aux_z, 
-//          *aux_grad);
-//
-//          postProcess(*pmesh, *u_sol, *aux_grad, ti, t);
-//      }
-//  
-//   }
+      done = (t >= t_final - 1e-8*dt);
+
+      if ((ti % 25 == 0) && (myid == 0)) // Check time
+      {
+          chrono.Stop();
+          cout << "25 Steps took "<< chrono.RealTime() << " s "<< endl;
+
+          chrono.Clear();
+          chrono.Start();
+      }
+    
+      if (done || ti % vis_steps == 0) // Visualize
+      {
+       
+          getAuxGrad(dim, *K_vis_x, *K_vis_y, *K_vis_z, 
+          adv->GetMSolver(), *u_b,
+          *b_aux_x, *b_aux_y, *b_aux_z, 
+          *aux_grad);
+
+          postProcess(*pmesh, *u_sol, *aux_grad, ti, t);
+      }
+  
+   }
    
 ////   // Print all nodes in the finite element space 
 ////   FiniteElementSpace fes_nodes(mesh, vfec, dim);
@@ -454,6 +473,8 @@ CNS::~CNS()
     delete fes;
     delete fes_vec;
     delete fes_op;
+
+    delete face_proj_l, face_proj_r, wts;
 }
 
 void CNS::Step()
@@ -540,11 +561,16 @@ FE_Evolution::FE_Evolution(HypreParMatrix &_M, HypreParMatrix &_K_inv_x, HyprePa
                             ParGridFunction &u_,   ParGridFunction &u_aux_, ParGridFunction &u_grad_, 
                             ParGridFunction &f_I_, ParGridFunction &f_V_,
                             ParLinearForm &_b_aux_x, ParLinearForm &_b_aux_y, ParLinearForm &_b_aux_z, 
-                            ParLinearForm &_b)
+                            ParLinearForm &_b,
+                            SparseMatrix &face_proj_l_, SparseMatrix &face_proj_r_, SparseMatrix &wts_,
+                            Vector &nor_face_)
    : TimeDependentOperator(_b.Size()), M(_M), K_inv_x(_K_inv_x), K_inv_y(_K_inv_y), K_inv_z(_K_inv_z),
                             K_vis_x(_K_vis_x), K_vis_y(_K_vis_y), K_vis_z(_K_vis_z), 
                             u(u_), u_aux(u_aux_), u_grad(u_grad_), f_I(f_I_), f_V(f_V_), 
-                            b_aux_x(_b_aux_x), b_aux_y(_b_aux_y), b_aux_z(_b_aux_z), b(_b)
+                            b_aux_x(_b_aux_x), b_aux_y(_b_aux_y), b_aux_z(_b_aux_z), b(_b),
+                            face_proj_l(face_proj_l_), face_proj_r(face_proj_r_), wts(wts_),
+                            nor_face(nor_face_)
+
 {
    M_solver.SetPreconditioner(M_prec);
    M_solver.SetOperator(M);
@@ -569,13 +595,18 @@ void FE_Evolution::Mult(const ParGridFunction &x, ParGridFunction &y) const
     
     getAuxVar(dim, x, u_aux);
     u_aux.ExchangeFaceNbrData();
-    
+
+    b_aux_x *= 0.0;    
+    b_aux_y *= 0.0;    
+    if (dim == 3)
+        b_aux_z *= 0.0;
     getAuxGrad(dim, K_vis_x, K_vis_y, K_vis_z, M_solver, x, 
             b_aux_x, b_aux_y, b_aux_z,
             u_grad);
     getVisFlux(dim, x, u_grad, f_V);
 
-    b.Assemble();
+    getEulerDGTranspose(dim, face_proj_l, face_proj_r, 
+        wts, nor_face, u, f_I, b);
 
     y.SetSize(x.Size()); // Needed since by default ode_init will set it as size of K
 
@@ -1355,10 +1386,7 @@ void ComputeLift(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, GridFunc
 }
 
 
-
-void Assemble(Mesh &mesh, FiniteElementSpace &fes, FiniteElementSpace &fes_var,
-        VectorGridFunctionCoefficient &uD, VectorGridFunctionCoefficient &fD, 
-        Vector &u, Vector &f)
+int GetFacePtsSize(Mesh &mesh, FiniteElementSpace &fes)
 {
    const FiniteElement *el1, *el2;
    FaceElementTransformations *T;
@@ -1369,18 +1397,9 @@ void Assemble(Mesh &mesh, FiniteElementSpace &fes, FiniteElementSpace &fes_var,
    double w; // weight
    double alpha =  -1.0;
 
-   Vector vals, vis_vals;
    Vector shape1, shape2;
 
-   Vector vu, nor;
-   Vector u1_dir, u2_dir, u_dir;
-   Vector f_dir;
-   Vector f1_dir, f2_dir;
-
-   Vector face_f, face_f1, face_f2; //Face fluxes (dot product with normal)
-
-   Vector elvect;
-
+   Vector nor;
    Array<int> vdofs, vdofs2;
 
    int n_face_pts = 0;
@@ -1403,15 +1422,35 @@ void Assemble(Mesh &mesh, FiniteElementSpace &fes, FiniteElementSpace &fes_var,
 
        n_face_pts += ir->GetNPoints(); 
    }
+   return n_face_pts;
+}
 
-   int dofs = fes.GetVSize();
 
-   SparseMatrix face_project_l(n_face_pts, dofs);
-   SparseMatrix face_project_r(n_face_pts, dofs);
+void AssembleFaceMatrices(Mesh &mesh, FiniteElementSpace &fes, FiniteElementSpace &fes_var,
+        Vector &u, Vector &f,
+        SparseMatrix &face_project_l, SparseMatrix &face_project_r, SparseMatrix &wts,
+        Vector &nor_face)
 
-   SparseMatrix wts(n_face_pts);
+{
+   const FiniteElement *el1, *el2;
+   FaceElementTransformations *T;
 
-   Vector nor_face(dim*n_face_pts);
+   int dim, var_dim, ndof1, ndof2;
+   int order;
+
+   double w; // weight
+   double alpha =  -1.0;
+
+   Vector shape1, shape2;
+
+   Vector nor;
+   Array<int> vdofs, vdofs2;
+
+   int n_face_pts = wts.Size();
+   int dofs       = fes.GetVSize();
+
+   dim     = mesh.SpaceDimension();
+   var_dim = dim + 2;
 
    int face_coun = 0;
    for (int i = 0; i < mesh.GetNumFaces(); i++)
@@ -1486,12 +1525,11 @@ void Assemble(Mesh &mesh, FiniteElementSpace &fes, FiniteElementSpace &fes_var,
    face_project_r.Finalize();
    wts.Finalize();
 
-   Vector b(var_dim*dofs);
-   getEulerDGTranspose(dim, face_project_l, face_project_r, 
-        wts, nor_face, u, f, b);
-
-   cout << b.Max() << "\t" << b.Min() << "\t" << b.Sum() << endl;
-
+//   Vector b(var_dim*dofs);
+//   getEulerDGTranspose(dim, face_project_l, face_project_r, 
+//        wts, nor_face, u, f, b);
+//
+//   cout << b.Max() << "\t" << b.Min() << "\t" << b.Sum() << endl;
 }
 
 void getEulerDGTranspose(int dim, SparseMatrix &face_project_l, SparseMatrix &face_project_r, 
