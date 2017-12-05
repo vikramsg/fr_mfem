@@ -14,25 +14,7 @@
 using namespace std;
 using namespace mfem;
 
-Mesh *MakePeriodicMesh(Mesh * mesh);
-
-int main(int argc, char *argv[])
-{
-    const char *mesh_file        =  "3d_sd7003_v2.msh";
-    Mesh *mesh                   = new Mesh(mesh_file, 1, 1);
-
-    Mesh *nmesh                  = MakePeriodicMesh(mesh);
-    
-    const char *out_file        =  "3d_sd7003_per_v2.mesh";
-    ofstream out_mesh;
-    out_mesh.open(out_file);
-    nmesh->Print(out_mesh);
-    out_mesh.close();
-
-    delete mesh, nmesh;
-
-    return 0;
-}
+Mesh *MakePeriodicMesh(Mesh * mesh, vector<Vector> &trans_vecs);
 
 /* 
   Copied from 
@@ -40,7 +22,7 @@ int main(int argc, char *argv[])
   and slightly edited. Requires periodic faces to be marked as boundaries and then the shift between
   periodic faces has to be put as a variable
 */
-Mesh *MakePeriodicMesh(Mesh * mesh)
+Mesh *MakePeriodicMesh(Mesh * mesh, vector<Vector> &trans_vecs)
 {
    int logging = 0; 
    int dim  = mesh->Dimension();
@@ -118,9 +100,9 @@ Mesh *MakePeriodicMesh(Mesh * mesh)
    Vector at(sdim);
    Vector dx(sdim);
 
-   Vector trans_vec(sdim); // Define translation vector
-   trans_vec(0) = 0.0; trans_vec(1) = 0.0; trans_vec(2) = 1.0;
-   vector<Vector> trans_vecs(1, trans_vec);
+//   Vector trans_vec(sdim); // Define translation vector
+//   trans_vec(0) = 0.0; trans_vec(1) = 0.0; trans_vec(2) = 0.2;
+//   vector<Vector> trans_vecs(1, trans_vec);
 
    for (unsigned int i=0; i<trans_vecs.size(); i++)
    {
@@ -257,6 +239,12 @@ Mesh *MakePeriodicMesh(Mesh * mesh)
          if ( c != 1 ) { cout << "s"; }
          cout <<" to project." << endl;
       }
+   }
+
+   if (slaves.size() == 0)
+   {
+       cout << "NOTE: No periodic vertices found \n Your translation co-ordinates may be wrong" << endl;
+       
    }
    if ( logging > 0 )
    {
