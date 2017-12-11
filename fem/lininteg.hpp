@@ -586,6 +586,46 @@ public:
 
 };
 
+
+/** Boundary face Riemann integrator
+    */
+class DG_Euler_NoSlip_Isotherm_Integrator: public LinearFormIntegrator, public EulerIntegrator
+{
+protected:
+   VectorCoefficient &uD;
+   VectorCoefficient &fD;
+   VectorCoefficient &u_bnd;
+
+   double alpha; // b = alpha*b
+
+   double gamm;
+   double R   ;
+
+#ifndef MFEM_THREAD_SAFE
+   Vector shape;
+   DenseMatrix dshape;
+   DenseMatrix adjJ;
+   DenseMatrix dshape_ps;
+   Vector nor;
+   Vector dshape_dn;
+   Vector dshape_du;
+   Vector u_dir;
+#endif
+
+public:
+   DG_Euler_NoSlip_Isotherm_Integrator(double R_, double gamm_, VectorCoefficient &uD_, VectorCoefficient &fD_, 
+                                VectorCoefficient &u_bnd_, double alpha_)
+      : uD(uD_), fD(fD_), u_bnd(u_bnd_), alpha(alpha_), R(R_), gamm(gamm_) { }
+
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       ElementTransformation &Tr,
+                                       Vector &elvect);
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       FaceElementTransformations &Tr,
+                                       Vector &elvect);
+};
+
+
 /** Boundary face Riemann integrator
     */
 class DG_Euler_Slip_Integrator: public LinearFormIntegrator, public EulerIntegrator
@@ -765,6 +805,51 @@ public:
                                        Vector &elvect);
 
 };
+
+
+/** Boundary viscous adiabatic integrator
+    */
+class DG_CNS_Vis_Isotherm_Integrator: public LinearFormIntegrator, public CNSIntegrator
+{
+protected:
+   VectorCoefficient &uD;
+   VectorCoefficient &fD;
+   VectorCoefficient &auxD;
+   VectorCoefficient &u_bnd;
+
+   double gamm;
+   double R   ;
+
+   double alpha; // b = alpha*b
+
+   double mu, Pr;
+
+#ifndef MFEM_THREAD_SAFE
+   Vector shape;
+   DenseMatrix dshape;
+   DenseMatrix adjJ;
+   DenseMatrix dshape_ps;
+   Vector nor;
+   Vector dshape_dn;
+   Vector dshape_du;
+   Vector u_dir;
+#endif
+
+public:
+   DG_CNS_Vis_Isotherm_Integrator(double R_, double gamm_, VectorCoefficient &uD_, VectorCoefficient &fD_, 
+                                    VectorCoefficient &auxD_, 
+                                    VectorCoefficient &u_bnd_,  double mu_, double Pr_, double alpha_) 
+      : uD(uD_), fD(fD_), auxD(auxD_), u_bnd(u_bnd_), alpha(alpha_), mu(mu_), Pr(Pr_) , R(R_), gamm(gamm_) { }
+
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       ElementTransformation &Tr,
+                                       Vector &elvect);
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       FaceElementTransformations &Tr,
+                                       Vector &elvect);
+
+};
+
 
 
 /** Interior face CNS integrator
