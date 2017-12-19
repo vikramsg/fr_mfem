@@ -1897,7 +1897,7 @@ void DG_Euler_NoSlip_Isotherm_Integrator::AssembleRHSElementVect(
       v_sq  = 0.0;
       for (int j = 0; j < dim; j++)
       {
-          vel_R(j) = u2_bnd(j);      
+          vel_R(j) = 2*u2_bnd(j) - vel_L(j);      
           v_sq    += pow(vel_R(j), 2);
       }
       double T_R   = u2_bnd(aux_dim - 1);
@@ -2604,14 +2604,6 @@ void DG_CNS_Vis_Isotherm_Integrator::AssembleRHSElementVect(
       Vector aux1_dir(dim*aux_dim), aux2_dir(dim*aux_dim);
       auxD.Eval(aux1_dir, *Tr.Elem1, eip);
 
-//      ///////////
-//      Vector f_dir(dim*var_dim);
-//      getViscousCNSFlux(u1_dir, aux1_dir, mu, Pr, f_dir);
-//
-//      Vector f1_dir(dim*var_dim);
-//      fD.Eval(f1_dir, *Tr.Elem1, eip);        // Get discontinuous flux at face
-//      ////////////
-
       Vector vel_L(dim);    
       double rho_L = u1_dir(0);
       double v_sq  = 0.0;
@@ -2627,7 +2619,7 @@ void DG_CNS_Vis_Isotherm_Integrator::AssembleRHSElementVect(
       v_sq  = 0.0;
       for (int j = 0; j < dim; j++)
       {
-          vel_R(j) = u2_bnd(j);      
+          vel_R(j) = 2*u2_bnd(j) - vel_L(j);      
           v_sq    += pow(vel_R(j), 2);
       }
       double T_R   = u2_bnd(aux_dim - 1);
@@ -2646,11 +2638,8 @@ void DG_CNS_Vis_Isotherm_Integrator::AssembleRHSElementVect(
       Vector fL_dir(dim*var_dim), fR_dir(dim*var_dim);
       Vector f_dir(dim*var_dim);
       getViscousCNSFlux(R, gamm, u1_dir, aux1_dir, mu, Pr, fL_dir);
-      getViscousCNSFlux(R, gamm, u2_dir, aux2_dir, mu, Pr, f_dir);
-
-//      for(int j = 0; j < var_dim; j++) std::cout << j << "\t" << fL_dir(var_dim + j) << "\t" << fR_dir(var_dim + j) << std::endl;
-
-//      for(int j = 0; j < var_dim; j++) std::cout << j << "\t" << fL_dir(j) << "\t" << f_dir(j) << std::endl;
+      getViscousCNSFlux(R, gamm, u2_dir, aux2_dir, mu, Pr, fR_dir);
+      add(0.5, fL_dir, fR_dir, f_dir);
 
       Vector f1_dir(dim*var_dim);
       fD.Eval(f1_dir, *Tr.Elem1, eip);        // Get discontinuous flux at face
