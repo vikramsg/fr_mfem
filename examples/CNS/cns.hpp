@@ -240,8 +240,6 @@ void ComputeGlobPeriodicMean(MPI_Comm &comm, const vector< vector<int> > &ids, c
 
         glob_u.push_back(glob_row_u/double(glob_row_size));
 
-        cout << i << "\t" << glob_u.at(i) << endl; 
-
     }
     glob_u_mean = glob_u;
 }
