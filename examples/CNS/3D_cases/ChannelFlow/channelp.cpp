@@ -1,4 +1,5 @@
 #include "mfem.hpp"
+#include "cns.hpp"
 #include <fstream>
 #include <iostream>
 #include <algorithm>
@@ -13,19 +14,18 @@ const double R_gas = 287;
 const double   Pr  = 0.71;
 
 //Run parameters
-//const char *mesh_file        =  "channel2D.mesh";
 const char *mesh_file        =  "channel.mesh";
-const int    order           =  2;
-const double t_final         =1500.000  ;
+const int    order           =  3;
+const double t_final         =2000.000  ;
 const int    problem         =  0;
 const int    ref_levels      =  0;
 
 const bool   time_adapt      =  true ;
-const double cfl             =  0.60 ;
+const double cfl             =  0.50 ;
 const double dt_const        =  0.0001 ;
 const int    ode_solver_type =  3; // 1. Forward Euler 2. TVD SSP 3 Stage
 
-const int    vis_steps       = 200 ;
+const int    vis_steps       =1000 ;
 
 const bool   adapt           =  false;
 const int    adapt_iter      =  200  ; // Time steps after which adaptation is done
@@ -33,7 +33,15 @@ const double tolerance       =  5e-4 ; // Tolerance for adaptation
 
 //Source Term
 const bool addSource         =  true;                   // Add source term
-const double fx              =  0.0032653061224489793 ; // Force x 
+const double fx              =  0.0029653061224489793; // Force x 
+
+//Restart parameters
+const bool restart           = false ;
+const int  restart_freq      =  5000; // Create restart file after every 1000 time steps
+const int  restart_cycle     =     4; // File number used for restart
+
+////////////////////////////////////////////////////////////////////////
+
 
 // Velocity coefficient
 void init_function(const Vector &x, Vector &v);
@@ -57,7 +65,7 @@ double ComputeTKE(ParFiniteElementSpace &fes, const Vector &uD);
 void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, Vector &u1, Vector &u2, 
                 Vector &E, Vector &u_x, Vector &u_y, Vector &v_x, Vector &v_y);
 void getMoreFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, Vector &M,
-                Vector &p, Vector &T, Vector &E, Vector &E_x, Vector &E_y,
+                Vector &p, Vector &T, Vector &E, Vector &u, Vector &v, Vector &w,
                 Vector &vort, Vector &q);
 
 void postProcess(Mesh &mesh, GridFunction &u_sol, GridFunction &aux_grad,
@@ -68,6 +76,8 @@ void getEleOrder(FiniteElementSpace &fes, Array<int> &newEleOrder, GridFunction 
 void ComputeWallForces(FiniteElementSpace &fes, GridFunction &uD, GridFunction &f_vis_D, 
                     const Array<int> &bdr, const double gamm, Vector &force);
 void ComputeUb(const ParGridFunction &uD, double &ub, double &vol);
+
+void writeUMean(const vector<double> u_mean, int ti, vector<double> y_uni);
 
 /** A time-dependent operator for the right-hand side of the ODE. The DG weak
     form is M du/dt = K u + b, where M and K are the mass
@@ -103,6 +113,8 @@ public:
    virtual void Mult(const ParGridFunction &x, ParGridFunction &y) const;
 
    void Source(const ParGridFunction &x, ParGridFunction &y) const;
+
+   void GetMomentum(const ParGridFunction &x, double &fx);
 
    virtual ~FE_Evolution() { }
 };
@@ -174,14 +186,33 @@ CNS::CNS()
    {
       mesh->UniformRefinement();
    }
+   
+   DG_FECollection fec(order, dim);
+
+   /////////////////////////////////////////////////////////////////////////
+   // Need to get unique y values for turbulent channel flow before partitioning
+   FiniteElementSpace *fes_temp = new FiniteElementSpace(mesh, &fec, var_dim);
+
+   vector<double> y_uni;
+   GetUniqueY(*fes_temp, y_uni);
+
+   delete fes_temp;
+   /////////////////////////////////////////////////////////////////////////
+
    pmesh = new ParMesh(MPI_COMM_WORLD, *mesh);
    delete mesh;
 
    double kappa_min, kappa_max;
    pmesh->GetCharacteristics(h_min, h_max, kappa_min, kappa_max);
 
-   DG_FECollection fec(order, dim);
    fes = new ParFiniteElementSpace(pmesh, &fec, var_dim);
+
+   
+   ///////////////////////////////////////////////////////
+   //Get periodic ids for turbulent channel flow
+   vector< vector<int> > ids;
+   GetPeriodicIds(*fes, y_uni, ids);
+   ////////////////////////////////////////////////////////
 
    HYPRE_Int global_vSize = fes->GlobalTrueVSize();
    if (myid == 0)
@@ -192,7 +223,13 @@ CNS::CNS()
    VectorFunctionCoefficient u0(var_dim, init_function);
    
    u_sol = new ParGridFunction(fes);
-   u_sol->ProjectCoefficient(u0);
+
+   double r_t; int r_ti;
+   if (restart == false)
+       u_sol->ProjectCoefficient(u0);
+   else
+       doRestart(restart_cycle, *pmesh, *u_sol, r_t, r_ti);
+
 
    fes_vec = new ParFiniteElementSpace(pmesh, &fec, dim*var_dim);
        
@@ -313,7 +350,7 @@ CNS::CNS()
        zdir = 0.0; zdir(2) = 1.0;
        VectorConstantCoefficient temp_z_dir(zdir);
        z_dir = temp_z_dir;
-      
+
        k_inv_z = new ParBilinearForm(fes_op);
        k_inv_z->AddDomainIntegrator(new ConvectionIntegrator(z_dir, -1.0));
     
@@ -393,13 +430,24 @@ CNS::CNS()
 
    b->Assemble();
 
+   int ti_in; double t_in;
+   if (restart == true)
+   {
+       ti_in = restart_cycle ;
+       t_in  = r_t ;
+   }
+   else
+   {
+       ti_in = 0; t_in = 0;
+   }
+
    {// Post process initially
        getAuxGrad(dim, *K_vis_x, *K_vis_y, *K_vis_z, 
           adv->GetMSolver(), *u_b,
           *b_aux_x, *b_aux_y, *b_aux_z, 
           *aux_grad);
 
-       ti = 0; t = 0;
+       ti = ti_in; t = t_in;
        postProcess(*pmesh, *u_sol, *aux_grad, ti, t);
    }
 
@@ -433,8 +481,10 @@ CNS::CNS()
    force_file.open ("forces.dat");
    force_file << "Iteration \t dt \t time \t F_x \t F_y \n";
 
+   vector<double> loc_u_mean, glob_u_mean, temp_u_mean;
+
    bool done = false;
-   for (ti = 0; !done; )
+   for (ti = ti_in; !done; )
    {
       Step(); // Step in time
 
@@ -458,6 +508,12 @@ CNS::CNS()
 
           postProcess(*pmesh, *u_sol, *aux_grad, ti, t);
       }
+      
+      if (done || ti % restart_freq == 0) // Write restart file 
+      {
+          writeRestart(*pmesh, *u_sol, ti, t);
+      }
+
       double tk = ComputeTKE(*fes, *u_sol);
       double ub, vol;
       ComputeUb(*u_sol, ub, vol);
@@ -466,11 +522,13 @@ CNS::CNS()
       MPI_Allreduce(&ub,  &glob_ub,  1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
       MPI_Allreduce(&vol, &glob_vol, 1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
 
-      glob_ub = glob_ub/glob_vol;
+      double temp_fx, glob_vol_fx;
+      adv->GetMomentum(*y_t, temp_fx);
+      MPI_Allreduce(&temp_fx, &glob_vol_fx, 1, MPI_DOUBLE, MPI_SUM, comm); // Get global u_max across processors
 
       if (myid == 0)
       {
-          flo_file << setprecision(12) << ti << "\t" << t << "\t" << glob_tk << "\t" << glob_ub << endl;
+          flo_file << setprecision(12) << ti << "\t" << t << "\t" << glob_tk << "\t" << glob_ub << "\t" << glob_vol_fx<< endl;
       }
 
       ComputeWallForces(*fes, *u_sol, *f_vis, dir_bdr_wall, gamm, forces);
@@ -483,24 +541,30 @@ CNS::CNS()
       {
           force_file << ti << "\t" <<  dt_real << "\t" << t << "\t" << glob_fx << "\t" << glob_fy <<  endl;
       }
+      
+      ComputePeriodicMean(dim, *u_sol, ids, loc_u_mean);
+      ComputeGlobPeriodicMean(comm, ids, loc_u_mean, glob_u_mean);
+
+      if (ti == 1)
+          temp_u_mean = glob_u_mean;
+      else
+      {
+          int vert_nodes = glob_u_mean.size();      
+          for(int i = 0; i < vert_nodes; i++)
+          {
+              temp_u_mean.at(i) = temp_u_mean.at(i)*(ti - 1) + glob_u_mean.at(i);          
+              temp_u_mean.at(i) = temp_u_mean.at(i)/double(ti);
+          }
+      }
+      if (ti % vis_steps == 0) // Write mean u
+      {
+          if (myid == 0)
+              writeUMean(temp_u_mean, ti, y_uni);
+      }
   
    }
    flo_file.close();
    force_file.close();
-   
-////   // Print all nodes in the finite element space 
-////   FiniteElementSpace fes_nodes(mesh, vfec, dim);
-////   GridFunction nodes(&fes_nodes);
-////   mesh->GetNodes(nodes);
-////
-////   for (int i = 0; i < nodes.Size()/dim; i++)
-////   {
-////       int offset = nodes.Size()/dim;
-////       int sub1 = i, sub2 = offset + i, sub3 = 2*offset + i, sub4 = 3*offset + i;
-//////       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << "\t" << rhs(sub2)<< endl;      
-//////       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << "\t" << u_out(sub1) << endl;      
-////   }
-////
    
    delete adv;
    delete K_inv_x, K_vis_x;
@@ -519,6 +583,8 @@ CNS::~CNS()
     delete fes;
     delete fes_vec;
     delete fes_op;
+
+    MPI_Finalize();
 }
 
 void CNS::Step()
@@ -751,6 +817,9 @@ void FE_Evolution::Mult(const ParGridFunction &x, ParGridFunction &y) const
  */
 void FE_Evolution::Source(const ParGridFunction &x, ParGridFunction &y) const
 {
+    int myid;
+    MPI_Comm_rank(MPI_COMM_WORLD, &myid);
+
     ParFiniteElementSpace *fes = x.ParFESpace();
     MPI_Comm comm              = fes->GetComm();
    
@@ -1089,11 +1158,38 @@ void init_function(const Vector &x, Vector &v)
         */
        rho = 1;
        
-       u1  = 1.0;
+       double re_tau = 180;
+       double y_tau  = 1/re_tau;
+       double u_tau  = mu*re_tau;
+       double kappa  = 0.38, C = 4.1;
 
-       u2  = 0.0; 
+       double yplus  = x(1)/y_tau;
+       if (x(1) > 1)
+           yplus  = std::abs(x(1) - 2)/y_tau;
+       double uplus  = (1/kappa)*log(1 + kappa*yplus) + 
+                       (C - (1/kappa)*log(kappa))*(1 - exp(-yplus/11.0) - (yplus/11.0)*exp(-yplus/3.0));
+
+       double amp    =  0.1;
+
+       u1  = 1.6*pow( (1 - pow( x(1) - 1, 2)), 2);
+       u2  = amp*exp(-pow((x(0) - M_PI)/(2*M_PI), 2))*exp(-pow((x(1)/2.0), 2))*cos(4*M_PI*x(2)/M_PI);
        u3  = 0.0;
        p   = 71.42857142857143;
+       
+       u1 += amp*sin(10*M_PI*x(1)/2)*sin(10*M_PI*x(2)/M_PI);
+       u1 += amp*sin(20*M_PI*x(1)/2)*sin(20*M_PI*x(2)/M_PI);
+       u1 += amp*sin(30*M_PI*x(1)/2)*sin(30*M_PI*x(2)/M_PI);
+       u1 += amp*sin(40*M_PI*x(1)/2)*sin(40*M_PI*x(2)/M_PI);
+
+       u2 += amp*sin(10*M_PI*x(0)/(2*M_PI))*sin(10*M_PI*x(2)/M_PI);
+       u2 += amp*sin(20*M_PI*x(0)/(2*M_PI))*sin(20*M_PI*x(2)/M_PI);
+       u2 += amp*sin(30*M_PI*x(0)/(2*M_PI))*sin(30*M_PI*x(2)/M_PI);
+       u2 += amp*sin(40*M_PI*x(0)/(2*M_PI))*sin(40*M_PI*x(2)/M_PI);
+
+       u3 += amp*sin(10*M_PI*x(0)/(2*M_PI))*sin(10*M_PI*x(1)/2);
+       u3 += amp*sin(20*M_PI*x(0)/(2*M_PI))*sin(20*M_PI*x(1)/2);
+       u3 += amp*sin(30*M_PI*x(0)/(2*M_PI))*sin(30*M_PI*x(1)/2);
+       u3 += amp*sin(40*M_PI*x(0)/(2*M_PI))*sin(40*M_PI*x(1)/2);
 
        double v_sq = pow(u1, 2) + pow(u2, 2) + pow(u3, 2);
     
@@ -1288,7 +1384,7 @@ void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, V
 
 
 void getMoreFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, Vector &M,
-                Vector &p, Vector &T, Vector &E, Vector &T_x, Vector &T_y, 
+                Vector &p, Vector &T, Vector &E, Vector &u, Vector &v, Vector &w,
                 Vector &vort, Vector &q)
 {
 
@@ -1308,6 +1404,11 @@ void getMoreFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rh
         {
             vel[j] =  u_sol[(1 + j)*dofs + i]/rho[i];        
         }
+        u[i] = vel[0];
+        v[i] = vel[1];
+        if (dim == 3)
+            w[i] = vel[2];
+
         E[i]  = u_sol[(vDim - 1)*dofs + i];        
 
         double v_sq = 0.0;    
@@ -1328,9 +1429,6 @@ void getMoreFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rh
                 u_grad[j][k] = aux_grad[(k*aux_dim + j  )*dofs + i];
             }
         }
-        T_x[i] = aux_grad[(aux_dim - 1  )*dofs + i];
-        T_y[i] = aux_grad[(2*aux_dim - 1  )*dofs + i];
-        
         
         if (dim == 2)
         {
@@ -1383,7 +1481,7 @@ void postProcess(Mesh &mesh, GridFunction &u_sol, GridFunction &aux_grad,
    int dim     = mesh.Dimension();
    int var_dim = dim + 2;
 
-   DG_FECollection fec(order + 1, dim);
+   DG_FECollection fec(order , dim);
    FiniteElementSpace fes_post(&mesh, &fec, var_dim);
    FiniteElementSpace fes_post_grad(&mesh, &fec, (dim+1)*dim);
 
@@ -1406,8 +1504,9 @@ void postProcess(Mesh &mesh, GridFunction &u_sol, GridFunction &aux_grad,
    GridFunction p(&fes_fields);
    GridFunction T(&fes_fields);
    GridFunction E(&fes_fields);
-   GridFunction T_x(&fes_fields);
-   GridFunction T_y(&fes_fields);
+   GridFunction u(&fes_fields);
+   GridFunction v(&fes_fields);
+   GridFunction w(&fes_fields);
    GridFunction q(&fes_fields);
    GridFunction vort(&fes_fields);
 
@@ -1416,13 +1515,14 @@ void postProcess(Mesh &mesh, GridFunction &u_sol, GridFunction &aux_grad,
    dc.RegisterField("p", &p);
    dc.RegisterField("T", &T);
    dc.RegisterField("E", &E);
-   dc.RegisterField("T_x", &T_x);
-   dc.RegisterField("T_y", &T_y);
+   dc.RegisterField("u", &u);
+   dc.RegisterField("v", &v);
+   dc.RegisterField("w", &w);
    dc.RegisterField("q", &q);
    dc.RegisterField("vort", &vort);
 
 //   getFields(u_post, aux_grad_post, rho, M, p, vort, q);
-   getMoreFields(u_post, aux_grad_post, rho, M, p, T, E, T_x, T_y, vort, q);
+   getMoreFields(u_post, aux_grad_post, rho, M, p, T, E, u, v, w, vort, q);
 
    dc.SetCycle(cycle);
    dc.SetTime(time);
@@ -1467,7 +1567,7 @@ void ComputeUb(const ParGridFunction &uD, double &ub, double &vol)
            double rho    = uD[vdofs[p]];
            double irho   = 1.0/rho; 
        
-           ub  += ip.weight*T->Weight()*uD[vdofs[(1)*dof + p]];
+           ub  += ip.weight*T->Weight()*(irho*uD[vdofs[dof + p]]);
            vol += ip.weight*T->Weight();
        }
    }
@@ -1621,3 +1721,164 @@ void ComputeWallForces(FiniteElementSpace &fes, GridFunction &uD, GridFunction &
    } // NBE loop
 }
 
+
+
+
+void FE_Evolution::GetMomentum(const ParGridFunction &x, double &Fx) 
+{
+    int dim = x.Size()/K_inv_x.GetNumRows() - 2;
+    int var_dim = dim + 2;
+
+    Vector y_temp, y;
+    y_temp.SetSize(x.Size()); 
+    y.SetSize(x.Size()); 
+
+    int offset  = K_inv_x.GetNumRows();
+    Array<int> offsets[dim*var_dim];
+    for(int i = 0; i < dim*var_dim; i++)
+    {
+        offsets[i].SetSize(offset);
+    }
+
+    for(int j = 0; j < dim*var_dim; j++)
+    {
+        for(int i = 0; i < offset; i++)
+        {
+            offsets[j][i] = j*offset + i ;
+        }
+    }
+
+    Vector f_sol(offset), f_x(offset), f_x_m(offset);
+    Vector b_sub(offset);
+    y = 0.0;
+    for(int i = 0; i < var_dim; i++)
+    {
+        f_I.GetSubVector(offsets[i], f_sol);
+        K_inv_x.Mult(f_sol, f_x);
+        b.GetSubVector(offsets[i], b_sub);
+        f_x += b_sub; // Needs to be added only once
+        y_temp.SetSubVector(offsets[i], f_x);
+    }
+    y += y_temp;
+
+    for(int i = var_dim + 0; i < 2*var_dim; i++)
+    {
+        f_I.GetSubVector(offsets[i], f_sol);
+        K_inv_y.Mult(f_sol, f_x);
+        y_temp.SetSubVector(offsets[i - var_dim], f_x);
+    }
+    y += y_temp;
+
+
+    if (dim == 3)
+    {
+        for(int i = 2*var_dim + 0; i < 3*var_dim; i++)
+        {
+            f_I.GetSubVector(offsets[i], f_sol);
+            K_inv_z.Mult(f_sol, f_x);
+            y_temp.SetSubVector(offsets[i - 2*var_dim], f_x);
+        }
+        y += y_temp;
+    }
+
+    //////////////////////////////////////////////
+    //Get viscous contribution
+    for(int i = 0; i < var_dim; i++)
+    {
+        f_V.GetSubVector(offsets[i], f_sol);
+        K_vis_x.Mult(f_sol, f_x);
+        y_temp.SetSubVector(offsets[i], f_x);
+    }
+    y += y_temp;
+
+    for(int i = var_dim + 0; i < 2*var_dim; i++)
+    {
+        f_V.GetSubVector(offsets[i], f_sol);
+        K_vis_y.Mult(f_sol, f_x);
+        y_temp.SetSubVector(offsets[i - var_dim], f_x);
+    }
+    y += y_temp;
+
+    if (dim == 3)
+    {
+        for(int i = 2*var_dim + 0; i < 3*var_dim; i++)
+        {
+            f_V.GetSubVector(offsets[i], f_sol);
+            K_vis_z.Mult(f_sol, f_x);
+            y_temp.SetSubVector(offsets[i - 2*var_dim], f_x);
+        }
+        y += y_temp;
+    }
+
+    for(int i = 0; i < var_dim; i++)
+    {
+        y.GetSubVector(offsets[i], f_x);
+        M_solver.Mult(f_x, f_x_m);
+        y.SetSubVector(offsets[i], f_x_m);
+    }
+
+    Vector s(offset);
+    for(int i = 0; i < var_dim; i++)
+    {
+        s = 0.0;
+        if (i == 1)
+            s = fx; 
+        else if (i == var_dim - 1)
+            s = fx;
+        y_temp.SetSubVector(offsets[i], s);
+    }
+    add(y_temp, y, y);
+
+    const FiniteElementSpace *fes = x.FESpace();
+    Mesh *mesh                    = fes->GetMesh();
+
+    const FiniteElement *el;
+ 
+    Fx  = 0.0;
+    for (int i = 0; i < fes->GetNE(); i++)
+    {
+        ElementTransformation *T  = fes->GetElementTransformation(i);
+        el = fes->GetFE(i);
+ 
+        dim = el->GetDim();
+ 
+        int dof = el->GetDof();
+        Array<int> vdofs;
+        fes->GetElementVDofs(i, vdofs);
+ 
+        const IntegrationRule *ir ;
+        int   order;
+ 
+        order = 2*el->GetOrder() + 1;
+        ir    = &IntRules.Get(el->GetGeomType(), order);
+ 
+        for (int p = 0; p < ir->GetNPoints(); p++)
+        {
+            const IntegrationPoint &ip = ir->IntPoint(p);
+            T->SetIntPoint(&ip);
+ 
+            Fx  += ip.weight*T->Weight()*(y[vdofs[dof + p]]);
+        }
+    }
+
+}
+
+void writeUMean(const vector<double> u_mean, int ti, vector<double> y_uni)
+{
+    std::ostringstream oss;
+    oss << std::setw(7) << std::setfill('0') << ti;
+
+    std::string f_name = "u_mean_" + oss.str();
+
+    ofstream f_file;
+    f_file.open(f_name);
+
+    int vert_nodes = y_uni.size();
+    for(int i = 0; i < vert_nodes; i++)
+    {
+        f_file << y_uni.at(i) << "\t" << u_mean.at(i) << endl;    
+    }
+
+    f_file.close();
+
+}
