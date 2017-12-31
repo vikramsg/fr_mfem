@@ -545,21 +545,24 @@ CNS::CNS()
       ComputePeriodicMean(dim, *u_sol, ids, loc_u_mean);
       ComputeGlobPeriodicMean(comm, ids, loc_u_mean, glob_u_mean);
 
-      if (ti == 1)
+      int c_ti = 1;
+      if (restart == true)
+          c_ti = restart_cycle + 1;
+      if (ti == c_ti)
           temp_u_mean = glob_u_mean;
       else
       {
           int vert_nodes = glob_u_mean.size();      
           for(int i = 0; i < vert_nodes; i++)
           {
-              temp_u_mean.at(i) = temp_u_mean.at(i)*(ti - 1) + glob_u_mean.at(i);          
+              temp_u_mean.at(i) = temp_u_mean.at(i)*(ti - c_ti) + glob_u_mean.at(i);          
               temp_u_mean.at(i) = temp_u_mean.at(i)/double(ti);
           }
-      }
-      if (ti % vis_steps == 0) // Write mean u
-      {
-          if (myid == 0)
-              writeUMean(temp_u_mean, ti, y_uni);
+          if (ti % vis_steps == 0) // Write mean u
+          {
+              if (myid == 0)
+                  writeUMean(temp_u_mean, ti, y_uni);
+          }
       }
   
    }

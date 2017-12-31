@@ -38,14 +38,18 @@ void doRestart(const int cycle, ParMesh &pmesh, ParGridFunction &u_sol,
            
    int dim = pmesh.Dimension();
 
-   VisItDataCollection dc("CNS_restart", &pmesh);
+   VisItDataCollection dc("Restart", &pmesh);
 
    dc.Load(cycle);
 
    time      = dc.GetTime();
    time_step = dc.GetTimeStep();
 
-   u_sol     = *(dc.GetParField("u_cns"));  
+   GridFunction *u_temp = dc.GetField("u_cns");
+
+   for(int i = 0; i < u_temp->Size(); i++) 
+       u_sol[i] = (*u_temp)[i];
+
 }
 
 
@@ -55,7 +59,7 @@ void writeRestart(Mesh &mesh, GridFunction &u_sol, int cycle, double time)
    int dim     = mesh.Dimension();
    int var_dim = dim + 2;
 
-   VisItDataCollection dc("CNS_restart", &mesh);
+   VisItDataCollection dc("Restart", &mesh);
    dc.SetPrecision(16);
  
    dc.RegisterField("u_cns", &u_sol);
