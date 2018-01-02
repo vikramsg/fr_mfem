@@ -8,114 +8,66 @@ using namespace mfem;
 
 //Constants
 const double gamm  = 1.4;
-const double   mu  = 0.031;
+const double   mu  = 0.1 ;
 const double R_gas = 287;
 const double   Pr  = 0.72;
 
 //Run parameters
-const char *mesh_file   = "per_5.mesh";
-const int    order      = 2;
-const double t_final    =  0.10000;
-const bool   time_adapt = false;
-const double cfl        = 0.20;
-const double dt_const   = 0.001;
-const int    vis_steps  =  200;
-const int    ref_levels = 2;
-const int    problem    = 0;
+//const char *mesh_file        =  "periodic-square.mesh";
+const char *mesh_file        =  "periodic-cube.mesh";
+//const char *mesh_file        =  "ldc.msh";
+//const char *mesh_file        =  "cylinder_visc.msh";
+const int    order           =  1;
+const double t_final         =  0.00010;
+const int    problem         =  1;
+const int    ref_levels      =  0;
 
-const bool   adapt     = true ;
-const int    adapt_iter= 20   ; // Time steps after which adaptation is done
-const double tolerance = 1e-4 ; // Tolerance for adaptation
+const bool   time_adapt      =  false;
+const double cfl             =  0.20;
+const double dt_const        =  0.0001 ;
+const int    ode_solver_type =  1; // 1. Forward Euler 2. TVD SSP 3 Stage
+
+const int    vis_steps       =  1000;
+
+const bool   adapt           =  false;
+const int    adapt_iter      =  200  ; // Time steps after which adaptation is done
+const double tolerance       =  5e-4 ; // Tolerance for adaptation
 
 
 // Velocity coefficient
 void init_function(const Vector &x, Vector &v);
 
-double rho_init(const Vector &x);
-
-double getUMax(int dim, const Vector &u);
-
-void getInvFlux(int dim, const Vector &u, Vector &f);
-
-void getVisFlux(int dim, const Vector &u, const Vector &aux_grad, Vector &f);
-
-void getAuxGrad(int dim, const SparseMatrix &K_x, const SparseMatrix &K_y, const CGSolver &M_solver, 
-        const Vector &u, const Vector &b_aux_x, const Vector &b_aux_y, Vector &aux_grad);
-
-void getAuxVar(int dim, const Vector &u, Vector &aux_sol);
-
-void getFields(const GridFunction &u_sol, Vector &rho, Vector &u1, Vector &u2, Vector &E);
-
-void ComputeMaxResidual(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, int vDim, Vector &maxResi);
-
-void postProcess(Mesh &mesh, VarL2_FiniteElementCollection &vfec, GridFunction &u_sol, GridFunction &eleOrder, 
-                 int cycle, double time);
-
-void getEleOrder(FiniteElementSpace &fes, Array<int> &newEleOrder, GridFunction &order);
-
-/** A time-dependent operator for the right-hand side of the ODE. The DG weak
-    form is M du/dt = K u + b, where M and K are the mass
-    and operator matrices, and b describes the face correction terms. This can
-    be written as a general ODE, du/dt = M^{-1} (K u + b), and this class is
-    used to evaluate the right-hand side. */
-class FE_Evolution : public TimeDependentOperator
-{
-private:
-   SparseMatrix &M, &K_inv_x, &K_inv_y;
-   SparseMatrix &K_vis_x, &K_vis_y;
-   const Vector &b;
-   const Vector &b_aux_x, &b_aux_y;
-   DSmoother M_prec;
-   CGSolver M_solver;
-
-public:
-   FE_Evolution(SparseMatrix &_M, SparseMatrix &_K_inv_x, SparseMatrix &_K_inv_y, 
-                            SparseMatrix &_K_vis_x, SparseMatrix &_K_vis_y, Vector &_b,
-                            Vector &_b_aux_x, Vector &_b_aux_y);
-
-   void GetSize() ;
-
-   CGSolver &GetMSolver() ;
-
-   void Update();
-
-   virtual void Mult(const Vector &x, Vector &y) const;
-
-   virtual ~FE_Evolution() { }
-};
 
 class CNS 
 {
 private:
-    Mesh *mesh;
-    Array<int> eleOrder;
-    VarL2_FiniteElementCollection *vfec;
-    FiniteElementSpace *fes, *fes_vec, *fes_op;
+    int num_procs, myid;
+
+    ParMesh *pmesh ;
+
+    ParFiniteElementSpace  *fes, *fes_vec, *fes_op;
    
-    BilinearForm *m, *k_inv_x, *k_inv_y;
-    BilinearForm     *k_vis_x, *k_vis_y;
+    ParBilinearForm *m, *k_inv_x, *k_inv_y, *k_inv_z;
+    ParBilinearForm     *k_vis_x, *k_vis_y, *k_vis_z;
+
+    ParGridFunction *u_sol, *f_inv;   
+    HypreParVector  *U;
+    ParGridFunction *u_b, *f_I_b;   // Used in calculating b
+    ParLinearForm   *b;
 
     ODESolver *ode_solver; 
+    ParGridFunction *u_t, *k_t, *y_t;   
 
     int dim;
 
-    GridFunction u_sol, f_inv;   
-    LinearForm *b;
-
-    GridFunction rhs;   
-
     double h_min, h_max;  // Minimum, maximum element size
-    double dt, t, u_max;
+    double dt, t, glob_u_max;
     int ti;
+
+    ofstream tke_file;
 public:
    CNS();
 
-   void Step();
-   void Update(Array<int> &newEleOrder);
-
-   void UpdateElementOrder(Vector &error, double tolerance, Array<int> &newEleOrder);
-
-   ~CNS(); 
 };
 
 
@@ -124,6 +76,12 @@ public:
 
 int main(int argc, char *argv[])
 {
+    // Initialize MPI.
+   int num_procs, myid;
+   MPI_Init(&argc, &argv);
+   MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
+   MPI_Comm_rank(MPI_COMM_WORLD, &myid);
+   
    int precision = 8;
    cout.precision(precision);
 
@@ -134,8 +92,11 @@ int main(int argc, char *argv[])
 
 CNS::CNS() 
 {
+   MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
+   MPI_Comm_rank(MPI_COMM_WORLD, &myid);
+
    // Read the mesh from the given mesh file
-   mesh = new Mesh(mesh_file, 1, 1);
+   Mesh *mesh = new Mesh(mesh_file, 1, 1);
            dim = mesh->Dimension();
    int var_dim = dim + 2;
    int aux_dim = dim + 1; //Auxiliary variables for the viscous terms
@@ -144,696 +105,259 @@ CNS::CNS()
    {
       mesh->UniformRefinement();
    }
+   pmesh = new ParMesh(MPI_COMM_WORLD, *mesh);
+   delete mesh;
 
    double kappa_min, kappa_max;
-   mesh->GetCharacteristics(h_min, h_max, kappa_min, kappa_max);
+   pmesh->GetCharacteristics(h_min, h_max, kappa_min, kappa_max);
 
-   int ne = mesh->GetNE();
-   eleOrder.SetSize(ne);
+   DG_FECollection fec(order, dim);
+   fes = new ParFiniteElementSpace(pmesh, &fec, var_dim);
 
-   for (int i = 0; i < ne; i++) 
+   HYPRE_Int global_vSize = fes->GlobalTrueVSize();
+   if (myid == 0)
    {
-       if (adapt)
-           eleOrder[i] = order + 2; // Initializing with uniform order + 1 when doing adaptation
-       else
-           eleOrder[i] = order; // Initializing with uniform order
+      cout << "Number of unknowns: " << global_vSize << endl;
    }
-
-   //    Define the discontinuous DG finite element space 
-   //    Var_L2 allows variable order polynomials 
-   vfec = new VarL2_FiniteElementCollection(mesh, eleOrder);
-   fes = new FiniteElementSpace(mesh, vfec, var_dim);
-
-   cout << "Number of unknowns: " << fes->GetVSize() << endl;
-
-   rhs.SetSpace(fes);
 
    VectorFunctionCoefficient u0(var_dim, init_function);
-   u_sol.SetSpace(fes);
-   u_sol.ProjectCoefficient(u0);
-
-   fes_vec = new FiniteElementSpace(mesh, vfec, dim*var_dim);
-   f_inv.SetSpace(fes_vec);
-   getInvFlux(dim, u_sol, f_inv);
-
-   FiniteElementSpace fes_aux(mesh, vfec, aux_dim);
-   FiniteElementSpace fes_aux_grad(mesh, vfec, dim*aux_dim);
-
-   GridFunction aux_grad(&fes_aux_grad);
-   GridFunction f_vis(fes_vec);
-
-   LinearForm b_aux_x(&fes_aux);
-   LinearForm b_aux_y(&fes_aux);
-
-   b_aux_x *= 0.0;  // Initialize to 0
-   b_aux_y *= 0.0; 
-
-   ///////////////////////////////////////////////////////////
-   // Setup bilinear form for x derivative and the mass matrix
-   Vector dir(dim);
-   dir(0) = 1.0; dir(1) = 0.0;
-   VectorConstantCoefficient x_dir(dir);
-   dir(0) = 0.0; dir(1) = 1.0;
-   VectorConstantCoefficient y_dir(dir);
-
-   fes_op = new FiniteElementSpace(mesh, vfec);
-   m = new BilinearForm(fes_op);
-   m->AddDomainIntegrator(new MassIntegrator);
-   k_inv_x = new BilinearForm(fes_op);
-   k_inv_x->AddDomainIntegrator(new ConvectionIntegrator(x_dir, -1.0));
-   k_inv_y = new BilinearForm(fes_op);
-   k_inv_y->AddDomainIntegrator(new ConvectionIntegrator(y_dir, -1.0));
-
-   m->Assemble();
-   m->Finalize();
-   int skip_zeros = 1;
-   k_inv_x->Assemble(skip_zeros);
-   k_inv_x->Finalize(skip_zeros);
-   k_inv_y->Assemble(skip_zeros);
-   k_inv_y->Finalize(skip_zeros);
-
-   /////////////////////////////////////////////////////////////
-
-   VectorGridFunctionCoefficient u_vec(&u_sol);
-   VectorGridFunctionCoefficient f_vec(&f_inv);
-
-   /////////////////////////////////////////////////////////////
-   // Linear form
-   b = new LinearForm(fes);
-   b->AddFaceIntegrator(
-      new DGEulerIntegrator(u_vec, f_vec, var_dim, -1.0));
-   b->Assemble();
-   ///////////////////////////////////////////////////////////
    
-   ///////////////////////////////////////////////////////////
-   // Setup bilinear form for viscous terms 
-   k_vis_x = new BilinearForm(fes_op);
-   k_vis_x->AddDomainIntegrator(new ConvectionIntegrator(x_dir,  1.0));
-   k_vis_x->AddInteriorFaceIntegrator(
-      new TransposeIntegrator(new DGTraceIntegrator(x_dir, -1.0,  0.0)));// Beta 0 means central flux
+   u_sol = new ParGridFunction(fes);
+   u_sol->ProjectCoefficient(u0);
 
-   k_vis_y = new BilinearForm(fes_op);
-   k_vis_y->AddDomainIntegrator(new ConvectionIntegrator(y_dir,  1.0));
-   k_vis_y->AddInteriorFaceIntegrator(
-      new TransposeIntegrator(new DGTraceIntegrator(y_dir, -1.0,  0.0)));// Beta 0 means central flux
+   U = u_sol->GetTrueDofs();
 
-   k_vis_x->Assemble(skip_zeros);
-   k_vis_x->Finalize(skip_zeros);
-   k_vis_y->Assemble(skip_zeros);
-   k_vis_y->Finalize(skip_zeros);
+   double tol = std::numeric_limits<double>::epsilon();
 
-   /////////////////////////////////////////////////////////////
+   Poly_1D poly1d;
+   int p_basis = order , type = 0;
+   int Np = p_basis + 1;
+   Poly_1D::Basis &basis1d(poly1d.OpenBasis(p_basis, type));
 
-   FE_Evolution *adv  = new FE_Evolution(m->SpMat(), k_inv_x->SpMat(), k_inv_y->SpMat(), 
-                                         k_vis_x->SpMat(), k_vis_y->SpMat(), *b, b_aux_x, b_aux_y);
-
-   CGSolver &M_solver = adv->GetMSolver();
-   getAuxGrad(dim, k_vis_x->SpMat(), k_vis_y->SpMat(), M_solver, u_sol, b_aux_x, b_aux_y, aux_grad);
-   getVisFlux(dim, u_sol, aux_grad, f_vis);
-
+   const double *pts = poly1d.GetPoints(p_basis, type);
    
-   Vector maxResi(fes->GetNE()); // Max residual in each element
+//   for (int i = 0; i < p_basis + 1; i++)
+//   {
+//       cout << 2*pts[i] - 1 << "\t"   ; // Get LGL points
+//   }
+//   cout << endl;
 
-//   ode_solver = new ForwardEulerSolver; 
-   ode_solver = new RK3SSPSolver; 
+//   Vector P(p_basis + 1);
+//   poly1d.CalcLegendreBasis(p_basis, pts[2], P);
+//   for (int i = 0; i < p_basis + 1; i++)
+//   {
+//       cout << P[i] << "\t"   ; // Get LGL points
+//   }
+//   cout << endl;
 
-   u_max = getUMax(dim, u_sol);
-
-   if (time_adapt)
+   Vector P(Np);
+   DenseMatrix van(Np);
+   for (int i = 0; i < Np; i++)
    {
-       dt = cfl*((h_min/(2.0*order + 1))/u_max); 
-   }
-   else
-   {
-       dt = dt_const; 
+       poly1d.CalcLegendreBasis(p_basis, pts[i], P);
+       van.SetRow(i, P);
+   
+       for (int j = 0; j < Np; j++)
+       {
+           double p_gamma = 2.0/(2.0*j + 1);
+           van(i, j)   = van(i, j)/sqrt(p_gamma);
+       }
    }
 
-   GridFunction ele_order_pp(fes_op);
-   getEleOrder(*fes_op, eleOrder, ele_order_pp);
+   DenseMatrix inv_van(van);
+   inv_van.Transpose();
+   inv_van.Invert();
 
-   t = 0.0; ti = 0;
-   postProcess(*mesh, *vfec, u_sol, ele_order_pp, ti, t);
-
-   adv->SetTime(t);
-   ode_solver->Init(*adv);
-   
-   Array<int> newEleOrder(fes->GetNE());
-
-   bool done = false;
-   for (ti = 0; !done; )
+//   van.Print();
+//   inv_van.Print();
+   Vector mod_lag_R(Np), mod_lag_L(Np);
+   poly1d.CalcLegendreBasis(p_basis, 0.0, P);
+   for (int j = 0; j < Np; j++)
    {
-      Step();
+       double p_gamma = 2.0/(2.0*j + 1);
+       P[j] = P[j]/sqrt(p_gamma);
+   }
+   P[Np - 1] *= 0.8;
+   inv_van.Mult(P, mod_lag_L);
+   poly1d.CalcLegendreBasis(p_basis, 1.0, P);
+   for (int j = 0; j < Np; j++)
+   {
+       double p_gamma = 2.0/(2.0*j + 1);
+       P[j] = P[j]/sqrt(p_gamma);
+   }
+   P[Np - 1] *= 0.8;
+   inv_van.Mult(P, mod_lag_R);
+//   cout << mod_lag_L[0] << "\t" << mod_lag_L[1] << "\t" << mod_lag_L[2] << endl;
+//   cout << mod_lag_R[0] << "\t" << mod_lag_R[1] << "\t" << mod_lag_R[2] << endl;
 
-      if (ti % adapt_iter == 0 && adapt)
-      {
-          adv->Mult(u_sol, rhs);
 
-          ComputeMaxResidual(*mesh, *fes, rhs, 1, maxResi);
-          UpdateElementOrder(maxResi, tolerance, newEleOrder);
 
-          Update(newEleOrder);      
+   FaceElementTransformations *Trans; 
+   const FiniteElement *fe1, *fe2;
+   Array<int> vdofs1, vdofs2;
+   int ndof1, ndof2;
+   Vector shape1, shape2;
+   Vector mod_shape1, mod_shape2;
+   Vector shape_x(p_basis + 1), shape_y(p_basis + 1), shape_z(p_basis + 1);
 
-          delete adv;
+//   for (int i = 0; i < pmesh->GetNumFaces(); i++)
+   for (int i = 0; i < 10; i++)
+   {
+       Trans = pmesh->GetInteriorFaceTransformations(i);
+       if (Trans != NULL)
+       {
+   
+           fe1 = fes->GetFE(Trans->Elem1No);
+           fe2 = fes->GetFE(Trans->Elem2No);
        
-          b_aux_x.Update();
-          b_aux_y.Update();
-          b_aux_x *= 0.0;  // Initialize to 0
-          b_aux_y *= 0.0; 
+           fes->GetElementVDofs(Trans->Elem1No, vdofs1);
+           fes->GetElementVDofs(Trans->Elem2No, vdofs2);
+           
+           ndof1 = fe1->GetDof();
+           ndof2 = fe2->GetDof();
+    
+           shape1.SetSize(ndof1);
+           shape2.SetSize(ndof2);
 
-          adv = new FE_Evolution(m->SpMat(), k_inv_x->SpMat(), k_inv_y->SpMat(), 
-                                         k_vis_x->SpMat(), k_vis_y->SpMat(), *b, b_aux_x, b_aux_y);
-          adv->SetTime(t);
-          ode_solver->Init(*adv);
-      }
+           mod_shape1.SetSize(ndof1);
+           mod_shape2.SetSize(ndof2);
+   
+           int f_order;
+           f_order = (std::min(Trans->Elem1->OrderW(), Trans->Elem2->OrderW()) +
+                   2*std::max(fe1->GetOrder(), fe2->GetOrder()));
+           const IntegrationRule *ir  = &IntRules.Get(Trans->FaceGeom, f_order);
+    
+           for (int p = 0; p < ir->GetNPoints(); p++)
+           {
+              const IntegrationPoint &ip = ir->IntPoint(p);
+              IntegrationPoint eip1, eip2;
+              Trans->Loc1.Transform(ip, eip1);
+              if (ndof2)
+              {
+                 Trans->Loc2.Transform(ip, eip2);
+              }
+    
+              Trans->Face->SetIntPoint(&ip);
+              Trans->Elem1->SetIntPoint(&eip1);
+              Trans->Elem2->SetIntPoint(&eip2);
+    
+              fe1->CalcShape(eip1, shape1);
+              fe2->CalcShape(eip2, shape2);
+    
+              basis1d.Eval(eip1.x, shape_x);
+              basis1d.Eval(eip1.y, shape_y);
 
-      done = (t >= t_final - 1e-8*dt);
+              if (abs(eip1.x) < tol)
+              {
+                  shape_x = mod_lag_L;              
+              }
+              else if ( 1 - abs(eip1.x) < tol)
+              {
+                  shape_x = mod_lag_R;              
+              }
+              if (abs(eip1.y) < tol)
+              {
+                  shape_y = mod_lag_L;              
+              }
+              else if ( 1 - abs(eip1.y) < tol)
+              {
+                  shape_y = mod_lag_R;              
+              }
+
+              if (dim == 2)
+              {
+                  mod_shape1 = 0.0;
+                  for (int ot = 0, jt = 0; jt <= p_basis; jt++)
+                      for (int it = 0; it <= p_basis; it++)
+                      {
+                          mod_shape1(ot++) = shape_x(it)*shape_y(jt);
+                      }
+              }
+              else if (dim == 3)
+              {
+                  basis1d.Eval(eip1.z, shape_z);
+                  if (abs(eip1.z) < tol)
+                  {
+                      shape_z = mod_lag_L;              
+                  }
+                  else if ( 1 - abs(eip1.z) < tol)
+                  {
+                      shape_z = mod_lag_R;              
+                  }
+                  for (int ot = 0, kt = 0; kt <= p_basis; kt++)
+                      for (int jt = 0; jt <= p_basis; jt++)
+                          for (int it = 0; it <= p_basis; it++)
+                          {
+                              mod_shape1(ot++) = shape_x(it)*shape_y(jt)*shape_z(kt);                          
+                          }
+              }
+//              cout << eip1.x << "\t" << eip1.y<< "\t" << eip1.z << endl;
+//              cout << eip2.x << "\t" << eip2.y<< "\t" << eip2.z << endl;
+//              cout << eip1.x << "\t" << shape_x[0] << "\t" << shape_x[1] << "\t" << shape_x[2] << endl;
+              cout << shape1[0] << "\t" << shape1[1] << "\t" << shape1[2] << endl;
+              cout << mod_shape1[0] << "\t" << mod_shape1[1] << "\t" << mod_shape1[2] << endl;
+
+              basis1d.Eval(eip2.x, shape_x);
+              basis1d.Eval(eip2.y, shape_y);
+                  
+              if (abs(eip2.x) < tol)
+              {
+                  shape_x = mod_lag_L;              
+              }
+              else if ( 1 - abs(eip2.x) < tol)
+              {
+                  shape_x = mod_lag_R;              
+              }
+              if (abs(eip2.y) < tol)
+              {
+                  shape_y = mod_lag_L;              
+              }
+              else if ( 1 - abs(eip2.y) < tol)
+              {
+                  shape_y = mod_lag_R;              
+              }
+
+              if (dim == 2)
+              {
+                  mod_shape2 = 0.0;
+                  for (int ot = 0, jt = 0; jt <= p_basis; jt++)
+                      for (int it = 0; it <= p_basis; it++)
+                      {
+                          mod_shape2(ot++) = shape_x(it)*shape_y(jt);
+                      }
+              }
+              else if (dim == 3)
+              {
+                  basis1d.Eval(eip2.z, shape_z);
+                  if (abs(eip2.z) < tol)
+                  {
+                      shape_z = mod_lag_L;              
+                  }
+                  else if ( 1 - abs(eip2.z) < tol)
+                  {
+                      shape_z = mod_lag_R;              
+                  }
+                  for (int ot = 0, kt = 0; kt <= p_basis; kt++)
+                      for (int jt = 0; jt <= p_basis; jt++)
+                          for (int it = 0; it <= p_basis; it++)
+                          {
+                              mod_shape2(ot++) = shape_x(it)*shape_y(jt)*shape_z(kt);                          
+                          }
+              }
+
+
+//              cout << shape2[0] << "\t" << shape2[1] << "\t" << shape2[2] << endl;
+//              cout << mod_shape2[0] << "\t" << mod_shape2[1] << "\t" << mod_shape2[2] << endl;
+
+//              cout << i << "\t" << p << "\t" << shape1[0] << "\t" << shape1[1] << "\t" << shape1[2] << endl;
       
-      if (done || ti % vis_steps == 0)
-      {
-          GridFunction ele_order_temp(fes_op);
-          getEleOrder(*fes_op, newEleOrder, ele_order_temp);
-          postProcess(*mesh, *vfec, u_sol, ele_order_temp, ti, t);
-      }
- 
-   }
-
-//   FunctionCoefficient rho0(rho_init);
-//   GridFunction rho_sol(fes_op);
-
-//   for (int i = 0; i < fes_op->GetVSize(); i++) rho_sol[i] = u_sol[i];
-//   cout << "rho L2 Error :" << rho_sol.ComputeL2Error(rho0) << endl;
-//
-//   cout << "u_sol L2 Error :" << u_sol.ComputeL2Error(u0) << endl;
-
-   // Print all nodes in the finite element space 
-   FiniteElementSpace fes_nodes(mesh, vfec, dim);
-   GridFunction nodes(&fes_nodes);
-   mesh->GetNodes(nodes);
-
-   for (int i = 0; i < nodes.Size()/dim; i++)
-   {
-       int offset = nodes.Size()/dim;
-       int sub1 = i, sub2 = offset + i, sub3 = 2*offset + i, sub4 = 3*offset + i;
-//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub4) << "\t" << rhs(sub4)<< endl;      
-//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << "\t" << u_out(sub1) << endl;      
-   }
-
-   delete adv;
-}
-
-
-CNS::~CNS()
-{
-    delete b;
-    delete ode_solver;
-    delete mesh;
-    delete vfec;
-    delete fes;
-    delete fes_vec;
-    delete fes_op;
-    delete m;
-    delete k_inv_x, k_inv_y;
-    delete k_vis_x, k_vis_y;
-}
-
-void CNS::Step()
-{
-      b->Assemble();
-
-      double dt_real = min(dt, t_final - t);
-      ode_solver->Step(u_sol, t, dt_real);
-      ti++;
-
-      u_max = getUMax(dim, u_sol);
-      cout << "time step: " << ti << ", dt: " << dt_real << ", time: " << 
-                t << ", max_speed " << u_max << ", fes_size " << fes->GetVSize() << endl;
-
-      if (time_adapt)
-      {
-          dt = cfl*((h_min/(2.0*order + 1))/u_max); 
-      }
-      else
-      {
-          dt = dt_const; 
-      }
-
-      getInvFlux(dim, u_sol, f_inv); // To update f_vec
-}
-
-void CNS::Update(Array<int> &newEleOrder)
-{
-   int var_dim = dim + 2; 
-   int ne = mesh->GetNE();
-   Array<int> eleOrder_temp(ne);
-
-   bool isUpdate = false; // Only change the FESpace if atleast one eleOrder is different
-   for (int i = 0; i < ne; i++) 
-   {
-       eleOrder_temp[i] = eleOrder[i]; 
-       if (eleOrder[i] != newEleOrder[i])
-       {
-           isUpdate = true;
+           }
        }
-   }
 
-   if (isUpdate)
-   {
-       VarL2_FiniteElementCollection vfec_temp(mesh, eleOrder_temp);
-       FiniteElementSpace fes_temp(mesh, &vfec_temp, var_dim);
-    
-       GridFunction u_temp(&fes_temp);
-       u_temp.GetValuesFrom(u_sol); // Create a temp variable to get the previous space solution
-    
-       for (int i = 0; i < ne; i++) eleOrder[i] = newEleOrder[i]; 
-    
-       vfec->Update(eleOrder);
-       fes->Update();
-       fes_vec->Update();
-       fes_op->Update();
-    
-       u_sol.Update();
-       u_sol.GetValuesFrom(u_temp);   // Update solution to new space using temp variable
-    
-       f_inv.Update();
-       getInvFlux(dim, u_sol, f_inv); // To update f_vec
-       
-       rhs.Update();
-    
-       m->Update();
-       m->Assemble();
-       m->Finalize();
-    
-       int skip_zeros = 1;
-       k_inv_x->Update();
-       k_inv_x->Assemble(skip_zeros);
-       k_inv_x->Finalize(skip_zeros);
-       k_inv_y->Update();
-       k_inv_y->Assemble(skip_zeros);
-       k_inv_y->Finalize(skip_zeros);
- 
-       k_vis_x->Update();
-       k_vis_x->Assemble(skip_zeros);
-       k_vis_x->Finalize(skip_zeros);
-       k_vis_y->Update();
-       k_vis_y->Assemble(skip_zeros);
-       k_vis_y->Finalize(skip_zeros);
-   
-       b->Update();
-       b->Assemble();
-    
    }
 
 }
 
-// error is a Vector of size fes->GetNE
-// If magnitude of error is greater than tolerance, 
-// order of the element is increased to 4
-void CNS::UpdateElementOrder(Vector &error, double tolerance, Array<int> &newEleOrder)
-{
-   int ne = mesh->GetNE();
-
-   for (int i = 0; i < ne; i++) 
-   {
-       newEleOrder[i] = eleOrder[i]; 
-       if (abs(error[i]) > 10*tolerance)
-       {
-           newEleOrder[i] = order + 2; 
-       }
-       else if (abs(error[i]) > tolerance)
-       {
-           newEleOrder[i] = order + 1; 
-       }
-       else
-       {
-           newEleOrder[i] = order; 
-       }
-   }
-}
-
-
-
-// Implementation of class FE_Evolution
-FE_Evolution::FE_Evolution(SparseMatrix &_M, SparseMatrix &_K_inv_x, SparseMatrix &_K_inv_y, 
-                            SparseMatrix &_K_vis_x, SparseMatrix &_K_vis_y, Vector &_b, 
-                            Vector &_b_aux_x, Vector &_b_aux_y)
-   : TimeDependentOperator(_b.Size()), M(_M), K_inv_x(_K_inv_x), K_inv_y(_K_inv_y), 
-                            K_vis_x(_K_vis_x), K_vis_y(_K_vis_y), b(_b), b_aux_x(_b_aux_x), b_aux_y(_b_aux_y)
-{
-   M_solver.SetPreconditioner(M_prec);
-   M_solver.SetOperator(M);
-
-   M_solver.iterative_mode = false;
-   M_solver.SetRelTol(1e-9);
-   M_solver.SetAbsTol(0.0);
-   M_solver.SetMaxIter(2);
-   M_solver.SetPrintLevel(0);
-}
-
-
-
-void FE_Evolution::Mult(const Vector &x, Vector &y) const
-{
-    int dim = x.Size()/K_inv_x.Size() - 2;
-    int var_dim = dim + 2;
-
-    y.SetSize(x.Size()); // Needed since by default ode_init will set it as size of K
-
-    Vector y_temp;
-    y_temp.SetSize(x.Size()); // Needed since by default ode_init will set it as size of K
-
-    Vector f(dim*x.Size());
-    getInvFlux(dim, x, f);
-
-    int offset  = K_inv_x.Size();
-    Array<int> offsets[dim*var_dim];
-    for(int i = 0; i < dim*var_dim; i++)
-    {
-        offsets[i].SetSize(offset);
-    }
-
-    for(int j = 0; j < dim*var_dim; j++)
-    {
-        for(int i = 0; i < offset; i++)
-        {
-            offsets[j][i] = j*offset + i ;
-        }
-    }
-
-    Vector f_sol(offset), f_x(offset), f_x_m(offset);
-    Vector b_sub(offset);
-    y = 0.0;
-    for(int i = 0; i < var_dim; i++)
-    {
-        f.GetSubVector(offsets[i], f_sol);
-        K_inv_x.Mult(f_sol, f_x);
-        b.GetSubVector(offsets[i], b_sub);
-        f_x += b_sub; // Needs to be added only once
-        M_solver.Mult(f_x, f_x_m);
-        y_temp.SetSubVector(offsets[i], f_x_m);
-    }
-    y += y_temp;
-
-    for(int i = var_dim + 0; i < 2*var_dim; i++)
-    {
-        f.GetSubVector(offsets[i], f_sol);
-        K_inv_y.Mult(f_sol, f_x);
-        M_solver.Mult(f_x, f_x_m);
-        y_temp.SetSubVector(offsets[i - var_dim], f_x_m);
-    }
-    y += y_temp;
-    
-    //////////////////////////////////////////////
-    //Get viscous contribution
-    Vector f_vis(dim*x.Size());
-    Vector aux_grad(dim*(dim + 1)*offset);
-
-    getAuxGrad(dim, K_vis_x, K_vis_y, M_solver, x, b_aux_x, b_aux_y, aux_grad);
-    getVisFlux(dim, x, aux_grad, f_vis);
-
-    for(int i = 0; i < var_dim; i++)
-    {
-        f_vis.GetSubVector(offsets[i], f_sol);
-        K_vis_x.Mult(f_sol, f_x);
-        M_solver.Mult(f_x, f_x_m);
-        y_temp.SetSubVector(offsets[i], f_x_m);
-    }
-    y += y_temp;
-
-    for(int i = var_dim + 0; i < 2*var_dim; i++)
-    {
-        f_vis.GetSubVector(offsets[i], f_sol);
-        K_vis_y.Mult(f_sol, f_x);
-        M_solver.Mult(f_x, f_x_m);
-        y_temp.SetSubVector(offsets[i - var_dim], f_x_m);
-    }
-    y += y_temp;
-
-}
-
-
-CGSolver &FE_Evolution::GetMSolver() 
-{
-    return M_solver;
-}
-
-
-// Get max signal speed 
-double getUMax(int dim, const Vector &u)
-{
-    int var_dim = dim + 2; 
-    int aux_dim = dim + 1; // Auxilliary variables are {u, v, w, T}
-
-    int offset = u.Size()/var_dim;
-
-    double u_max = 0;
-
-    double rho, vel[dim];
-    for(int j = 0; j < offset; j++)
-    {
-        rho = u[j];
-    
-        for(int i = 0; i < dim; i++) vel[i] = u[1 + i]/rho;
-
-        double v_sq =  0;
-        for(int i = 0; i < dim; i++)
-        {
-            v_sq += pow(vel[i], 2);
-        }
-        double rho_E = u[(var_dim - 1)*offset + j];
-        double e  = (rho_E - 0.5*rho*v_sq)/rho;
-        double Cv = R_gas/(gamm - 1);
-
-        double T = e/Cv; // T
-
-        double a = sqrt(gamm*R_gas*T);
-
-        u_max = max(u_max, sqrt(v_sq) + a);
-    }
-    return u_max;
-}
-
-
-
-// Inviscid flux 
-void getInvFlux(int dim, const Vector &u, Vector &f)
-{
-    int var_dim = dim + 2;
-    int offset  = u.Size()/var_dim;
-
-    Array<int> offsets[dim*var_dim];
-    for(int i = 0; i < dim*var_dim; i++)
-    {
-        offsets[i].SetSize(offset);
-    }
-
-    for(int j = 0; j < dim*var_dim; j++)
-    {
-        for(int i = 0; i < offset; i++)
-        {
-            offsets[j][i] = j*offset + i ;
-        }
-    }
-    Vector rho, rho_u1, rho_u2, E;
-    u.GetSubVector(offsets[0], rho   );
-    u.GetSubVector(offsets[3],      E);
-
-    Vector rho_vel[dim];
-    for(int i = 0; i < dim; i++) u.GetSubVector(offsets[1 + i], rho_vel[i]);
-
-    for(int i = 0; i < offset; i++)
-    {
-        double vel[dim];        
-        for(int j = 0; j < dim; j++) vel[j]   = rho_vel[j](i)/rho(i);
-
-        double vel_sq = 0.0;
-        for(int j = 0; j < dim; j++) vel_sq += pow(vel[j], 2);
-
-        double pres    = (E(i) - 0.5*rho(i)*vel_sq)*(gamm - 1);
-
-        for(int j = 0; j < dim; j++) 
-        {
-            f(j*var_dim*offset + i)       = rho_vel[j][i]; //rho*u
-
-            for (int k = 0; k < dim ; k++)
-            {
-                f(j*var_dim*offset + (k + 1)*offset + i)     = rho_vel[j](i)*vel[k]; //rho*u*u + p    
-            }
-            f(j*var_dim*offset + (j + 1)*offset + i)        += pres; 
-
-            f(j*var_dim*offset + (var_dim - 1)*offset + i)   = (E(i) + pres)*vel[j] ;//(E+p)*u
-        }
-    }
-}
-
-
-
-// Get gradient of auxilliary variable 
-void getAuxGrad(int dim, const SparseMatrix &K_x, const SparseMatrix &K_y, const CGSolver &M_solver, 
-        const Vector &u, const Vector &b_aux_x, const Vector &b_aux_y, Vector &aux_grad)
-{
-    int var_dim = dim + 2; 
-    int aux_dim = dim + 1; // Auxilliary variables are {u, v, w, T}
-    int offset = u.Size()/var_dim;
-
-    Vector aux_sol(aux_dim*offset);
-
-    getAuxVar(dim, u, aux_sol);
-        
-    Array<int> offsets[dim*aux_dim];
-    for(int i = 0; i < dim*aux_dim; i++)
-    {
-        offsets[i].SetSize(offset);
-    }
-    for(int j = 0; j < dim*aux_dim; j++)
-    {
-        for(int i = 0; i < offset; i++)
-        {
-            offsets[j][i] = j*offset + i ;
-        }
-    }
-
-    aux_grad = 0.0;
-
-    Vector aux_var(offset), aux_x(offset), b_sub(offset);
-    for(int i = 0; i < aux_dim; i++)
-    {
-        aux_sol.GetSubVector(offsets[i], aux_var);
-
-        K_x.Mult(aux_var, aux_x);
-        b_aux_x.GetSubVector(offsets[i], b_sub);
-        add(b_sub, aux_x, aux_x);
-        M_solver.Mult(aux_x, aux_x);
-        aux_grad.SetSubVector(offsets[          i], aux_x);
-
-        K_y.Mult(aux_var, aux_x);
-        b_aux_y.GetSubVector(offsets[i], b_sub);
-        add(b_sub, aux_x, aux_x);
-        M_solver.Mult(aux_x, aux_x);
-        aux_grad.SetSubVector(offsets[aux_dim + i], aux_x);
-    }
-}
-
-
-
-// Get auxilliary variables
-void getAuxVar(int dim, const Vector &u, Vector &aux_sol)
-{
-    int var_dim = dim + 2; 
-    int aux_dim = dim + 1; // Auxilliary variables are {u, v, w, T}
-
-    int offset = u.Size()/var_dim;
-
-    Array<int> offsets[var_dim];
-    for(int i = 0; i < var_dim; i++)
-    {
-        offsets[i].SetSize(offset);
-    }
-    for(int j = 0; j < var_dim; j++)
-    {
-        for(int i = 0; i < offset; i++)
-        {
-            offsets[j][i] = j*offset + i ;
-        }
-    }
-
-    Vector rho(offset), u_sol(offset), rho_E(offset);
-    u.GetSubVector(offsets[0], rho);
-    for(int i = 0; i < dim; i++)
-    {
-        u.GetSubVector(offsets[1 + i], u_sol); // u, v, w
-        for(int j = 0; j < offset; j++)
-        {
-            aux_sol[i*offset + j] = u_sol[j]/rho[j];
-        }
-    }
-    u.GetSubVector(offsets[var_dim - 1], rho_E); // rho*E
-    for(int j = 0; j < offset; j++)
-    {
-        double v_sq =  0;
-        for(int i = 0; i < dim; i++)
-        {
-            v_sq += pow(aux_sol[i*offset + j], 2);
-        }
-        double e  = (rho_E(j) - 0.5*rho[j]*v_sq)/rho[j];
-        double Cv = R_gas/(gamm - 1);
-
-        aux_sol[(aux_dim - 1)*offset + j] = e/Cv; // T
-    }
-}
-
-
-// Aux flux 
-void getVisFlux(int dim, const Vector &u, const Vector &aux_grad, Vector &f)
-{
-    int var_dim = dim + 2;
-    int aux_dim = dim + 1;
-    int offset  = u.Size()/var_dim;
-
-    Array<int> offsets[dim*var_dim];
-    for(int i = 0; i < dim*var_dim; i++)
-    {
-        offsets[i].SetSize(offset);
-    }
-
-    for(int j = 0; j < dim*var_dim; j++)
-    {
-        for(int i = 0; i < offset; i++)
-        {
-            offsets[j][i] = j*offset + i ;
-        }
-    }
-
-    Vector rho(offset), rho_u1(offset), rho_u2(offset), E(offset);
-    u.GetSubVector(offsets[0], rho   );
-    u.GetSubVector(offsets[3],      E);
-
-    Vector rho_vel[dim];
-    for(int i = 0; i < dim; i++) u.GetSubVector(offsets[1 + i], rho_vel[i]);
-
-    for(int i = 0; i < offset; i++)
-    {
-        double vel[dim];        
-        for(int j = 0; j < dim; j++) vel[j]   = rho_vel[j](i)/rho(i);
-
-        double vel_grad[dim][dim];
-        for (int k = 0; k < dim; k++)
-            for (int j = 0; j < dim; j++)
-            {
-                vel_grad[j][k]      =  aux_grad[k*(aux_dim)*offset + j*offset + i];
-            }
-
-        double divergence = 0.0;            
-        for (int k = 0; k < dim; k++) divergence += vel_grad[k][k];
-
-        double tau[dim][dim];
-        for (int j = 0; j < dim; j++) 
-            for (int k = 0; k < dim; k++) 
-                tau[j][k] = mu*(vel_grad[j][k] + vel_grad[k][j]);
-
-        for (int j = 0; j < dim; j++) tau[j][j] -= 2.0*mu*divergence/3.0; 
-
-        double int_en_grad[dim];
-        for (int j = 0; j < dim; j++)
-        {
-            int_en_grad[j] = (R_gas/(gamm - 1))*aux_grad[j*(aux_dim)*offset + (aux_dim - 1)*offset + i] ; // Cv*T_x
-        }
-
-        for (int j = 0; j < dim ; j++)
-        {
-            f(j*var_dim*offset + i)       = 0.0;
-
-            for (int k = 0; k < dim ; k++)
-            {
-                f(j*var_dim*offset + (k + 1)*offset + i)       = tau[j][k];
-            }
-            f(j*var_dim*offset + (var_dim - 1)*offset + i)     =  (mu/Pr)*gamm*int_en_grad[j]; 
-            for (int k = 0; k < dim ; k++)
-            {
-                f(j*var_dim*offset + (var_dim - 1)*offset + i)+= vel[k]*tau[j][k]; 
-            }
-        }
-    }
-}
 
 
 
@@ -845,196 +369,80 @@ void init_function(const Vector &x, Vector &v)
 
    if (dim == 2)
    {
-       double rho, u1, u2, p, T, M;
-       double R, beta, omega, f, du, dv, dT;
+       double rho, u1, u2, p;
 
-       beta = 5;
+       if (problem == 0) // Smooth periodic density. Exact solution to Euler 
+       {
+           rho =  1.0 + 0.2*sin(M_PI*(x(0) + x(1)));
+           p   =  1.0; 
+           u1  =  1.0;
+           u2  =  1.0;
+       }
+       else if (problem == 1) // Taylor Green Vortex; exact solution of incompressible NS
+       {
+           rho =  1.0;
+           p   =  100 + (rho/4.0)*(cos(2.0*M_PI*x(0)) + cos(2.0*M_PI*x(1)));
+           u1  =      sin(M_PI*x(0))*cos(M_PI*x(1));
+           u2  = -1.0*cos(M_PI*x(0))*sin(M_PI*x(1));
+       }
+       else if (problem == 2) // Isentropic vortex; exact solution for Euler
+       {
+           double T, M;
+           double beta, omega, f, du, dv, dT;
+    
+           beta = 5;
+    
+           f     = (pow(x(0), 2) + pow(x(1), 2));
+           omega = (beta/(2*M_PI))*exp(0.5*(1 - f));
+           du    = -x(1)*omega;
+           dv    =  x(0)*omega;
+           dT    = - (gamm - 1)*beta*beta/(8*gamm*M_PI*M_PI) * exp(1 - f);
+    
+           u1    = 1 + du;
+           u2    = dv;
+           T     = 1 + dT;
+           rho   = pow(T, 1/(gamm - 1));
+           p     = rho*R_gas*T;
 
-       f     = (pow(x(0), 2) + pow(x(1), 2));
-       omega = (beta/(2*M_PI))*exp(0.5*(1 - f));
-       du    = -x(1)*omega;
-       dv    =  x(0)*omega;
-       dT    = - (gamm - 1)*beta*beta/(8*gamm*M_PI*M_PI) * exp(1 - f);
-
-       u1    = 1 + du;
-       u2    = dv;
-       T     = 1 + dT;
-       rho   = pow(T, 1/(gamm - 1));
-       p     = rho*R_gas*T;
-
+       }
+       
        double v_sq = pow(u1, 2) + pow(u2, 2);
-
+    
        v(0) = rho;                     //rho
        v(1) = rho * u1;                //rho * u
        v(2) = rho * u2;                //rho * v
        v(3) = p/(gamm - 1) + 0.5*rho*v_sq;
    }
-}
-
-//  Initialize variables coefficient
-double rho_init(const Vector &x)
-{
-   //Space dimensions 
-   int dim = x.Size();
-
-   if (dim == 2)
+   else if (dim == 3)
    {
-       double rho, u1, u2, p, T, M;
-       double R, beta, omega, f, du, dv, dT;
+       double rho, u1, u2, u3, p;
 
-       beta = 5;
-
-       f     = (pow(x(0), 2) + pow(x(1), 2));
-       omega = (beta/(2*M_PI))*exp(0.5*(1 - f));
-       du    = -x(1)*omega;
-       dv    =  x(0)*omega;
-       dT    = - (gamm - 1)*beta*beta/(8*gamm*M_PI*M_PI) * exp(1 - f);
-
-       u1    = 1 + du;
-       u2    = dv;
-       T     = 1 + dT;
-       rho   = pow(T, 1/(gamm - 1));
-
-       return rho;
-   }
-}
-
-
-
-void getFields(const GridFunction &u_sol, Vector &rho, Vector &u1, Vector &u2, Vector &E)
-{
-
-    int vDim    = u_sol.VectorDim();
-    int dofs    = u_sol.Size()/vDim;
-
-    for (int i = 0; i < dofs; i++)
-    {
-        rho[i] = u_sol[         i];        
-        u1 [i] = u_sol[  dofs + i]/rho[i];        
-        u2 [i] = u_sol[2*dofs + i]/rho[i];        
-        E  [i] = u_sol[3*dofs + i];        
-    }
-}
-
-
-// Returns the max residual of the componenent of the vector specified by vDim
-void ComputeMaxResidual(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, int vDim, Vector &maxResi)
-{
-   const FiniteElement *el;
-   ElementTransformation *T;
-
-   int dim;
-
-   Vector vals;
-   for (int i = 0; i < fes.GetNE(); i++)
-   {
-       T = fes.GetElementTransformation(i);
-
-       el = fes.GetFE(i);
-   
-       dim = el->GetDim();
-
-       Array<int> vdofs;
-       fes.GetElementVDofs(i, vdofs);
-
-       int dof = el->GetDof();
-
-       int var_dim = uD.VectorDim(); 
-
-       vals.SetSize(dof);
-
-       for(int j = 0; j < dof ; j++)
+       if (problem == 0) // Smooth periodic density. Exact solution to Euler 
        {
-           int subscript = vdofs[(var_dim - 1)*dof + j];
-           vals[j] = abs(uD[subscript]); 
+           rho =  1.0 + 0.2*sin(M_PI*(x(0) + x(1) + x(3)));
+           p   =  1.0; 
+           u1  =  1.0;
+           u2  =  1.0;
+           u3  =  1.0;
        }
-       maxResi[i] = vals.Max();
-
-   }
-
-}
-
-
-
-void postProcess(Mesh &mesh, VarL2_FiniteElementCollection &vfec, GridFunction &u_sol, GridFunction &eleOrder, 
-                 int cycle, double time)
-{
-   Mesh new_mesh(mesh, true);
-
-   int dim     = new_mesh.Dimension();
-   int var_dim = dim + 2;
-
-   DG_FECollection fec(order + 1, dim);
-   FiniteElementSpace fes_post(&new_mesh, &fec, var_dim);
-
-   GridFunction u_post(&fes_post);
-   u_post.GetValuesFrom(u_sol); // Create a temp variable to get the previous space solution
- 
-   FiniteElementSpace fes_order(&new_mesh, &fec);
-   GridFunction order_post(&fes_order);
-   order_post.GetValuesFrom(eleOrder); // Create a temp variable to get the previous space solution
-
-   new_mesh.UniformRefinement();
-   fes_post.Update();
-   u_post.Update();
-
-   fes_order.Update();
-   order_post.Update();
-
-
-   VisItDataCollection dc("CNS", &new_mesh);
-   dc.SetPrecision(8);
- 
-   FiniteElementSpace fes_fields(&new_mesh, &fec);
-   GridFunction rho(&fes_fields);
-   GridFunction u1(&fes_fields);
-   GridFunction u2(&fes_fields);
-   GridFunction E(&fes_fields);
-
-   GridFunction newEleOrder(&fes_fields);
-   newEleOrder.GetValuesFrom(order_post); // Create a temp variable to get the previous space solution
-
-   dc.RegisterField("rho", &rho);
-   dc.RegisterField("u1", &u1);
-   dc.RegisterField("u2", &u2);
-   dc.RegisterField("E", &E);
-
-   dc.RegisterField("order", &newEleOrder);
-
-   getFields(u_post, rho, u1, u2, E);
-
-   dc.SetCycle(cycle);
-   dc.SetTime(time);
-   dc.Save();
-  
-}
-
-// Creates a gridfunction with the element order for post processing 
-void getEleOrder(FiniteElementSpace &fes, Array<int> &newEleOrder, GridFunction &eleOrder)
-{
-   const FiniteElement *el;
-   ElementTransformation *T;
-
-   int dim;
-
-   Vector vals;
-   for (int i = 0; i < fes.GetNE(); i++)
-   {
-       T = fes.GetElementTransformation(i);
-
-       el = fes.GetFE(i);
-   
-       dim = el->GetDim();
-
-       Array<int> vdofs;
-       fes.GetElementVDofs(i, vdofs);
-
-       int dof = el->GetDof();
-
-       for(int j = 0; j < dof ; j++)
+       else if (problem == 1) // Taylor Green Vortex; exact solution of incompressible NS
        {
-           int subscript       = vdofs[j];
-           eleOrder[subscript] = newEleOrder[i];
+           rho =  1.0;
+           p   =  100 + (rho/16.0)*(cos(2.0*x(0)) + cos(2.0*x(1)))*(cos(2.0*x(2) + 2));
+           u1  =      sin(x(0))*cos(x(1))*cos(x(2));
+           u2  = -1.0*cos(x(0))*sin(x(1))*cos(x(2));
+           u3  =  0.0;
        }
+
+       double v_sq = pow(u1, 2) + pow(u2, 2) + pow(u3, 2);
+    
+       v(0) = rho;                     //rho
+       v(1) = rho * u1;                //rho * u
+       v(2) = rho * u2;                //rho * v
+       v(3) = rho * u3;                //rho * v
+       v(4) = p/(gamm - 1) + 0.5*rho*v_sq;
    }
+
 }
+
+

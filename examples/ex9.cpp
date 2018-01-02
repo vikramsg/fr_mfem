@@ -80,16 +80,17 @@ int main(int argc, char *argv[])
 {
    // 1. Parse command-line options.
    problem = 0;
-   const char *mesh_file = "../data/periodic-hexagon.mesh";
-   int ref_levels = 2;
-   int order = 3;
+//   const char *mesh_file = "../data/periodic-hexagon.mesh";
+   const char *mesh_file = "channel.mesh";
+   int ref_levels = 1;
+   int order = 2;
    int ode_solver_type = 4;
    double t_final = 10.0;
-   double dt = 0.01;
-   bool visualization = true;
-   bool visit = false;
+   double dt = 0.02;
+   bool visualization = false;
+   bool visit = true;
    bool binary = false;
-   int vis_steps = 5;
+   int vis_steps =20;
 
    int precision = 8;
    cout.precision(precision);
@@ -357,7 +358,8 @@ void velocity_function(const Vector &x, Vector &v)
          {
             case 1: v(0) = 1.0; break;
             case 2: v(0) = sqrt(2./3.); v(1) = sqrt(1./3.); break;
-            case 3: v(0) = sqrt(3./6.); v(1) = sqrt(2./6.); v(2) = sqrt(1./6.);
+//            case 3: v(0) = sqrt(3./6.); v(1) = sqrt(2./6.); v(2) = sqrt(1./6.);
+            case 3: v(0) = 0.0; v(1) = 0.0; v(2) = 1.0;
                break;
          }
          break;

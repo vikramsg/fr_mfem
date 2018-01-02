@@ -18,7 +18,7 @@ MFEM_LIB_FILE = mfem_is_not_built
 -include $(CONFIG_MK)
 
 SEQ_EXAMPLES = tgv 
-PAR_EXAMPLES = tgvp 
+PAR_EXAMPLES = test tgvp 
 ifeq ($(MFEM_USE_MPI),NO)
    EXAMPLES = $(SEQ_EXAMPLES)
 else

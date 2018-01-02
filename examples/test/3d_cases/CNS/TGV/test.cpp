@@ -8,21 +8,21 @@ using namespace mfem;
 
 //Constants
 const double gamm  = 1.4;
-const double   mu  = 0.0 ;
+const double   mu  = 0.1 ;
 const double R_gas = 287;
 const double   Pr  = 0.72;
 
 //Run parameters
 const char *mesh_file        =  "periodic-cube.mesh";
-const int    order           =  2;
-const double t_final         =  0.00100;
+const int    order           =  1;
+const double t_final         =  0.00010;
 const int    problem         =  1;
-const int    ref_levels      =  2;
+const int    ref_levels      =  0;
 
 const bool   time_adapt      =  false;
 const double cfl             =  0.20;
 const double dt_const        =  0.0001 ;
-const int    ode_solver_type =  2; // 1. Forward Euler 2. TVD SSP 3 Stage
+const int    ode_solver_type =  1; // 1. Forward Euler 2. TVD SSP 3 Stage
 
 const int    vis_steps       =  1000;
 
@@ -62,14 +62,17 @@ class FE_Evolution : public TimeDependentOperator
 private:
    HypreParMatrix &M, &K_inv_x, &K_inv_y, &K_inv_z;
    HypreParMatrix     &K_vis_x, &K_vis_y, &K_vis_z;
-   const Vector &b;
+   ParLinearForm &b;
    HypreSmoother M_prec;
    CGSolver M_solver;
-
+                            
+   ParGridFunction &u, &f_I;
+                            
 public:
    FE_Evolution(HypreParMatrix &_M, HypreParMatrix &_K_inv_x, HypreParMatrix &_K_inv_y, HypreParMatrix &_K_inv_z, 
                             HypreParMatrix &_K_vis_x, HypreParMatrix &_K_vis_y, HypreParMatrix &_K_vis_z,
-                            Vector &_b);
+                            ParGridFunction &u_, ParGridFunction &f_I_,
+                            ParLinearForm &_b);
 
    void GetSize() ;
 
@@ -77,7 +80,7 @@ public:
 
    void Update();
 
-   virtual void Mult(const Vector &x, Vector &y) const;
+   virtual void Mult(const ParGridFunction &x, ParGridFunction &y) const;
 
    virtual ~FE_Evolution() { }
 };
@@ -213,11 +216,17 @@ CNS::CNS()
 
    /////////////////////////////////////////////////////////////
 
-   VectorGridFunctionCoefficient u_vec(u_sol);
-   VectorGridFunctionCoefficient f_vec(f_inv);
+   u_b    = new ParGridFunction(fes);
+   f_I_b  = new ParGridFunction(fes_vec);
 
-   u_sol->ExchangeFaceNbrData(); //Exchange data across processors
-   f_inv->ExchangeFaceNbrData();
+   VectorGridFunctionCoefficient u_vec(u_b);
+   VectorGridFunctionCoefficient f_vec(f_I_b);
+
+   *u_b   = *u_sol;
+   *f_I_b = *f_inv;
+
+   u_b  ->ExchangeFaceNbrData(); //Exchange data across processors
+   f_I_b->ExchangeFaceNbrData();
 
    /////////////////////////////////////////////////////////////
    // Linear form
@@ -283,7 +292,8 @@ CNS::CNS()
        K_vis_z = k_vis_z->ParallelAssemble();
 
        adv  = new FE_Evolution(*M, *K_inv_x, *K_inv_y, *K_inv_z, 
-                   *K_vis_x, *K_vis_y, *K_vis_z, *b);
+                   *K_vis_x, *K_vis_y, *K_vis_z, 
+                   *u_b, *f_I_b, *b);
        
        getAuxGrad(dim, *K_vis_x, *K_vis_y, *K_vis_z, 
            adv->GetMSolver(), *U, aux_grad);
@@ -292,7 +302,8 @@ CNS::CNS()
    {
        HypreParMatrix dummyMat;
        adv  = new FE_Evolution(*M, *K_inv_x, *K_inv_y, dummyMat,
-                            *K_vis_x, *K_vis_y, dummyMat, *b);
+                            *K_vis_x, *K_vis_y, dummyMat, 
+                            *u_b, *f_I_b, *b);
        
        getAuxGrad(dim, *K_vis_x, *K_vis_y, dummyMat, 
            adv->GetMSolver(), *U, aux_grad);
@@ -385,6 +396,7 @@ CNS::CNS()
 
 CNS::~CNS()
 {
+    delete u_b, f_I_b;
     delete u_t, k_t, y_t;
     delete u_sol, f_inv;
     delete U;
@@ -398,11 +410,6 @@ CNS::~CNS()
 
 void CNS::Step()
 {
-    u_sol->ExchangeFaceNbrData();
-    getInvFlux(dim, *u_sol, *f_inv); // To update f_vec
-
-    b->Assemble();
-
     double dt_real = min(dt, t_final - t);
     
     // Euler or RK3SSP
@@ -462,9 +469,11 @@ void CNS::Step()
 // Implementation of class FE_Evolution
 FE_Evolution::FE_Evolution(HypreParMatrix &_M, HypreParMatrix &_K_inv_x, HypreParMatrix &_K_inv_y, HypreParMatrix &_K_inv_z, 
                             HypreParMatrix &_K_vis_x, HypreParMatrix &_K_vis_y, HypreParMatrix &_K_vis_z,
-                            Vector &_b)
+                            ParGridFunction &u_, ParGridFunction &f_I_,
+                            ParLinearForm &_b)
    : TimeDependentOperator(_b.Size()), M(_M), K_inv_x(_K_inv_x), K_inv_y(_K_inv_y), K_inv_z(_K_inv_z),
-                            K_vis_x(_K_vis_x), K_vis_y(_K_vis_y), K_vis_z(_K_vis_z), b(_b),
+                            K_vis_x(_K_vis_x), K_vis_y(_K_vis_y), K_vis_z(_K_vis_z), 
+                            u(u_), f_I(f_I_), b(_b),
                             M_solver(M.GetComm())
 {
    M_prec.SetType(HypreSmoother::Jacobi); 
@@ -480,10 +489,17 @@ FE_Evolution::FE_Evolution(HypreParMatrix &_M, HypreParMatrix &_K_inv_x, HyprePa
 
 
 
-void FE_Evolution::Mult(const Vector &x, Vector &y) const
+void FE_Evolution::Mult(const ParGridFunction &x, ParGridFunction &y) const
 {
     int dim = x.Size()/K_inv_x.GetNumRows() - 2;
     int var_dim = dim + 2;
+
+    u = x;
+    u.ExchangeFaceNbrData();
+    getInvFlux(dim, u, f_I); // To update f_vec
+    f_I.ExchangeFaceNbrData();
+    
+    b.Assemble();
 
     y.SetSize(x.Size()); // Needed since by default ode_init will set it as size of K
 

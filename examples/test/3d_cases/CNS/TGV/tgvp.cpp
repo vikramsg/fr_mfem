@@ -8,21 +8,21 @@ using namespace mfem;
 
 //Constants
 const double gamm  = 1.4;
-const double   mu  = 0.1; 
+const double   mu  = 0.1;
 const double R_gas = 287;
 const double   Pr  = 0.72;
 
 //Run parameters
 const char *mesh_file        =  "periodic-cube.mesh";
-const int    order           =  1;
-const double t_final         =  0.01000;
+const int    order           =  2;
+const double t_final         =  0.00100;
 const int    problem         =  1;
-const int    ref_levels      =  0;
+const int    ref_levels      =  1;
 
 const bool   time_adapt      =  false;
 const double cfl             =  0.20;
-const double dt_const        =  0.001  ;
-const int    ode_solver_type =  2; // 1. Forward Euler 2. TVD SSP 3 Stage
+const double dt_const        =  0.0001 ;
+const int    ode_solver_type =  1; // 1. Forward Euler 2. TVD SSP 3 Stage
 
 const int    vis_steps       =  1000;
 
@@ -131,8 +131,6 @@ int main(int argc, char *argv[])
    cout.precision(precision);
 
    CNS run;
-
-   MPI_Finalize();
 
    return 0;
 }
@@ -245,7 +243,7 @@ CNS::CNS()
        VectorConstantCoefficient z_dir(dir);
       
        k_inv_z = new ParBilinearForm(fes_op);
-       k_inv_y->AddDomainIntegrator(new ConvectionIntegrator(z_dir, -1.0));
+       k_inv_z->AddDomainIntegrator(new ConvectionIntegrator(z_dir, -1.0));
     
        k_inv_z->Assemble(skip_zeros);
        k_inv_z->Finalize(skip_zeros);
@@ -415,12 +413,13 @@ void CNS::Step()
 
     if (myid == 0)
     {
-        tke_file << ti << "\t" << t << "\t" << glob_tke << endl;
+        tke_file << setprecision(12) << ti << "\t" << t << "\t" << glob_tke << endl;
         cout << "time step: " << ti << ", dt: " << dt_real << ", time: " << 
             t << ", max_speed " << glob_u_max << ", fes_size " << fes->GlobalTrueVSize() << endl;
     }
 
     dt = dt_const; 
+
 }
 
 
@@ -430,7 +429,8 @@ FE_Evolution::FE_Evolution(HypreParMatrix &_M, HypreParMatrix &_K_inv_x, HyprePa
                             HypreParMatrix &_K_vis_x, HypreParMatrix &_K_vis_y, HypreParMatrix &_K_vis_z,
                             Vector &_b)
    : TimeDependentOperator(_b.Size()), M(_M), K_inv_x(_K_inv_x), K_inv_y(_K_inv_y), K_inv_z(_K_inv_z),
-                            K_vis_x(_K_vis_x), K_vis_y(_K_vis_y), K_vis_z(_K_vis_z), b(_b)
+                            K_vis_x(_K_vis_x), K_vis_y(_K_vis_y), K_vis_z(_K_vis_z), b(_b),
+                            M_solver(M.GetComm())
 {
    M_prec.SetType(HypreSmoother::Jacobi); 
    M_solver.SetPreconditioner(M_prec);
@@ -482,8 +482,7 @@ void FE_Evolution::Mult(const Vector &x, Vector &y) const
         K_inv_x.Mult(f_sol, f_x);
         b.GetSubVector(offsets[i], b_sub);
         f_x += b_sub; // Needs to be added only once
-        M_solver.Mult(f_x, f_x_m);
-        y_temp.SetSubVector(offsets[i], f_x_m);
+        y_temp.SetSubVector(offsets[i], f_x);
     }
     y += y_temp;
 
@@ -491,8 +490,7 @@ void FE_Evolution::Mult(const Vector &x, Vector &y) const
     {
         f.GetSubVector(offsets[i], f_sol);
         K_inv_y.Mult(f_sol, f_x);
-        M_solver.Mult(f_x, f_x_m);
-        y_temp.SetSubVector(offsets[i - var_dim], f_x_m);
+        y_temp.SetSubVector(offsets[i - var_dim], f_x);
     }
     y += y_temp;
 
@@ -503,8 +501,7 @@ void FE_Evolution::Mult(const Vector &x, Vector &y) const
         {
             f.GetSubVector(offsets[i], f_sol);
             K_inv_z.Mult(f_sol, f_x);
-            M_solver.Mult(f_x, f_x_m);
-            y_temp.SetSubVector(offsets[i - 2*var_dim], f_x_m);
+            y_temp.SetSubVector(offsets[i - 2*var_dim], f_x);
         }
         y += y_temp;
     }
@@ -521,8 +518,7 @@ void FE_Evolution::Mult(const Vector &x, Vector &y) const
     {
         f_vis.GetSubVector(offsets[i], f_sol);
         K_vis_x.Mult(f_sol, f_x);
-        M_solver.Mult(f_x, f_x_m);
-        y_temp.SetSubVector(offsets[i], f_x_m);
+        y_temp.SetSubVector(offsets[i], f_x);
     }
     y += y_temp;
 
@@ -530,8 +526,7 @@ void FE_Evolution::Mult(const Vector &x, Vector &y) const
     {
         f_vis.GetSubVector(offsets[i], f_sol);
         K_vis_y.Mult(f_sol, f_x);
-        M_solver.Mult(f_x, f_x_m);
-        y_temp.SetSubVector(offsets[i - var_dim], f_x_m);
+        y_temp.SetSubVector(offsets[i - var_dim], f_x);
     }
     y += y_temp;
 
@@ -541,12 +536,17 @@ void FE_Evolution::Mult(const Vector &x, Vector &y) const
         {
             f_vis.GetSubVector(offsets[i], f_sol);
             K_vis_z.Mult(f_sol, f_x);
-            M_solver.Mult(f_x, f_x_m);
-            y_temp.SetSubVector(offsets[i - 2*var_dim], f_x_m);
+            y_temp.SetSubVector(offsets[i - 2*var_dim], f_x);
         }
         y += y_temp;
     }
- 
+
+    for(int i = 0; i < var_dim; i++)
+    {
+        y.GetSubVector(offsets[i], f_x);
+        M_solver.Mult(f_x, f_x_m);
+        y.SetSubVector(offsets[i], f_x_m);
+    }
 }
 
 
@@ -887,9 +887,9 @@ void init_function(const Vector &x, Vector &v)
        else if (problem == 1) // Taylor Green Vortex; exact solution of incompressible NS
        {
            rho =  1.0;
-           p   =  100 + (rho/16.0)*(cos(2.0*M_PI*x(0)) + cos(2.0*M_PI*x(1)))*(cos(2.0*M_PI*x(2) + 2));
-           u1  =      sin(M_PI*x(0))*cos(M_PI*x(1))*cos(M_PI*x(2));
-           u2  = -1.0*cos(M_PI*x(0))*sin(M_PI*x(1))*cos(M_PI*x(2));
+           p   =  100 + (rho/16.0)*(cos(2.0*x(0)) + cos(2.0*x(1)))*(cos(2.0*x(2) + 2));
+           u1  =      sin(x(0))*cos(x(1))*cos(x(2));
+           u2  = -1.0*cos(x(0))*sin(x(1))*cos(x(2));
            u3  =  0.0;
        }
 
@@ -995,7 +995,19 @@ void postProcess(ParMesh &mesh, ParGridFunction &u_sol, ParGridFunction &aux_gra
    int dim     = mesh.Dimension();
    int var_dim = dim + 2;
 
-   DG_FECollection fec(order, dim);
+   DG_FECollection fec(order + 1, dim);
+   ParFiniteElementSpace fes_post(&mesh, &fec, var_dim);
+   ParFiniteElementSpace fes_post_grad(&mesh, &fec, (dim+1)*dim);
+
+   ParGridFunction u_post(&fes_post);
+   u_post.GetValuesFrom(u_sol); // Create a temp variable to get the previous space solution
+ 
+   ParGridFunction aux_grad_post(&fes_post_grad);
+   aux_grad_post.GetValuesFrom(aux_grad); // Create a temp variable to get the previous space solution
+
+   fes_post.Update();
+   u_post.Update();
+   aux_grad_post.Update();
 
    VisItDataCollection dc("CNS", &mesh);
    dc.SetPrecision(8);
@@ -1013,7 +1025,7 @@ void postProcess(ParMesh &mesh, ParGridFunction &u_sol, ParGridFunction &aux_gra
    dc.RegisterField("vort", &vort);
    dc.RegisterField("q_criterion", &q);
 
-   getFields(u_sol, aux_grad, rho, M, p, vort, q);
+   getFields(u_post, aux_grad_post, rho, M, p, vort, q);
 
    dc.SetCycle(cycle);
    dc.SetTime(time);

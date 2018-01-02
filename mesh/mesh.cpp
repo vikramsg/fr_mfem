@@ -2652,7 +2652,7 @@ void Mesh::Loader(std::istream &input, int generate_edges,
       MFEM_ABORT("Unknown input mesh format: " << mesh_type);
       return;
    }
-
+      
    // at this point the following should be defined:
    //  1) Dim
    //  2) NumOfElements, elements

@@ -8,28 +8,32 @@ using namespace mfem;
 
 //Constants
 const double gamm  = 1.4;
-const double   mu  = 0.001 ;
+const double   mu  = 0.00031746031746031746; 
 const double R_gas = 287;
 const double   Pr  = 0.71;
 
 //Run parameters
 const char *mesh_file        =  "channel2D.mesh";
-const int    order           =  2;
-const double t_final         =300.000  ;
+//const char *mesh_file        =  "channel.mesh";
+const int    order           =  3;
+const double t_final         = 200.100  ;
 const int    problem         =  0;
-const int    ref_levels      =  1;
+const int    ref_levels      =  0;
 
 const bool   time_adapt      =  true ;
-const double cfl             =  0.90 ;
+const double cfl             =  0.65 ;
 const double dt_const        =  0.0001 ;
 const int    ode_solver_type =  3; // 1. Forward Euler 2. TVD SSP 3 Stage
 
-const int    vis_steps       =500;
+const int    vis_steps       = 800 ;
 
 const bool   adapt           =  false;
-const int    adapt_iter      =  200  ; // Time steps after which adaptation is done
+const int    adapt_iter      = 1600  ; // Time steps after which adaptation is done
 const double tolerance       =  5e-4 ; // Tolerance for adaptation
 
+//Source Term
+const bool addSource         =  true;                   // Add source term
+const double fx              =  0.0032513061224489793 ; // Force x 
 
 // Velocity coefficient
 void init_function(const Vector &x, Vector &v);
@@ -48,8 +52,6 @@ void getAuxGrad(int dim, const HypreParMatrix &K_x, const HypreParMatrix &K_y, c
         Vector &aux_grad);
 void getAuxVar(int dim, const Vector &u, Vector &aux_sol);
 
-void ComputeLift(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, GridFunction &f_vis_D, 
-                    const Array<int> &bdr, const double gamm, Vector &force);
 double ComputeTKE(ParFiniteElementSpace &fes, const Vector &uD);
 
 void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, Vector &u1, Vector &u2, 
@@ -61,6 +63,10 @@ void postProcess(Mesh &mesh, GridFunction &u_sol, GridFunction &aux_grad,
         int cycle, double time);
 
 void getEleOrder(FiniteElementSpace &fes, Array<int> &newEleOrder, GridFunction &order);
+
+void ComputeWallForces(FiniteElementSpace &fes, GridFunction &uD, GridFunction &f_vis_D, 
+                    const Array<int> &bdr, const double gamm, Vector &force);
+double ComputeUb(const ParGridFunction &uD);
 
 /** A time-dependent operator for the right-hand side of the ODE. The DG weak
     form is M du/dt = K u + b, where M and K are the mass
@@ -94,6 +100,8 @@ public:
    void Update();
 
    virtual void Mult(const ParGridFunction &x, ParGridFunction &y) const;
+
+   void Source(const ParGridFunction &x, ParGridFunction &y) const;
 
    virtual ~FE_Evolution() { }
 };
@@ -258,10 +266,10 @@ CNS::CNS()
    b->AddFaceIntegrator(
       new DGEulerIntegrator(R_gas, gamm, u_vec, f_vec, var_dim, -1.0));
    b->AddBdrFaceIntegrator(
-//      new DG_Euler_NoSlip_Isotherm_Integrator(
-//          R_gas, gamm, u_vec, f_vec, u_wall_bnd, -1.0), dir_bdr_wall); 
-      new DG_Euler_NoSlip_Integrator(
-          R_gas, gamm, u_vec, f_vec, u_adi_wall_bnd, -1.0), dir_bdr_wall); 
+      new DG_Euler_NoSlip_Isotherm_Integrator(
+          R_gas, gamm, u_vec, f_vec, u_wall_bnd, -1.0), dir_bdr_wall); 
+//      new DG_Euler_NoSlip_Integrator(
+//          R_gas, gamm, u_vec, f_vec, u_adi_wall_bnd, -1.0), dir_bdr_wall); 
 
    b->Assemble();
 
@@ -377,10 +385,10 @@ CNS::CNS()
    VectorGridFunctionCoefficient aux_grad_vec(aux_grad);
 
    b->AddBdrFaceIntegrator(
-//           new DG_CNS_Vis_Isotherm_Integrator(
-//               R_gas, gamm, u_vec, vis_vec, aux_grad_vec, u_wall_bnd, mu, Pr, 1.0), dir_bdr_wall);
-           new DG_CNS_Vis_Adiabatic_Integrator(
-               R_gas, gamm, u_vec, vis_vec, aux_grad_vec, u_adi_wall_bnd, mu, Pr, 1.0), dir_bdr_wall);
+           new DG_CNS_Vis_Isotherm_Integrator(
+               R_gas, gamm, u_vec, vis_vec, aux_grad_vec, u_wall_bnd, mu, Pr, 1.0), dir_bdr_wall);
+//           new DG_CNS_Vis_Adiabatic_Integrator(
+//               R_gas, gamm, u_vec, vis_vec, aux_grad_vec, u_adi_wall_bnd, mu, Pr, 1.0), dir_bdr_wall);
 
    b->Assemble();
 
@@ -416,8 +424,13 @@ CNS::CNS()
    chrono.Clear();
    chrono.Start();
 
-   ofstream tke_file;
-   tke_file.open("tke.dat");
+   ofstream flo_file;
+   flo_file.open("flow_char.dat");
+
+   Vector forces(dim);
+   ofstream force_file;
+   force_file.open ("forces.dat");
+   force_file << "Iteration \t dt \t time \t F_x \t F_y \n";
 
    bool done = false;
    for (ti = 0; !done; )
@@ -445,10 +458,30 @@ CNS::CNS()
           postProcess(*pmesh, *u_sol, *aux_grad, ti, t);
       }
       double tk = ComputeTKE(*fes, *u_sol);
-      tke_file << setprecision(12) << ti << "\t" << t << "\t" << tk << endl;
+      double ub = ComputeUb(*u_sol);
+      double glob_tk, glob_ub;
+      MPI_Allreduce(&tk, &glob_tk, 1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
+      MPI_Allreduce(&ub, &glob_ub, 1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
+
+      if (myid == 0)
+      {
+          flo_file << setprecision(12) << ti << "\t" << t << "\t" << glob_tk << "\t" << glob_ub << endl;
+      }
+
+      ComputeWallForces(*fes, *u_sol, *f_vis, dir_bdr_wall, gamm, forces);
+      double fx = forces(0), fy = forces(1);
+      double glob_fx, glob_fy;
+      MPI_Allreduce(&fx, &glob_fx, 1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
+      MPI_Allreduce(&fy, &glob_fy, 1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
+
+      if (myid == 0)
+      {
+          force_file << ti << "\t" <<  dt_real << "\t" << t << "\t" << glob_fx << "\t" << glob_fy <<  endl;
+      }
   
    }
-   tke_file.close();
+   flo_file.close();
+   force_file.close();
    
 ////   // Print all nodes in the finite element space 
 ////   FiniteElementSpace fes_nodes(mesh, vfec, dim);
@@ -700,7 +733,54 @@ void FE_Evolution::Mult(const ParGridFunction &x, ParGridFunction &y) const
         M_solver.Mult(f_x, f_x_m);
         y.SetSubVector(offsets[i], f_x_m);
     }
+
+    if (addSource == true)
+        Source(x, y);  // Add source to y
 }
+
+/*
+ * Any source terms that need to be added to the RHS
+ * du/dt + dF/dx = S
+ * For example if we have a forcing term
+ * Since we'll call this at the end of all steps in Mult no Jacobians need be considered
+ */
+void FE_Evolution::Source(const ParGridFunction &x, ParGridFunction &y) const
+{
+    double ub = ComputeUb(x);
+
+    int dim     = x.Size()/K_inv_x.GetNumRows() - 2;
+    int var_dim = dim + 2;
+
+    int offset  = K_inv_x.GetNumRows();
+   
+    Array<int> offsets[var_dim];
+    for(int i = 0; i < var_dim; i++)
+    {
+        offsets[i].SetSize(offset);
+    }
+
+    for(int j = 0; j < var_dim; j++)
+    {
+        for(int i = 0; i < offset; i++)
+        {
+            offsets[j][i] = j*offset + i ;
+        }
+    }
+
+    Vector s(offset), y_temp(var_dim*offset);
+    for(int i = 0; i < var_dim; i++)
+    {
+        s = 0.0;
+        if (i == 1)
+            s = fx; 
+        else if (i == var_dim - 1)
+            s = fx*ub;
+        y_temp.SetSubVector(offsets[i], s);
+    }
+
+    add(y_temp, y, y);
+}
+
 
 
 CGSolver &FE_Evolution::GetMSolver() 
@@ -994,7 +1074,7 @@ void init_function(const Vector &x, Vector &v)
         * Discrete filter operators for large-eddy simulation using high-order spectral difference methods
         */
        rho = 1;
-       u1  = 1.5*(1 - pow( x(1) - 1, 2));
+       u1  = 3.5*(1 - pow( x(1) - 1, 2));
        u2  = 0.1*1.0*exp(-pow((x(0) - M_PI)/(2*M_PI), 2))*exp(-pow((x(1)/2.0), 2))*cos(4*M_PI*x(2)/M_PI); 
        u3  = 0.0;
        p   = 71.42857142857143;
@@ -1014,8 +1094,8 @@ void init_function(const Vector &x, Vector &v)
         * Discrete filter operators for large-eddy simulation using high-order spectral difference methods
         */
        rho = 1;
-       u1  = 1.5*(1 - pow( x(1) - 1, 2));
-//       u1  = 1.0;
+       u1  = 2.5*(1 - pow( x(1) - 1, 2));
+//       u2  = 0.1*1.0*exp(-pow((x(0) - M_PI)/(2*M_PI), 2))*exp(-pow((x(1)/2.0), 2)); 
        u2  = 0.0; 
        p   = 71.42857142857143;
 
@@ -1290,6 +1370,51 @@ void postProcess(Mesh &mesh, GridFunction &u_sol, GridFunction &aux_grad,
 }
 
 
+// Get bulk velocity 
+double ComputeUb(const ParGridFunction &uD)
+{
+   const FiniteElementSpace *fes = uD.FESpace();
+   Mesh *mesh                    = fes->GetMesh();
+   
+   const FiniteElement *el;
+
+   int dim;
+
+   double ub  = 0.0, vol = 0.0;
+   for (int i = 0; i < fes->GetNE(); i++)
+   {
+       ElementTransformation *T  = fes->GetElementTransformation(i);
+       el = fes->GetFE(i);
+
+       dim = el->GetDim();
+
+       int dof = el->GetDof();
+       Array<int> vdofs;
+       fes->GetElementVDofs(i, vdofs);
+
+       const IntegrationRule *ir ;
+       int   order;
+
+       order = 2*el->GetOrder() + 1;
+       ir    = &IntRules.Get(el->GetGeomType(), order);
+
+       for (int p = 0; p < ir->GetNPoints(); p++)
+       {
+           const IntegrationPoint &ip = ir->IntPoint(p);
+           T->SetIntPoint(&ip);
+
+           double rho    = uD[vdofs[p]];
+           double irho   = 1.0/rho; 
+       
+           ub  += ip.weight*T->Weight()*(irho*uD[vdofs[dof + p]]);
+           vol += ip.weight*T->Weight();
+       }
+   }
+   ub = ub/vol;
+
+   return ub;
+}
+
 
 // Returns TKE 
 double ComputeTKE(ParFiniteElementSpace &fes, const Vector &uD)
@@ -1336,5 +1461,104 @@ double ComputeTKE(ParFiniteElementSpace &fes, const Vector &uD)
    }
 
    return tke;
+}
+
+
+
+void ComputeWallForces(FiniteElementSpace &fes, GridFunction &uD, GridFunction &f_vis_D, 
+                    const Array<int> &bdr, const double gamm, Vector &force)
+{
+   force = 0.0; 
+
+   const FiniteElement *el;
+   FaceElementTransformations *T;
+
+   Mesh *mesh = fes.GetMesh();
+
+   int dim;
+   Vector nor;
+
+   Vector vals, vis_vals;
+   
+   for (int i = 0; i < fes.GetNBE(); i++)
+   {
+       const int bdr_attr = mesh->GetBdrAttribute(i);
+
+       if (bdr[bdr_attr-1] == 0) { continue; } // Skip over non-active boundaries
+
+       T = mesh->GetBdrFaceTransformations(i);
+ 
+       el = fes.GetFE(T -> Elem1No);
+   
+       dim = el->GetDim();
+      
+       const IntegrationRule *ir ;
+       int order;
+       
+       order = T->Elem1->OrderW() + 2*el->GetOrder();
+       
+       if (el->Space() == FunctionSpace::Pk)
+       {
+          order++;
+       }
+       ir = &IntRules.Get(T->FaceGeom, order);
+
+       for (int p = 0; p < ir->GetNPoints(); p++)
+       {
+          const IntegrationPoint &ip = ir->IntPoint(p);
+          IntegrationPoint eip;
+          T->Loc1.Transform(ip, eip);
+    
+          T->Face->SetIntPoint(&ip);
+          T->Elem1->SetIntPoint(&eip);
+
+          nor.SetSize(dim);          
+          if (dim == 1)
+          {
+             nor(0) = 2*eip.x - 1.0;
+          }
+          else
+          {
+             CalcOrtho(T->Face->Jacobian(), nor);
+          }
+ 
+          Vector nor_dim(dim);
+          double nor_l2 = nor.Norml2();
+          nor_dim.Set(1/nor_l2, nor);
+     
+          uD.GetVectorValue(T->Elem1No, eip, vals);
+
+          Vector vel(dim);    
+          double rho = vals(0);
+          double v_sq  = 0.0;
+          for (int j = 0; j < dim; j++)
+          {
+              vel(j) = vals(1 + j)/rho;      
+              v_sq    += pow(vel(j), 2);
+          }
+          double pres = (gamm - 1)*(vals(dim + 1) - 0.5*rho*v_sq);
+
+          // nor is measure(face) so area is included
+          // The normal is always going into the boundary element
+          // F = -p n_j with n_j going out
+          force(0) += pres*nor(0)*ip.weight; // Quadrature of pressure 
+          force(1) += pres*nor(1)*ip.weight; // Quadrature of pressure 
+
+          f_vis_D.GetVectorValue(T->Elem1No, eip, vis_vals);
+        
+          double tau[dim][dim];
+          for(int i = 0; i < dim ; i++)
+              for(int j = 0; j < dim ; j++) tau[i][j] = vis_vals[i*(dim + 2) + 1 + j];
+
+
+          // The normal is always going into the boundary element
+          // F = sigma_{ij}n_j with n_j going out
+          for(int i = 0; i < dim ; i++)
+          {
+              force(0) -= tau[0][i]*nor(i)*ip.weight; // Quadrature of shear stress 
+              force(1) -= tau[1][i]*nor(i)*ip.weight; // Quadrature of shear stress 
+          }
+       } // p loop
+   } // NBE loop
 }
 

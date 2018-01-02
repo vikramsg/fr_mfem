@@ -15,7 +15,7 @@ const double   Pr  = 0.72;
 //Run parameters
 const char *mesh_file        =  "periodic-cube.mesh";
 //const char *mesh_file        =  "per_5.mesh";
-const int    order           =  2;
+const int    order           =  3;
 const double t_final         =  1.0    ;
 const int    problem         =  1;
 const int    ref_levels      =  2;
@@ -420,10 +420,10 @@ CNS::CNS()
 
       done = (t >= t_final - 1e-8*dt);
 
-      if ((ti % 25 == 0) && (myid == 0)) // Check time
+      if ((ti % 10 == 0) && (myid == 0)) // Check time
       {
           chrono.Stop();
-          cout << "25 Steps took "<< chrono.RealTime() << " s "<< endl;
+          cout << "10 Steps took "<< chrono.RealTime() << " s "<< endl;
 
           chrono.Clear();
           chrono.Start();
@@ -1525,11 +1525,6 @@ void AssembleFaceMatrices(Mesh &mesh, FiniteElementSpace &fes, FiniteElementSpac
    face_project_r.Finalize();
    wts.Finalize();
 
-//   Vector b(var_dim*dofs);
-//   getEulerDGTranspose(dim, face_project_l, face_project_r, 
-//        wts, nor_face, u, f, b);
-//
-//   cout << b.Max() << "\t" << b.Min() << "\t" << b.Sum() << endl;
 }
 
 void getEulerDGTranspose(int dim, SparseMatrix &face_project_l, SparseMatrix &face_project_r, 
@@ -1563,8 +1558,10 @@ void getEulerDGTranspose(int dim, SparseMatrix &face_project_l, SparseMatrix &fa
    for(int j = 0; j < var_dim; j++)
    {
        u.GetSubVector(offsets[j], u_sub);
+
        face_project_l.Mult(u_sub, u_f_sub);
        u_l.SetSubVector(offsets_face[j], u_f_sub);
+
        face_project_r.Mult(u_sub, u_f_sub);
        u_r.SetSubVector(offsets_face[j], u_f_sub);
    }
@@ -1572,8 +1569,10 @@ void getEulerDGTranspose(int dim, SparseMatrix &face_project_l, SparseMatrix &fa
    for(int j = 0; j < dim*var_dim; j++)
    {
        f.GetSubVector(offsets[j], u_sub);
+
        face_project_l.Mult(u_sub, u_f_sub);
        f_l.SetSubVector(offsets_face[j], u_f_sub);
+
        face_project_r.Mult(u_sub, u_f_sub);
        f_r.SetSubVector(offsets_face[j], u_f_sub);
    }
