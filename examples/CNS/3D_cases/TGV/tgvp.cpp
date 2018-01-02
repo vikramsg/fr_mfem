@@ -9,21 +9,21 @@ using namespace mfem;
 
 //Constants
 const double gamm  = 1.4;
-const double   mu  = 0.00031746031746031746; 
+const double   mu  = 0.000625; 
 const double R_gas = 287;
-const double   Pr  = 0.71;
+const double   Pr  = 0.72;
 
 //Run parameters
-const char *mesh_file        =  "channel.mesh";
-const int    order           =  3;
-const double t_final         =2000.000  ;
-const int    problem         =  0;
-const int    ref_levels      =  0;
+const char *mesh_file        =  "tgv.mesh";
+const int    order           =  2;
+const double t_final         = 20.00000;
+const int    problem         =  1;
+const int    ref_levels      =  1;
 
-const bool   time_adapt      =  true ;
+const bool   time_adapt      =  false;
 const double cfl             =  0.50 ;
-const double dt_const        =  0.0001 ;
-const int    ode_solver_type =  3; // 1. Forward Euler 2. TVD SSP 3 Stage
+const double dt_const        =  0.0003 ;
+const int    ode_solver_type =  1; // 1. Forward Euler 2. TVD SSP 3 Stage
 
 const int    vis_steps       =1000 ;
 
@@ -32,14 +32,17 @@ const int    adapt_iter      =  200  ; // Time steps after which adaptation is d
 const double tolerance       =  5e-4 ; // Tolerance for adaptation
 
 //Source Term
-const bool addSource         =  true;                   // Add source term
-const double fx              =  0.0029653061224489793; // Force x 
+const bool addSource         = false;                   // Add source term
+const double fx              =  0.0;                    // Force x 
 
 //Restart parameters
 const bool restart           = false ;
 const int  restart_freq      =  5000; // Create restart file after every 1000 time steps
 const int  restart_cycle     =     4; // File number used for restart
 
+//Boundary parameters
+const int no_bnd             =     0; // Number of boundaries
+const int no_wall_bnd        =     0; // Number of wall boundaries
 ////////////////////////////////////////////////////////////////////////
 
 
@@ -207,13 +210,6 @@ CNS::CNS()
 
    fes = new ParFiniteElementSpace(pmesh, &fec, var_dim);
 
-   
-   ///////////////////////////////////////////////////////
-   //Get periodic ids for turbulent channel flow
-   vector< vector<int> > ids;
-   GetPeriodicIds(*fes, y_uni, ids);
-   ////////////////////////////////////////////////////////
-
    HYPRE_Int global_vSize = fes->GlobalTrueVSize();
    if (myid == 0)
    {
@@ -255,6 +251,13 @@ CNS::CNS()
    VectorConstantCoefficient x_dir(xdir);
    ydir = 0.0; ydir(1) = 1.0;
    VectorConstantCoefficient y_dir(ydir);
+   VectorConstantCoefficient z_dir(ydir);
+   if (dim == 3)
+   {
+       zdir = 0.0; zdir(2) = 1.0;
+       VectorConstantCoefficient temp_z_dir(zdir);
+       z_dir = temp_z_dir;
+   }
 
    ParBilinearForm *m, *k_inv_x, *k_inv_y, *k_inv_z;
    ParBilinearForm     *k_vis_x, *k_vis_y, *k_vis_z;
@@ -275,57 +278,14 @@ CNS::CNS()
    k_inv_y->Assemble(skip_zeros);
    k_inv_y->Finalize(skip_zeros);
 
-   /////////////////////////////////////////////////////////////
-
-   u_b    = new ParGridFunction(fes);
-   f_I_b  = new ParGridFunction(fes_vec);
-
-   VectorGridFunctionCoefficient u_vec(u_b);
-   VectorGridFunctionCoefficient f_vec(f_I_b);
-
-   *u_b   = *u_sol;
-   *f_I_b = *f_inv;
-
-   u_b  ->ExchangeFaceNbrData(); //Exchange data across processors
-   f_I_b->ExchangeFaceNbrData();
-
-   ///////////////////////////////////////////////////
-   // Define boundary terms
-   // Each boundary should have its own marker since they are passed by ref
-   Array<int> dir_bdr_wall(pmesh->bdr_attributes.Max());
-   dir_bdr_wall    = 0; // Deactivate all boundaries
-   dir_bdr_wall[0] = 1; // Activate wall bdy 
-
-   VectorFunctionCoefficient u_wall_bnd(aux_dim, wall_bnd_cnd); // Defines wall boundary condition
-   VectorFunctionCoefficient u_adi_wall_bnd(dim, wall_adi_bnd_cnd); // Defines wall boundary condition
-   
-   // Linear form representing the Euler boundary non-linear term
-   b = new ParLinearForm(fes);
-   b->AddFaceIntegrator(
-      new DGEulerIntegrator(R_gas, gamm, u_vec, f_vec, var_dim, -1.0));
-   b->AddBdrFaceIntegrator(
-      new DG_Euler_NoSlip_Isotherm_Integrator(
-          R_gas, gamm, u_vec, f_vec, u_wall_bnd, -1.0), dir_bdr_wall); 
-//      new DG_Euler_NoSlip_Integrator(
-//          R_gas, gamm, u_vec, f_vec, u_adi_wall_bnd, -1.0), dir_bdr_wall); 
-
-   b->Assemble();
-
-
-   getAuxVar(dim, *u_sol, *aux_sol);
-   VectorGridFunctionCoefficient aux_vec(aux_sol);
-
-   b_aux_x = new ParLinearForm(&fes_aux);
-   b_aux_y = new ParLinearForm(&fes_aux);
-   b_aux_x->AddBdrFaceIntegrator(
-          new DG_CNS_Aux_Integrator(
-              x_dir, aux_vec, u_wall_bnd,  1.0), dir_bdr_wall);
-   b_aux_x->Assemble();
-
-   b_aux_y->AddBdrFaceIntegrator(
-           new DG_CNS_Aux_Integrator(
-               y_dir, aux_vec, u_wall_bnd,  1.0), dir_bdr_wall);
-   b_aux_y->Assemble();
+   if (dim == 3)
+   {
+       k_inv_z = new ParBilinearForm(fes_op);
+       k_inv_z->AddDomainIntegrator(new ConvectionIntegrator(z_dir, -1.0));
+    
+       k_inv_z->Assemble(skip_zeros);
+       k_inv_z->Finalize(skip_zeros);
+   }
 
    ///////////////////////////////////////////////////////////
    // Setup bilinear form for viscous terms 
@@ -344,19 +304,8 @@ CNS::CNS()
    k_vis_y->Assemble(skip_zeros);
    k_vis_y->Finalize(skip_zeros);
 
-   VectorConstantCoefficient z_dir(ydir);
    if (dim == 3)
    {
-       zdir = 0.0; zdir(2) = 1.0;
-       VectorConstantCoefficient temp_z_dir(zdir);
-       z_dir = temp_z_dir;
-
-       k_inv_z = new ParBilinearForm(fes_op);
-       k_inv_z->AddDomainIntegrator(new ConvectionIntegrator(z_dir, -1.0));
-    
-       k_inv_z->Assemble(skip_zeros);
-       k_inv_z->Finalize(skip_zeros);
-       
        k_vis_z = new ParBilinearForm(fes_op);
        k_vis_z->AddDomainIntegrator(new ConvectionIntegrator(z_dir,  1.0));
        k_vis_z->AddInteriorFaceIntegrator(
@@ -364,14 +313,10 @@ CNS::CNS()
     
        k_vis_z->Assemble(skip_zeros);
        k_vis_z->Finalize(skip_zeros);
-       
-       b_aux_z = new ParLinearForm(&fes_aux);
-       b_aux_z->AddBdrFaceIntegrator(
-           new DG_CNS_Aux_Integrator(
-               z_dir, aux_vec, u_wall_bnd,  1.0), dir_bdr_wall);
-       b_aux_z->Assemble();
    }
 
+   /////////////////////////////////////////////////////////////
+   //Setup Hypre matrices
    HypreParMatrix *M       = m->ParallelAssemble();
    HypreParMatrix *K_inv_x = k_inv_x->ParallelAssemble();
    HypreParMatrix *K_inv_y = k_inv_y->ParallelAssemble();
@@ -382,13 +327,51 @@ CNS::CNS()
    HypreParMatrix *K_inv_z;
    HypreParMatrix *K_vis_z;
 
-   ///////////////////////////////////////////////////////////////
-   //Setup time stepping objects and do initial post-processing
    if (dim == 3)
    {
        K_inv_z = k_inv_z->ParallelAssemble();
        K_vis_z = k_vis_z->ParallelAssemble();
+   }
 
+   delete m, k_inv_x, k_inv_y, k_inv_z;
+   delete    k_vis_x, k_vis_y, k_vis_z;
+
+   /////////////////////////////////////////////////////////////
+   // Define grid function coefficients
+
+   u_b    = new ParGridFunction(fes);
+   f_I_b  = new ParGridFunction(fes_vec);
+
+   VectorGridFunctionCoefficient u_vec(u_b);
+   VectorGridFunctionCoefficient f_vec(f_I_b);
+
+   *u_b   = *u_sol;
+   *f_I_b = *f_inv;
+
+   u_b  ->ExchangeFaceNbrData(); //Exchange data across processors
+   f_I_b->ExchangeFaceNbrData();
+
+   getAuxVar(dim, *u_sol, *aux_sol);
+   VectorGridFunctionCoefficient aux_vec(aux_sol);
+
+   ///////////////////////////////////////////////////
+   // Define face integration terms 
+   b = new ParLinearForm(fes);
+   b->AddFaceIntegrator(
+      new DGEulerIntegrator(R_gas, gamm, u_vec, f_vec, var_dim, -1.0));
+
+   b_aux_x     = new ParLinearForm(&fes_aux);
+   b_aux_y     = new ParLinearForm(&fes_aux);
+   b_aux_z     = new ParLinearForm(&fes_aux);
+
+   (*b_aux_x) *= 0.0; // Initialize to 0
+   (*b_aux_y) *= 0.0;
+   (*b_aux_z) *= 0.0;
+
+   ///////////////////////////////////////////////////
+   //Setup time stepping objects 
+   if (dim == 3)
+   {
        adv  = new FE_Evolution(*M, *K_inv_x, *K_inv_y, *K_inv_z,
                             *K_vis_x, *K_vis_y, *K_vis_z, 
                             *u_b, *aux_sol, *aux_grad, *f_I_b, *f_vis,
@@ -413,22 +396,62 @@ CNS::CNS()
            *b_aux_x, *b_aux_y, *b_aux_z, 
            *aux_grad);
    }
-   delete m, k_inv_x, k_inv_y, k_inv_z;
-   delete    k_vis_x, k_vis_y, k_vis_z;
 
-
+   ///////////////////////////////////////////////////
+   //Setup viscous coefficients
    getVisFlux(dim, *u_sol, *aux_grad, *f_vis);
 
    VectorGridFunctionCoefficient vis_vec(f_vis);
    VectorGridFunctionCoefficient aux_grad_vec(aux_grad);
 
-   b->AddBdrFaceIntegrator(
-           new DG_CNS_Vis_Isotherm_Integrator(
-               R_gas, gamm, u_vec, vis_vec, aux_grad_vec, u_wall_bnd, mu, Pr, 1.0), dir_bdr_wall);
-//           new DG_CNS_Vis_Adiabatic_Integrator(
-//               R_gas, gamm, u_vec, vis_vec, aux_grad_vec, u_adi_wall_bnd, mu, Pr, 1.0), dir_bdr_wall);
+   ///////////////////////////////////////////////////
+   // Define boundary terms
+   // Each boundary should have its own marker since they are passed by ref
+   
+   if (no_bnd > 0)
+   {
+       Array<int> dir_bdr_wall(pmesh->bdr_attributes.Max());
+       dir_bdr_wall    = 0; // Deactivate all boundaries
+       dir_bdr_wall[0] = 1; // Activate wall bdy 
+    
+       VectorFunctionCoefficient u_wall_bnd(aux_dim, wall_bnd_cnd); // Defines wall boundary condition
+       VectorFunctionCoefficient u_adi_wall_bnd(dim, wall_adi_bnd_cnd); // Defines wall boundary condition
 
+       b->AddBdrFaceIntegrator(
+          new DG_Euler_NoSlip_Isotherm_Integrator(
+              R_gas, gamm, u_vec, f_vec, u_wall_bnd, -1.0), dir_bdr_wall); 
+    //      new DG_Euler_NoSlip_Integrator(
+    //          R_gas, gamm, u_vec, f_vec, u_adi_wall_bnd, -1.0), dir_bdr_wall); 
+    
+       b_aux_x->AddBdrFaceIntegrator(
+              new DG_CNS_Aux_Integrator(
+                  x_dir, aux_vec, u_wall_bnd,  1.0), dir_bdr_wall);
+       b_aux_x->Assemble();
+    
+       b_aux_y->AddBdrFaceIntegrator(
+               new DG_CNS_Aux_Integrator(
+                   y_dir, aux_vec, u_wall_bnd,  1.0), dir_bdr_wall);
+       b_aux_y->Assemble();
+
+       if (dim == 3)
+       {
+           b_aux_z->AddBdrFaceIntegrator(
+               new DG_CNS_Aux_Integrator(
+                   z_dir, aux_vec, u_wall_bnd,  1.0), dir_bdr_wall);
+           b_aux_z->Assemble();
+       }
+
+       b->AddBdrFaceIntegrator(
+               new DG_CNS_Vis_Isotherm_Integrator(
+                   R_gas, gamm, u_vec, vis_vec, aux_grad_vec, u_wall_bnd, mu, Pr, 1.0), dir_bdr_wall);
+    //           new DG_CNS_Vis_Adiabatic_Integrator(
+    //               R_gas, gamm, u_vec, vis_vec, aux_grad_vec, u_adi_wall_bnd, mu, Pr, 1.0), dir_bdr_wall);
+    
+   }
+   ///////////////////////////////////////////////////
+   
    b->Assemble();
+
 
    int ti_in; double t_in;
    if (restart == true)
@@ -469,19 +492,12 @@ CNS::CNS()
     
    MPI_Comm comm = pmesh->GetComm();
 
-   StopWatch chrono;
-   chrono.Clear();
-   chrono.Start();
-
    ofstream flo_file;
    flo_file.open("flow_char.dat");
 
-   Vector forces(dim);
-   ofstream force_file;
-   force_file.open ("forces.dat");
-   force_file << "Iteration \t dt \t time \t F_x \t F_y \n";
-
-   vector<double> loc_u_mean, glob_u_mean, temp_u_mean;
+   StopWatch chrono;
+   chrono.Clear();
+   chrono.Start();
 
    bool done = false;
    for (ti = ti_in; !done; )
@@ -515,59 +531,16 @@ CNS::CNS()
       }
 
       double tk = ComputeTKE(*fes, *u_sol);
-      double ub, vol;
-      ComputeUb(*u_sol, ub, vol);
-      double glob_tk, glob_ub, glob_vol;
+      double glob_tk;
       MPI_Allreduce(&tk,  &glob_tk,  1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
-      MPI_Allreduce(&ub,  &glob_ub,  1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
-      MPI_Allreduce(&vol, &glob_vol, 1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
-
-      double temp_fx, glob_vol_fx;
-      adv->GetMomentum(*y_t, temp_fx);
-      MPI_Allreduce(&temp_fx, &glob_vol_fx, 1, MPI_DOUBLE, MPI_SUM, comm); // Get global u_max across processors
 
       if (myid == 0)
       {
-          flo_file << setprecision(12) << ti << "\t" << t << "\t" << glob_tk << "\t" << glob_ub << "\t" << glob_vol_fx<< endl;
-      }
-
-      ComputeWallForces(*fes, *u_sol, *f_vis, dir_bdr_wall, gamm, forces);
-      double fx = forces(0), fy = forces(1);
-      double glob_fx, glob_fy;
-      MPI_Allreduce(&fx, &glob_fx, 1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
-      MPI_Allreduce(&fy, &glob_fy, 1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
-
-      if (myid == 0)
-      {
-          force_file << ti << "\t" <<  dt_real << "\t" << t << "\t" << glob_fx << "\t" << glob_fy <<  endl;
-      }
-      
-      ComputePeriodicMean(dim, *u_sol, ids, loc_u_mean);
-      ComputeGlobPeriodicMean(comm, ids, loc_u_mean, glob_u_mean);
-
-      int c_ti = 1;
-      if (restart == true)
-          c_ti = restart_cycle + 1;
-      if (ti == c_ti)
-          temp_u_mean = glob_u_mean;
-      else if (ti > c_ti)
-      {
-          int vert_nodes = glob_u_mean.size();      
-          for(int i = 0; i < vert_nodes; i++)
-          {
-              temp_u_mean.at(i) = temp_u_mean.at(i)*(ti - c_ti) + glob_u_mean.at(i);          
-              temp_u_mean.at(i) = temp_u_mean.at(i)/double(ti - c_ti + 1);
-          }
-          if (ti % vis_steps == 0) // Write mean u
-          {
-              if (myid == 0)
-                  writeUMean(temp_u_mean, glob_u_mean, ti, y_uni);
-          }
+          flo_file << setprecision(12) << ti << "\t" << t << "\t" << glob_tk << endl;
       }
   
    }
    flo_file.close();
-   force_file.close();
    
    delete adv;
    delete K_inv_x, K_vis_x;
@@ -1153,46 +1126,31 @@ void init_function(const Vector &x, Vector &v)
    //Space dimensions 
    int dim = x.Size();
 
-   if (dim == 3)
+   if (dim == 2)
+   {
+       double rho, u1, u2, p;
+
+       rho =  1.0;
+       p   =  100 + (rho/4.0)*(cos(2.0*M_PI*x(0)) + cos(2.0*M_PI*x(1)));
+       u1  =      sin(M_PI*x(0))*cos(M_PI*x(1));
+       u2  = -1.0*cos(M_PI*x(0))*sin(M_PI*x(1));
+
+       double v_sq = pow(u1, 2) + pow(u2, 2);
+    
+       v(0) = rho;                     //rho
+       v(1) = rho * u1;                //rho * u
+       v(2) = rho * u2;                //rho * v
+       v(3) = p/(gamm - 1) + 0.5*rho*v_sq;
+   }
+   else if (dim == 3)
    {
        double rho, u1, u2, u3, p;
-       /*
-        * Discrete filter operators for large-eddy simulation using high-order spectral difference methods
-        */
-       rho = 1;
-       
-       double re_tau = 180;
-       double y_tau  = 1/re_tau;
-       double u_tau  = mu*re_tau;
-       double kappa  = 0.38, C = 4.1;
 
-       double yplus  = x(1)/y_tau;
-       if (x(1) > 1)
-           yplus  = std::abs(x(1) - 2)/y_tau;
-       double uplus  = (1/kappa)*log(1 + kappa*yplus) + 
-                       (C - (1/kappa)*log(kappa))*(1 - exp(-yplus/11.0) - (yplus/11.0)*exp(-yplus/3.0));
-
-       double amp    =  0.1;
-
-       u1  = 1.6*pow( (1 - pow( x(1) - 1, 2)), 2);
-       u2  = amp*exp(-pow((x(0) - M_PI)/(2*M_PI), 2))*exp(-pow((x(1)/2.0), 2))*cos(4*M_PI*x(2)/M_PI);
-       u3  = 0.0;
-       p   = 71.42857142857143;
-       
-       u1 += amp*sin(10*M_PI*x(1)/2)*sin(10*M_PI*x(2)/M_PI);
-       u1 += amp*sin(20*M_PI*x(1)/2)*sin(20*M_PI*x(2)/M_PI);
-       u1 += amp*sin(30*M_PI*x(1)/2)*sin(30*M_PI*x(2)/M_PI);
-       u1 += amp*sin(40*M_PI*x(1)/2)*sin(40*M_PI*x(2)/M_PI);
-
-       u2 += amp*sin(10*M_PI*x(0)/(2*M_PI))*sin(10*M_PI*x(2)/M_PI);
-       u2 += amp*sin(20*M_PI*x(0)/(2*M_PI))*sin(20*M_PI*x(2)/M_PI);
-       u2 += amp*sin(30*M_PI*x(0)/(2*M_PI))*sin(30*M_PI*x(2)/M_PI);
-       u2 += amp*sin(40*M_PI*x(0)/(2*M_PI))*sin(40*M_PI*x(2)/M_PI);
-
-       u3 += amp*sin(10*M_PI*x(0)/(2*M_PI))*sin(10*M_PI*x(1)/2);
-       u3 += amp*sin(20*M_PI*x(0)/(2*M_PI))*sin(20*M_PI*x(1)/2);
-       u3 += amp*sin(30*M_PI*x(0)/(2*M_PI))*sin(30*M_PI*x(1)/2);
-       u3 += amp*sin(40*M_PI*x(0)/(2*M_PI))*sin(40*M_PI*x(1)/2);
+       rho =  1.0;
+       p   =  100 + (rho/16.0)*(cos(2.0*x(0)) + cos(2.0*x(1)))*(cos(2.0*x(2) + 2));
+       u1  =      sin(x(0))*cos(x(1))*cos(x(2));
+       u2  = -1.0*cos(x(0))*sin(x(1))*cos(x(2));
+       u3  =  0.0;
 
        double v_sq = pow(u1, 2) + pow(u2, 2) + pow(u3, 2);
     
@@ -1202,24 +1160,7 @@ void init_function(const Vector &x, Vector &v)
        v(3) = rho * u3;                //rho * v
        v(4) = p/(gamm - 1) + 0.5*rho*v_sq;
    }
-   else if (dim == 2)
-   {
-       double rho, u1, u2, p;
-       /*
-        * Discrete filter operators for large-eddy simulation using high-order spectral difference methods
-        */
-       rho = 1;
-       u1  = 1.9*(1 - pow( x(1) - 1, 2));
-       u2  = 0.1*1.0*exp(-pow((x(0) - M_PI)/(2*M_PI), 2))*exp(-pow((x(1)/2.0), 2)); 
-       p   = 71.42857142857143;
 
-       double v_sq = pow(u1, 2) + pow(u2, 2) ;
-    
-       v(0) = rho;                     //rho
-       v(1) = rho * u1;                //rho * u
-       v(2) = rho * u2;                //rho * v
-       v(3) = p/(gamm - 1) + 0.5*rho*v_sq;
-   }
 
 }
 
