@@ -15,7 +15,7 @@ const double   Pr  = 0.71;
 
 //Run parameters
 const char *mesh_file        =  "channel.mesh";
-const int    order           =  3;
+const int    order           =  1;
 const double t_final         =2000.000  ;
 const int    problem         =  0;
 const int    ref_levels      =  0;
@@ -25,7 +25,7 @@ const double cfl             =  0.50 ;
 const double dt_const        =  0.0001 ;
 const int    ode_solver_type =  3; // 1. Forward Euler 2. TVD SSP 3 Stage
 
-const int    vis_steps       =1000 ;
+const int    vis_steps       = 2000;
 
 const bool   adapt           =  false;
 const int    adapt_iter      =  200  ; // Time steps after which adaptation is done
@@ -60,8 +60,6 @@ void getAuxGrad(int dim, const HypreParMatrix &K_x, const HypreParMatrix &K_y, c
         Vector &aux_grad);
 void getAuxVar(int dim, const Vector &u, Vector &aux_sol);
 
-double ComputeTKE(ParFiniteElementSpace &fes, const Vector &uD);
-
 void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, Vector &u1, Vector &u2, 
                 Vector &E, Vector &u_x, Vector &u_y, Vector &v_x, Vector &v_y);
 void getMoreFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, Vector &M,
@@ -73,11 +71,7 @@ void postProcess(Mesh &mesh, GridFunction &u_sol, GridFunction &aux_grad,
 
 void getEleOrder(FiniteElementSpace &fes, Array<int> &newEleOrder, GridFunction &order);
 
-void ComputeWallForces(FiniteElementSpace &fes, GridFunction &uD, GridFunction &f_vis_D, 
-                    const Array<int> &bdr, const double gamm, Vector &force);
-void ComputeUb(const ParGridFunction &uD, double &ub, double &vol);
 
-void writeUMean(const vector<double> u_mean, const vector<double> inst_u_mean, int ti, vector<double> y_uni);
 
 /** A time-dependent operator for the right-hand side of the ODE. The DG weak
     form is M du/dt = K u + b, where M and K are the mass
@@ -482,6 +476,9 @@ CNS::CNS()
    force_file << "Iteration \t dt \t time \t F_x \t F_y \n";
 
    vector<double> loc_u_mean, glob_u_mean, temp_u_mean;
+   vector<double> loc_uu_mean, glob_uu_mean, loc_vv_mean, glob_vv_mean;
+   vector<double> loc_ww_mean, glob_ww_mean, loc_uv_mean, glob_uv_mean;
+   vector<double> temp_uu_mean, temp_vv_mean, temp_ww_mean, temp_uv_mean;
 
    bool done = false;
    for (ti = ti_in; !done; )
@@ -515,11 +512,13 @@ CNS::CNS()
       }
 
       double tk = ComputeTKE(*fes, *u_sol);
-      double ub, vol;
-      ComputeUb(*u_sol, ub, vol);
-      double glob_tk, glob_ub, glob_vol;
+      double ub, vb, wb, vol;
+      ComputeUb(*u_sol, ub, vb, wb, vol);
+      double glob_tk, glob_ub, glob_vb, glob_wb, glob_vol;
       MPI_Allreduce(&tk,  &glob_tk,  1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
       MPI_Allreduce(&ub,  &glob_ub,  1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
+      MPI_Allreduce(&vb,  &glob_vb,  1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
+      MPI_Allreduce(&wb,  &glob_wb,  1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
       MPI_Allreduce(&vol, &glob_vol, 1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
 
       double temp_fx, glob_vol_fx;
@@ -528,7 +527,11 @@ CNS::CNS()
 
       if (myid == 0)
       {
-          flo_file << setprecision(12) << ti << "\t" << t << "\t" << glob_tk << "\t" << glob_ub << "\t" << glob_vol_fx<< endl;
+          glob_ub = glob_ub/glob_vol;
+          glob_vb = glob_vb/glob_vol;
+          glob_wb = glob_wb/glob_vol;
+          flo_file << setprecision(12) << ti << "\t" << t << "\t" << glob_tk << "\t" 
+              << glob_ub << "\t" << glob_vb << "\t" << glob_wb<< endl;
       }
 
       ComputeWallForces(*fes, *u_sol, *f_vis, dir_bdr_wall, gamm, forces);
@@ -542,26 +545,47 @@ CNS::CNS()
           force_file << ti << "\t" <<  dt_real << "\t" << t << "\t" << glob_fx << "\t" << glob_fy <<  endl;
       }
       
-      ComputePeriodicMean(dim, *u_sol, ids, loc_u_mean);
-      ComputeGlobPeriodicMean(comm, ids, loc_u_mean, glob_u_mean);
+      ComputePeriodicMean(dim, *u_sol, ids, loc_u_mean, loc_uu_mean, loc_vv_mean, 
+                         loc_ww_mean, loc_uv_mean);
+      ComputeGlobPeriodicMean(comm, ids, loc_u_mean, loc_uu_mean, loc_vv_mean,
+                              loc_ww_mean, loc_uv_mean, 
+                              glob_u_mean, glob_uu_mean, glob_vv_mean, 
+                              glob_ww_mean, glob_uv_mean);
 
       int c_ti = 1;
       if (restart == true)
           c_ti = restart_cycle + 1;
       if (ti == c_ti)
-          temp_u_mean = glob_u_mean;
+      {
+          temp_u_mean  = glob_u_mean;
+          temp_uu_mean = glob_uu_mean;
+          temp_vv_mean = glob_vv_mean;
+          temp_ww_mean = glob_ww_mean;
+          temp_uv_mean = glob_uv_mean;
+      }
       else if (ti > c_ti)
       {
           int vert_nodes = glob_u_mean.size();      
           for(int i = 0; i < vert_nodes; i++)
           {
-              temp_u_mean.at(i) = temp_u_mean.at(i)*(ti - c_ti) + glob_u_mean.at(i);          
-              temp_u_mean.at(i) = temp_u_mean.at(i)/double(ti - c_ti + 1);
+              temp_u_mean.at(i)  = temp_u_mean.at(i)*(ti - c_ti)  + glob_u_mean.at(i);          
+              temp_uu_mean.at(i) = temp_uu_mean.at(i)*(ti - c_ti) + glob_uu_mean.at(i);          
+              temp_vv_mean.at(i) = temp_vv_mean.at(i)*(ti - c_ti) + glob_vv_mean.at(i);          
+              temp_ww_mean.at(i) = temp_ww_mean.at(i)*(ti - c_ti) + glob_ww_mean.at(i);          
+              temp_uv_mean.at(i) = temp_uv_mean.at(i)*(ti - c_ti) + glob_uv_mean.at(i);          
+
+              temp_u_mean.at(i)  = temp_u_mean.at(i)/double(ti - c_ti + 1);
+              temp_uu_mean.at(i) = temp_uu_mean.at(i)/double(ti - c_ti + 1);
+              temp_vv_mean.at(i) = temp_vv_mean.at(i)/double(ti - c_ti + 1);
+              temp_ww_mean.at(i) = temp_ww_mean.at(i)/double(ti - c_ti + 1);
+              temp_uv_mean.at(i) = temp_uv_mean.at(i)/double(ti - c_ti + 1);
           }
           if (ti % vis_steps == 0) // Write mean u
           {
               if (myid == 0)
-                  writeUMean(temp_u_mean, glob_u_mean, ti, y_uni);
+                  writeUMean(ti, y_uni, glob_u_mean, temp_u_mean, temp_uu_mean,
+                            temp_vv_mean, temp_ww_mean, temp_uv_mean);
+
           }
       }
   
@@ -826,8 +850,8 @@ void FE_Evolution::Source(const ParGridFunction &x, ParGridFunction &y) const
     ParFiniteElementSpace *fes = x.ParFESpace();
     MPI_Comm comm              = fes->GetComm();
    
-    double ub, vol;
-    ComputeUb(x, ub, vol);
+    double ub, vb, wb, vol;
+    ComputeUb(x, ub, vb, wb, vol);
     double glob_ub, glob_vol;
     MPI_Allreduce(&ub,  &glob_ub,  1, MPI_DOUBLE, MPI_SUM, comm); // Get global u_max across processors
     MPI_Allreduce(&vol, &glob_vol, 1, MPI_DOUBLE, MPI_SUM, comm); // Get global u_max across processors
@@ -1534,197 +1558,6 @@ void postProcess(Mesh &mesh, GridFunction &u_sol, GridFunction &aux_grad,
 }
 
 
-// Get bulk velocity 
-void ComputeUb(const ParGridFunction &uD, double &ub, double &vol)
-{
-   const FiniteElementSpace *fes = uD.FESpace();
-   Mesh *mesh                    = fes->GetMesh();
-   
-   const FiniteElement *el;
-
-   int dim;
-
-   ub  = 0.0, vol = 0.0;
-   for (int i = 0; i < fes->GetNE(); i++)
-   {
-       ElementTransformation *T  = fes->GetElementTransformation(i);
-       el = fes->GetFE(i);
-
-       dim = el->GetDim();
-
-       int dof = el->GetDof();
-       Array<int> vdofs;
-       fes->GetElementVDofs(i, vdofs);
-
-       const IntegrationRule *ir ;
-       int   order;
-
-       order = 2*el->GetOrder() + 1;
-       ir    = &IntRules.Get(el->GetGeomType(), order);
-
-       for (int p = 0; p < ir->GetNPoints(); p++)
-       {
-           const IntegrationPoint &ip = ir->IntPoint(p);
-           T->SetIntPoint(&ip);
-
-           double rho    = uD[vdofs[p]];
-           double irho   = 1.0/rho; 
-       
-           ub  += ip.weight*T->Weight()*(irho*uD[vdofs[dof + p]]);
-           vol += ip.weight*T->Weight();
-       }
-   }
-
-}
-
-
-// Returns TKE 
-double ComputeTKE(ParFiniteElementSpace &fes, const Vector &uD)
-{
-   const FiniteElement *el;
-
-   int dim;
-
-   double tke = 0.0;
-   for (int i = 0; i < fes.GetNE(); i++)
-   {
-       ElementTransformation *T  = fes.GetElementTransformation(i);
-       el = fes.GetFE(i);
-
-       dim = el->GetDim();
-
-       int dof = el->GetDof();
-       Array<int> vdofs;
-       fes.GetElementVDofs(i, vdofs);
-
-       const IntegrationRule *ir ;
-       int   order;
-
-       order = 2*el->GetOrder() + 1;
-       ir    = &IntRules.Get(el->GetGeomType(), order);
-
-       for (int p = 0; p < ir->GetNPoints(); p++)
-       {
-           const IntegrationPoint &ip = ir->IntPoint(p);
-           T->SetIntPoint(&ip);
-
-           double rho    = uD[vdofs[p]];
-           double irho   = 1.0/rho; 
-       
-           double point_ke = 0.0;       
-           for (int j = 0; j < dim; j++)
-           {
-               point_ke +=  irho*0.5*(uD[vdofs[(1 + j)*dof + p]] * uD[vdofs[(1 + j)*dof + p]]);
-           }
-
-           tke += ip.weight*T->Weight()*point_ke;
-//           cout << i << "\t" << p << "\t" << ip.weight << "\t" << T->Weight() << "\t" << point_ke << "\t" << tke << endl;
-       }
-   }
-
-   return tke;
-}
-
-
-
-void ComputeWallForces(FiniteElementSpace &fes, GridFunction &uD, GridFunction &f_vis_D, 
-                    const Array<int> &bdr, const double gamm, Vector &force)
-{
-   force = 0.0; 
-
-   const FiniteElement *el;
-   FaceElementTransformations *T;
-
-   Mesh *mesh = fes.GetMesh();
-
-   int dim;
-   Vector nor;
-
-   Vector vals, vis_vals;
-   
-   for (int i = 0; i < fes.GetNBE(); i++)
-   {
-       const int bdr_attr = mesh->GetBdrAttribute(i);
-
-       if (bdr[bdr_attr-1] == 0) { continue; } // Skip over non-active boundaries
-
-       T = mesh->GetBdrFaceTransformations(i);
- 
-       el = fes.GetFE(T -> Elem1No);
-   
-       dim = el->GetDim();
-      
-       const IntegrationRule *ir ;
-       int order;
-       
-       order = T->Elem1->OrderW() + 2*el->GetOrder();
-       
-       if (el->Space() == FunctionSpace::Pk)
-       {
-          order++;
-       }
-       ir = &IntRules.Get(T->FaceGeom, order);
-
-       for (int p = 0; p < ir->GetNPoints(); p++)
-       {
-          const IntegrationPoint &ip = ir->IntPoint(p);
-          IntegrationPoint eip;
-          T->Loc1.Transform(ip, eip);
-    
-          T->Face->SetIntPoint(&ip);
-          T->Elem1->SetIntPoint(&eip);
-
-          nor.SetSize(dim);          
-          if (dim == 1)
-          {
-             nor(0) = 2*eip.x - 1.0;
-          }
-          else
-          {
-             CalcOrtho(T->Face->Jacobian(), nor);
-          }
- 
-          Vector nor_dim(dim);
-          double nor_l2 = nor.Norml2();
-          nor_dim.Set(1/nor_l2, nor);
-     
-          uD.GetVectorValue(T->Elem1No, eip, vals);
-
-          Vector vel(dim);    
-          double rho = vals(0);
-          double v_sq  = 0.0;
-          for (int j = 0; j < dim; j++)
-          {
-              vel(j) = vals(1 + j)/rho;      
-              v_sq    += pow(vel(j), 2);
-          }
-          double pres = (gamm - 1)*(vals(dim + 1) - 0.5*rho*v_sq);
-
-          // nor is measure(face) so area is included
-          // The normal is always going into the boundary element
-          // F = -p n_j with n_j going out
-          force(0) += pres*nor(0)*ip.weight; // Quadrature of pressure 
-          force(1) += pres*nor(1)*ip.weight; // Quadrature of pressure 
-
-          f_vis_D.GetVectorValue(T->Elem1No, eip, vis_vals);
-        
-          double tau[dim][dim];
-          for(int i = 0; i < dim ; i++)
-              for(int j = 0; j < dim ; j++) tau[i][j] = vis_vals[i*(dim + 2) + 1 + j];
-
-
-          // The normal is always going into the boundary element
-          // F = sigma_{ij}n_j with n_j going out
-          for(int i = 0; i < dim ; i++)
-          {
-              force(0) -= tau[0][i]*nor(i)*ip.weight; // Quadrature of shear stress 
-              force(1) -= tau[1][i]*nor(i)*ip.weight; // Quadrature of shear stress 
-          }
-       } // p loop
-   } // NBE loop
-}
-
-
 
 
 void FE_Evolution::GetMomentum(const ParGridFunction &x, double &Fx) 
@@ -1866,22 +1699,3 @@ void FE_Evolution::GetMomentum(const ParGridFunction &x, double &Fx)
 
 }
 
-void writeUMean(const vector<double> u_mean, const vector<double> inst_u_mean, int ti, vector<double> y_uni)
-{
-    std::ostringstream oss;
-    oss << std::setw(7) << std::setfill('0') << ti;
-
-    std::string f_name = "u_mean_" + oss.str();
-
-    ofstream f_file;
-    f_file.open(f_name);
-
-    int vert_nodes = y_uni.size();
-    for(int i = 0; i < vert_nodes; i++)
-    {
-        f_file << y_uni.at(i) << "\t" << u_mean.at(i) << "\t" << inst_u_mean.at(i) << endl;    
-    }
-
-    f_file.close();
-
-}

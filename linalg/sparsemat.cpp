@@ -1869,11 +1869,11 @@ void SparseMatrix::AddSubMatrix(const Array<int> &rows, const Array<int> &cols,
                      "Trying to insert a column " << gj << " outside the matrix width "
                      << width);
          a = subm(i, j);
-         if (skip_zeros && a == 0.0)
+         if (skip_zeros && (a == 0.0 || (std::abs(a) <  std::numeric_limits<double>::epsilon()) ))
          {
             // if the element is zero do not assemble it unless this breaks
             // the symmetric structure
-            if (&rows != &cols || subm(j, i) == 0.0)
+            if (&rows != &cols || (subm(j, i) == 0.0 || (std::abs(subm(j, i)) <  std::numeric_limits<double>::epsilon()) ))
             {
                continue;
             }
