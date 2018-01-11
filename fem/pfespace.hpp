@@ -158,6 +158,10 @@ public:
    ParFiniteElementSpace(ParMesh *pm, const FiniteElementCollection *f,
                          int dim = 1, int ordering = Ordering::byNODES);
 
+   ParFiniteElementSpace(ParMesh *pm, 
+           VarFiniteElementCollection *vf, int dim = 1, 
+           int ordering = Ordering::byNODES);
+
    MPI_Comm GetComm() { return MyComm; }
    int GetNRanks() { return NRanks; }
    int GetMyRank() { return MyRank; }
@@ -275,6 +279,12 @@ public:
 
    // Obsolete, kept for backward compatibility
    int TrueVSize() { return ltdof_size; }
+
+   // Store order of all elements sharing face with elements on this processor
+   // Needed for variable p calculations
+   Array<int> faceNbrElOrder;
+   
+   const virtual FiniteElement *GetFE(int i) const;
 };
 
 }

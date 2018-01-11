@@ -64,7 +64,8 @@ protected:
    Mesh *mesh;
 
    const FiniteElementCollection *fec;
-   const VarFiniteElementCollection *vfec;
+//   const VarFiniteElementCollection *vfec;
+   VarFiniteElementCollection *vfec;
 
    /// Vector dimension (number of unknowns per degree of freedom).
    int vdim;
@@ -135,7 +136,7 @@ public:
    FiniteElementSpace(Mesh *mesh, const FiniteElementCollection *fec,
                       int vdim = 1, int ordering = Ordering::byNODES);
 
-   FiniteElementSpace(Mesh *mesh, const VarFiniteElementCollection *vfec,
+   FiniteElementSpace(Mesh *mesh, VarFiniteElementCollection *vfec,
                       int vdim = 1, int ordering = Ordering::byNODES);
 
    /// Returns the mesh
@@ -298,7 +299,7 @@ public:
    int GetLocalDofForDof(int i) const { return dof_ldof_array[i]; }
 
    /// Returns pointer to the FiniteElement associated with i'th element.
-   const FiniteElement *GetFE(int i) const;
+   const virtual FiniteElement *GetFE(int i) const;
 
    /// Returns pointer to the FiniteElement for the i'th boundary element.
    const FiniteElement *GetBE(int i) const;

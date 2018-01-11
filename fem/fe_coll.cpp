@@ -2471,10 +2471,16 @@ FiniteElementCollection *NURBSFECollection::GetTraceCollection() const
    return NULL;
 }
 
+void VarFiniteElementCollection::createFaceNbrColl(Array<int> &faceNbrElOrder)
+{
+   MFEM_ABORT("VarFiniteElementCollection: Hasn't been implemented");
+}
+
 //Default Constructor with uniform order
 VarL2_FiniteElementCollection::VarL2_FiniteElementCollection(Mesh *mesh, int order)
 {
-   sequence = 0; //Defines the number of times the collection has been updated
+   sequence          = 0; //Defines the number of times the collection has been updated
+   face_nbr_elements = NULL;
 
    int ne = mesh->GetNE(); 
 
@@ -2493,7 +2499,8 @@ VarL2_FiniteElementCollection::VarL2_FiniteElementCollection(Mesh *mesh, int ord
 
 VarL2_FiniteElementCollection::VarL2_FiniteElementCollection(Mesh *mesh, Array<int> &order) 
 {
-   sequence = 0; //Defines the number of times the collection has been updated
+   sequence          = 0; //Defines the number of times the collection has been updated
+   face_nbr_elements = NULL; // Is defined when there are neighbours in parallel
 
    int ne = mesh->GetNE(); 
 
@@ -2543,10 +2550,39 @@ FiniteElementCollection *VarL2_FiniteElementCollection::GetColl(int i) const
     return elements[i];
 }
 
+void VarL2_FiniteElementCollection::createFaceNbrColl(Array<int> &faceNbrElOrder) 
+{
+   int dim          = sdim;
+
+   int num_nbr_elem = faceNbrElOrder.Size();
+
+   face_nbr_elemOrder.SetSize(num_nbr_elem);
+   face_nbr_elements = new FiniteElementCollection*[num_nbr_elem];
+
+   for(int i = 0; i < num_nbr_elem; i ++)
+   {
+       face_nbr_elemOrder[i] = faceNbrElOrder[i] ; // Order of each bordering element
+       face_nbr_elements[i]  = new L2_FECollection(face_nbr_elemOrder[i] , dim); 
+   }
+}
+
+FiniteElementCollection *VarL2_FiniteElementCollection::getFaceNbrColl(int i) const
+{
+    return face_nbr_elements[i];
+}
+
 VarL2_FiniteElementCollection::~VarL2_FiniteElementCollection() 
 {
    int ne = elemOrder.Size(); 
    for (int i = 0; i < ne ; i++) delete elements[i];
+
+   if (face_nbr_elements)
+   {
+       int num_nbr_elem = face_nbr_elemOrder.Size();
+       for (int i = 0; i < num_nbr_elem ; i++) delete face_nbr_elements[i];
+
+       delete [] face_nbr_elements;
+   }
 
    delete [] elements;
 }

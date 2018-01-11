@@ -954,7 +954,7 @@ FiniteElementSpace::FiniteElementSpace(Mesh *mesh,
 
 
 FiniteElementSpace::FiniteElementSpace(Mesh *mesh,
-                                       const VarFiniteElementCollection *vfec,
+                                       VarFiniteElementCollection *vfec,
                                        int vdim, int ordering)
 {
    this->mesh = mesh;

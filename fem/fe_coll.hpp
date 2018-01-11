@@ -911,6 +911,11 @@ public:
    virtual FiniteElementCollection *GetColl(int i) const = 0;
 
    virtual int GetSequence() const = 0;
+   
+   // Create collection for face neighbour elements
+   virtual void createFaceNbrColl(Array<int> &faceNbrElOrder);
+
+   virtual FiniteElementCollection *getFaceNbrColl(int i) const = 0;
 };
 
 class VarL2_FiniteElementCollection : public VarFiniteElementCollection
@@ -918,11 +923,18 @@ class VarL2_FiniteElementCollection : public VarFiniteElementCollection
 protected:
    FiniteElementCollection **elements;
 
+   // Should ideally make a pfe_coll for parallel version
+   // Defines elements for face neighbour elements
+   FiniteElementCollection **face_nbr_elements;
+
    int sdim;
 
    int sequence;
 
    Array<int> elemOrder; // Order of each element
+
+   // Stores order for face neighbour elements
+   Array<int> face_nbr_elemOrder; // Order of each element
 
 public:
    VarL2_FiniteElementCollection(Mesh *mesh, int order);
@@ -935,6 +947,11 @@ public:
    void Update(Array<int> &order);
 
    int GetSequence() const;
+
+   // Create collection for face neighbour elements
+   void createFaceNbrColl(Array<int> &faceNbrElOrder);
+
+   FiniteElementCollection *getFaceNbrColl(int i) const;
 
    ~VarL2_FiniteElementCollection(); 
 };

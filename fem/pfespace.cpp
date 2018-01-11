@@ -54,6 +54,37 @@ ParFiniteElementSpace::ParFiniteElementSpace(
    }
 }
 
+ParFiniteElementSpace::ParFiniteElementSpace(
+   ParMesh *pm, VarFiniteElementCollection *vf, int dim, int ordering)
+   : FiniteElementSpace(pm, vf, dim, ordering)
+{
+   mesh = pmesh = pm;
+
+   MyComm = pmesh->GetComm();
+   MPI_Comm_size(MyComm, &NRanks);
+   MPI_Comm_rank(MyComm, &MyRank);
+
+   num_face_nbr_dofs = -1;
+
+   P = NULL;
+   R = NULL;
+   gcomm = NULL;
+
+   Construct();
+
+   // Apply the ldof_signs to the elem_dof Table
+   if (Conforming() && !NURBSext)
+   {
+      Array<int> dofs;
+      for (int i = 0; i < elem_dof->Size(); i++)
+      {
+         dofs.MakeRef(elem_dof->GetRow(i), elem_dof->RowSize(i));
+         ApplyLDofSigns(dofs);
+      }
+   }
+}
+
+
 void ParFiniteElementSpace::Construct()
 {
    if (NURBSext)
@@ -257,6 +288,9 @@ void ParFiniteElementSpace::ApplyLDofSigns(Array<int> &dofs) const
       }
    }
 }
+
+
+
 
 void ParFiniteElementSpace::GetElementDofs(int i, Array<int> &dofs) const
 {
@@ -649,6 +683,7 @@ void ParFiniteElementSpace::ExchangeFaceNbrData()
    face_nbr_ldof.MakeI(num_face_nbrs);
    int *send_el_off = pmesh->send_face_nbr_elements.GetI();
    int *recv_el_off = pmesh->face_nbr_elements_offset;
+
    for (int fn = 0; fn < num_face_nbrs; fn++)
    {
       int *my_elems = pmesh->send_face_nbr_elements.GetRow(fn);
@@ -657,6 +692,7 @@ void ParFiniteElementSpace::ExchangeFaceNbrData()
       for (int i = 0; i < num_my_elems; i++)
       {
          GetElementVDofs(my_elems[i], ldofs);
+
          for (int j = 0; j < ldofs.Size(); j++)
             if (ldof_marker[ldofs[j]] != fn)
             {
@@ -834,6 +870,43 @@ void ParFiniteElementSpace::ExchangeFaceNbrData()
    }
 
    MPI_Waitall(num_face_nbrs, send_requests, statuses);
+   
+   // Get order of each element neighbouring faces on this processor
+   int send_order_data[pmesh->send_face_nbr_elements.Size_of_connections()];
+   faceNbrElOrder.SetSize(pmesh->face_nbr_elements.Size());
+   for (int fn = 0; fn < num_face_nbrs; fn++)
+   {
+       /*
+        * num_face_nbrs          : Number of processors on which face neighbours exist
+        * send_face_nbr_elements : Table containing elements that this processor needs to send to others
+        */
+       int *my_elems     = pmesh->send_face_nbr_elements.GetRow(fn);
+       int  num_my_elems = pmesh->send_face_nbr_elements.RowSize(fn);
+    
+       int size1 = num_my_elems;
+    
+       for (int i = 0;i < size1; i++)
+       {
+           send_order_data[send_el_off[fn] + i]     = GetOrder(my_elems[i]);
+       }
+   }
+
+   for (int fn = 0; fn < num_face_nbrs; fn++)
+   {
+       int size1 = send_el_off[fn + 1] - send_el_off[fn];
+       int size2 = recv_el_off[fn + 1] - recv_el_off[fn];
+    
+       int nbr_rank = pmesh->GetFaceNbrRank(fn);
+       int tag      = 0;
+       MPI_Isend(&send_order_data[send_el_off[fn]], size1, MPI_INT, 
+                 nbr_rank, tag, MPI_COMM_WORLD, &send_requests[fn]);
+       MPI_Irecv(&faceNbrElOrder[recv_el_off[fn]],  size2, MPI_INT, 
+                 nbr_rank, tag, MPI_COMM_WORLD, &recv_requests[fn]);
+   }
+   MPI_Waitall(num_face_nbrs, recv_requests, statuses);
+
+   if (vfec)
+       vfec->createFaceNbrColl(faceNbrElOrder); // Create fe_collection for face neighbour elements
 
    delete [] statuses;
    delete [] requests;
@@ -844,7 +917,7 @@ void ParFiniteElementSpace::GetFaceNbrElementVDofs(
 {
    face_nbr_element_dof.GetRow(i, vdofs);
 }
-
+ 
 void ParFiniteElementSpace::GetFaceNbrFaceVDofs(int i, Array<int> &vdofs) const
 {
    // Works for NC mesh where 'i' is an index returned by
@@ -873,19 +946,45 @@ void ParFiniteElementSpace::GetFaceNbrFaceVDofs(int i, Array<int> &vdofs) const
    }
 }
 
+
+const FiniteElement *ParFiniteElementSpace::GetFE(int i) const
+{
+   const FiniteElement *FE; 
+
+   int nbr_el_no = i - pmesh->GetNE();
+
+   if (vfec)
+   {
+      if (nbr_el_no >= 0) 
+          FE = vfec->getFaceNbrColl(nbr_el_no)->FiniteElementForGeometry(mesh->GetElementBaseGeometry(i));
+      else
+          FE = vfec->GetColl(i)->FiniteElementForGeometry(mesh->GetElementBaseGeometry(i));
+   }
+   else
+   {
+      FE = fec->FiniteElementForGeometry(mesh->GetElementBaseGeometry(i));
+   }
+
+   if (NURBSext)
+   {
+      NURBSext->LoadFE(i, FE);
+   }
+
+   return FE;
+}
+
 const FiniteElement *ParFiniteElementSpace::GetFaceNbrFE(int i) const
 {
    const FiniteElement *FE; 
 
    if (vfec)
    {
-      FE = vfec->GetColl(i)->FiniteElementForGeometry(pmesh->face_nbr_elements[i]->GetGeometryType());
+       FE = vfec->getFaceNbrColl(i)->FiniteElementForGeometry(mesh->GetElementBaseGeometry(i));
    }
    else
    {
       FE = fec->FiniteElementForGeometry(pmesh->face_nbr_elements[i]->GetGeometryType());
    }
-
 
    if (NURBSext)
    {
