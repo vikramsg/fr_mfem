@@ -67,11 +67,11 @@ void ParLinearForm::AssembleSharedFaces()
                                              *pfes->GetFaceNbrFE(T -> Elem2No),
                                               *T, elemvect);
 
-//          //Assemble Shared Faces is called from each processor for the same faces
-//          //Therefore only the local vector on this processor needs to be updated 
-//          //Each processor will then update its own vector 
-//          elemvect.GetSubVector(offset, this_vect);
-//          AddElementVector (vdofs1, this_vect);
+          //Assemble Shared Faces is called from each processor for the same faces
+          //Therefore only the local vector on this processor needs to be updated 
+          //Each processor will then update its own vector 
+          elemvect.GetSubVector(offset, this_vect);
+          AddElementVector (vdofs1, this_vect);
        }
     }
 }

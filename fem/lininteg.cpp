@@ -1030,6 +1030,13 @@ void DGEulerIntegrator::AssembleRHSElementVect(
    
    Vector vu(dim), nor(dim);
 
+   Vector u1_dir(vDim), u2_dir(vDim);
+
+   Vector f_dir(dim*vDim);
+   Vector f1_dir(dim*vDim), f2_dir(dim*vDim);
+
+   Vector face_f(vDim), face_f1(vDim), face_f2(vDim); //Face fluxes (dot product with normal)
+
    elvect.SetSize(vDim*(ndof1 + ndof2));
    elvect = 0.0;
 
@@ -1081,20 +1088,14 @@ void DGEulerIntegrator::AssembleRHSElementVect(
          CalcOrtho(Trans.Face->Jacobian(), nor);
       }
 
-      Vector u1_dir(vDim), u2_dir(vDim);
       uD.Eval(u1_dir, *Trans.Elem1, eip1);
       uD.Eval(u2_dir, *Trans.Elem2, eip2);
 
-      Vector f_dir(dim*vDim);
-
       getLFFlux(R, gamm, u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using local Lax Friedrichs
 
-      Vector f1_dir(dim*vDim), f2_dir(dim*vDim);
       fD.Eval(f1_dir, *Trans.Elem1, eip1); // Get discontinuous flux at face
       fD.Eval(f2_dir, *Trans.Elem2, eip2);
 
-
-      Vector face_f(vDim), face_f1(vDim), face_f2(vDim); //Face fluxes (dot product with normal)
       face_f = 0.0; face_f1 = 0.0; face_f2 = 0.0;
       for (int i = 0; i < dim; i++)
       {
