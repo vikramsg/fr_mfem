@@ -27,6 +27,8 @@ const int    ode_solver_type =  3; // 1. Forward Euler 2. TVD SSP 3 Stage
 
 const int    vis_steps       = 2000;
 
+// Variable p
+const bool   variable_p      =  true;
 const bool   adapt           =  false;
 const int    adapt_iter      =  200  ; // Time steps after which adaptation is done
 const double tolerance       =  5e-4 ; // Tolerance for adaptation
@@ -62,6 +64,7 @@ void getAuxGrad(int dim, const HypreParMatrix &K_x, const HypreParMatrix &K_y, c
         const Vector &b_aux_x, const Vector &b_aux_y, const Vector &b_aux_z,        
         Vector &aux_grad);
 void getAuxVar(int dim, const Vector &u, Vector &aux_sol);
+
 
 /** A time-dependent operator for the right-hand side of the ODE. The DG weak
     form is M du/dt = K u + b, where M and K are the mass
@@ -253,7 +256,9 @@ CNS::CNS()
    if (restart == false)
        u_sol->ProjectCoefficient(u0);
    else
+   {
        doRestart(restart_cycle, *pmesh, *u_sol, r_t, r_ti);
+   }
 
    fes_vec = new ParFiniteElementSpace(pmesh, &vfec, dim*var_dim);
        
@@ -542,7 +547,10 @@ CNS::CNS()
       
       if (done || ti % restart_freq == 0) // Write restart file 
       {
-          writeRestart(*pmesh, *u_sol, ti, t);
+          if (variable_p)
+              writeRestart(*pmesh, order, *u_sol, ti, t);
+          else
+              writeRestart(*pmesh, *u_sol, ti, t);
       }
 
       double tk = ComputeTKE(*fes, *u_sol);
@@ -626,7 +634,7 @@ CNS::CNS()
    }
    flo_file.close();
    force_file.close();
-   
+ 
    delete adv;
    delete K_inv_x, K_vis_x;
    delete K_inv_y, K_vis_y;
