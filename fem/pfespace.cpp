@@ -2304,16 +2304,33 @@ void ParFiniteElementSpace::Destroy()
 
 void ParFiniteElementSpace::Update(bool want_transform)
 {
-   if (mesh->GetSequence() == sequence)
+   if (vfec)
    {
-      return; // no need to update, no-op
+       if ((mesh->GetSequence() == sequence)  && (vfec -> GetSequence() == fec_sequence))
+       {
+           return; // mesh and space are in sync, no-op
+       }
+       if (want_transform && ((mesh->GetSequence() != sequence + 1) && (vfec -> GetSequence() != fec_sequence + 1)))
+       {
+           MFEM_ABORT("Error in update sequence. Space needs to be updated after "
+                 "each mesh modification or VarFEC modification");
+       }
    }
-   if (want_transform && mesh->GetSequence() != sequence + 1)
+   else 
    {
-      MFEM_ABORT("Error in update sequence. Space needs to be updated after "
+       if (mesh->GetSequence() == sequence) 
+       {
+           return; // mesh and space are in sync, no-op
+       }
+       if (want_transform && mesh->GetSequence() != sequence + 1)
+       {
+           MFEM_ABORT("Error in update sequence. Space needs to be updated after "
                  "each mesh modification.");
+       }
    }
+
    sequence = mesh->GetSequence();
+   if (vfec) fec_sequence = vfec->GetSequence();
 
    if (NURBSext)
    {
@@ -2341,7 +2358,9 @@ void ParFiniteElementSpace::Update(bool want_transform)
 
    BuildElementToDofTable();
 
-   if (want_transform)
+   // FIXME: If variable FEC then I am assuming I only need the correct
+   // connectivity. GridFunction transformations done by client code
+   if (want_transform && !vfec)
    {
       // calculate appropriate GridFunction transformation
       switch (mesh->GetLastOperation())

@@ -1178,6 +1178,14 @@ void mDGEulerIntegrator::AssembleRHSElementVect(
    shape1.SetSize(ndof1);
    shape2.SetSize(ndof2);
 
+   // This is how it works. 
+   // We first convert the lagrange basis back to modal form
+   // And then multiply the m_fac to the highest mode
+   // Then we convert it back to nodal form. This is purely in 1D
+   // This basis we use for only the correction polynomial
+   // We only change that component that interpolates from the boundary
+   // not the other two directions
+
    double tol = std::numeric_limits<double>::epsilon();
 
    Poly_1D poly1, poly2;
