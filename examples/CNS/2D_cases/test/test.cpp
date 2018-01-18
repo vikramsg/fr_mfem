@@ -13,12 +13,12 @@ const double R_gas = 287;
 const double   Pr  = 0.72;
 
 //Run parameters
-const char *mesh_file        =  "periodic-cube.mesh";
-//const char *mesh_file        =  "per_5.mesh";
+//const char *mesh_file        =  "periodic-cube.mesh";
+const char *mesh_file        =  "per_5.mesh";
 const int    order           =  3;
 const double t_final         =  1.0    ;
 const int    problem         =  1;
-const int    ref_levels      =  2;
+const int    ref_levels      =  3;
 
 const bool   time_adapt      =  false;
 const double cfl             =  1.1  ;
@@ -260,6 +260,8 @@ CNS::CNS()
 
    u_b  ->ExchangeFaceNbrData(); //Exchange data across processors
    f_I_b->ExchangeFaceNbrData();
+   
+   aux_grad->ExchangeFaceNbrData();
 
    ///////////////////////////////////////////////////
    // Linear form representing the Euler boundary non-linear term
@@ -348,11 +350,6 @@ CNS::CNS()
                             *b,
                             *face_proj_l, *face_proj_r, *wts,
                             nor_face);
- 
-       getAuxGrad(dim, *K_vis_x, *K_vis_y, *K_vis_z, 
-           adv->GetMSolver(), *u_b, 
-           *b_aux_x, *b_aux_y, *b_aux_z, 
-           *aux_grad);
    }
    else if (dim == 2)
    {
@@ -363,34 +360,15 @@ CNS::CNS()
                             *b,
                             *face_proj_l, *face_proj_r, *wts,
                             nor_face);
-
-       
-       getAuxGrad(dim, *K_vis_x, *K_vis_y, *K_vis_z, 
-           adv->GetMSolver(), *u_b,
-           *b_aux_x, *b_aux_y, *b_aux_z, 
-           *aux_grad);
    }
    delete m, k_inv_x, k_inv_y, k_inv_z;
    delete    k_vis_x, k_vis_y, k_vis_z;
 
 
-   getVisFlux(dim, *u_sol, *aux_grad, *f_vis);
-
-   VectorGridFunctionCoefficient vis_vec(f_vis);
-   VectorGridFunctionCoefficient aux_grad_vec(aux_grad);
-
-   VectorFunctionCoefficient u_adi_wall_bnd(dim, wall_adi_bnd_cnd); // Defines wall boundary condition
-
    {// Post process initially
-       getAuxGrad(dim, *K_vis_x, *K_vis_y, *K_vis_z, 
-          adv->GetMSolver(), *u_b,
-          *b_aux_x, *b_aux_y, *b_aux_z, 
-          *aux_grad);
-
        ti = 0; t = 0;
        postProcess(*pmesh, *u_sol, *aux_grad, ti, t);
    }
-
 
    if (time_adapt == false)
    {
@@ -413,48 +391,37 @@ CNS::CNS()
    chrono.Clear();
    chrono.Start();
 
-   bool done = false;
-   for (ti = 0; !done; )
-   {
-      Step(); // Step in time
+   Step();
 
-      done = (t >= t_final - 1e-8*dt);
-
-      if ((ti % 10 == 0) && (myid == 0)) // Check time
-      {
-          chrono.Stop();
-          cout << "10 Steps took "<< chrono.RealTime() << " s "<< endl;
-
-          chrono.Clear();
-          chrono.Start();
-      }
-    
-      if (done || ti % vis_steps == 0) // Visualize
-      {
-       
-          getAuxGrad(dim, *K_vis_x, *K_vis_y, *K_vis_z, 
-          adv->GetMSolver(), *u_b,
-          *b_aux_x, *b_aux_y, *b_aux_z, 
-          *aux_grad);
-
-          postProcess(*pmesh, *u_sol, *aux_grad, ti, t);
-      }
-  
-   }
+//   bool done = false;
+//   for (ti = 0; !done; )
+//   {
+//      Step(); // Step in time
+//
+//      done = (t >= t_final - 1e-8*dt);
+//
+//      if ((ti % 10 == 0) && (myid == 0)) // Check time
+//      {
+//          chrono.Stop();
+//          cout << "10 Steps took "<< chrono.RealTime() << " s "<< endl;
+//
+//          chrono.Clear();
+//          chrono.Start();
+//      }
+//    
+//      if (done || ti % vis_steps == 0) // Visualize
+//      {
+//       
+//          getAuxGrad(dim, *K_vis_x, *K_vis_y, *K_vis_z, 
+//          adv->GetMSolver(), *u_b,
+//          *b_aux_x, *b_aux_y, *b_aux_z, 
+//          *aux_grad);
+//
+//          postProcess(*pmesh, *u_sol, *aux_grad, ti, t);
+//      }
+//  
+//   }
    
-////   // Print all nodes in the finite element space 
-////   FiniteElementSpace fes_nodes(mesh, vfec, dim);
-////   GridFunction nodes(&fes_nodes);
-////   mesh->GetNodes(nodes);
-////
-////   for (int i = 0; i < nodes.Size()/dim; i++)
-////   {
-////       int offset = nodes.Size()/dim;
-////       int sub1 = i, sub2 = offset + i, sub3 = 2*offset + i, sub4 = 3*offset + i;
-//////       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << "\t" << rhs(sub2)<< endl;      
-//////       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << u_sol(sub1) << "\t" << u_out(sub1) << endl;      
-////   }
-////
    
    delete adv;
    delete K_inv_x, K_vis_x;
@@ -475,6 +442,8 @@ CNS::~CNS()
     delete fes_op;
 
     delete face_proj_l, face_proj_r, wts;
+
+    MPI_Finalize();
 }
 
 void CNS::Step()
@@ -605,9 +574,11 @@ void FE_Evolution::Mult(const ParGridFunction &x, ParGridFunction &y) const
             u_grad);
     getVisFlux(dim, x, u_grad, f_V);
 
+    b.Assemble();
+
     getEulerDGTranspose(dim, face_proj_l, face_proj_r, 
         wts, nor_face, u, f_I, b);
-
+    
     y.SetSize(x.Size()); // Needed since by default ode_init will set it as size of K
 
     Vector y_temp;
@@ -1251,7 +1222,7 @@ void postProcess(Mesh &mesh, GridFunction &u_sol, GridFunction &aux_grad,
    int dim     = mesh.Dimension();
    int var_dim = dim + 2;
 
-   DG_FECollection fec(order + 1, dim);
+   DG_FECollection fec(order , dim);
    FiniteElementSpace fes_post(&mesh, &fec, var_dim);
    FiniteElementSpace fes_post_grad(&mesh, &fec, (dim+1)*dim);
 
@@ -1260,10 +1231,6 @@ void postProcess(Mesh &mesh, GridFunction &u_sol, GridFunction &aux_grad,
  
    GridFunction aux_grad_post(&fes_post_grad);
    aux_grad_post.GetValuesFrom(aux_grad); // Create a temp variable to get the previous space solution
-
-   fes_post.Update();
-   u_post.Update();
-   aux_grad_post.Update();
 
    VisItDataCollection dc("CNS", &mesh);
    dc.SetPrecision(8);

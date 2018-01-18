@@ -19,7 +19,9 @@ int main(int argc, char *argv[])
 {
 //    const char *mesh_file        =  "channel.msh";
 //    const char *mesh_file        =  "channel_small.msh";
-    const char *mesh_file        =  "channel_395.msh";
+    const char *mesh_file        =  "channel_tiny.msh";
+    const char *out_file         =  "channel_tiny.mesh";
+
     Mesh *mesh                   =  new Mesh(mesh_file, 1, 1);
 
     int dim  = mesh->Dimension();
@@ -36,7 +38,6 @@ int main(int argc, char *argv[])
 
     Mesh *nmesh                  = MakePeriodicMesh(mesh, trans_vecs);
 
-    const char *out_file         = "channel_395.mesh";
     ofstream out_mesh;
     out_mesh.precision(16);
     out_mesh.open(out_file);

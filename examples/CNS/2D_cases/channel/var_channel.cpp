@@ -7,7 +7,6 @@
 using namespace std;
 using namespace mfem;
 
-
 //Constants
 const double gamm  = 1.4;
 const double   mu  = 0.00031746031746031746; 
@@ -15,15 +14,16 @@ const double R_gas = 287;
 const double   Pr  = 0.71;
 
 //Run parameters
-const char *mesh_file        =  "channel2D.mesh";
+//const char *mesh_file        =  "channel2D.mesh";
+const char *mesh_file        =  "channel_tiny.mesh";
 const int    order           =  3;
-const double t_final         =  0.020  ;
+const double t_final         =   0.200  ;
 const int    problem         =  0;
-const int    ref_levels      =  1;
+const int    ref_levels      =  0;
 
 const bool   time_adapt      =  false;
 const double cfl             =  0.65 ;
-const double dt_const        =  0.001 ;
+const double dt_const        =  0.002  ;
 const int    ode_solver_type =  3; // 1. Forward Euler 2. TVD SSP 3 Stage
 
 const int    vis_steps       = 800 ;
@@ -42,7 +42,7 @@ const int  restart_freq      =  5000; // Create restart file after every 1000 ti
 const int  restart_cycle     =     4; // File number used for restart
 
 //Boundary parameters
-const int num_bnd            =     0; // Number of boundaries
+const int num_bnd            =     1; // Number of boundaries
 const int no_wall_bnd        =     0; // Number of wall boundaries
 ////////////////////////////////////////////////////////////////////////
 
@@ -178,14 +178,28 @@ CNS::CNS()
 
    Array<int> eleOrder;
 
+   ////////////////////////////////////////
+   // Uniform element order
    int ne = pmesh->GetNE();
    eleOrder.SetSize(ne);
    for (int i = 0; i < ne; i++)
    {
-       eleOrder[i] = order;   
+       eleOrder[i] = order; 
    }
+   ////////////////////////////////////////
+   // Wall element order
+   FaceElementTransformations *T;
+   int nbfaces = pmesh->GetNBE();
+   for (int i = 0; i < nbfaces; i++)
+   {
+       T = pmesh->GetBdrFaceTransformations(i);
+   
+       eleOrder[T -> Elem1No] = order + 1; 
+   }
+   ////////////////////////////////////////
 
    VarL2_FiniteElementCollection vfec(pmesh, eleOrder);
+   DG_FECollection fec(order, dim);
 
    fes = new ParFiniteElementSpace(pmesh, &vfec, var_dim);
 
@@ -278,11 +292,13 @@ CNS::CNS()
    u_b  ->ExchangeFaceNbrData(); //Exchange data across processors
    f_I_b->ExchangeFaceNbrData();
 
+   getAuxVar(dim, *u_sol, *aux_sol);
+   VectorGridFunctionCoefficient aux_vec(aux_sol);
+
    getVisFlux(dim, *u_sol, *aux_grad, *f_vis);
 
    VectorGridFunctionCoefficient vis_vec(f_vis);
    VectorGridFunctionCoefficient aux_grad_vec(aux_grad);
-
 
    // Linear form representing the transpose boundary non-linear term as well as boundary terms
    // of the Euler part
@@ -299,7 +315,6 @@ CNS::CNS()
 
    b->AddFaceIntegrator(
       new DGEulerIntegrator(R_gas, gamm, u_vec, f_vec, var_dim, -1.0));
-
 
    ///////////////////////////////////////////////////////////
    // Setup bilinear form for viscous terms 
@@ -365,36 +380,36 @@ CNS::CNS()
    delete    k_vis_x, k_vis_y, k_vis_z;
 
 
+   ///////////////////////////////////////////////////
+   // Define boundary terms
+   // Each boundary should have its own marker since they are passed by ref
+   Array<int> dir_bdr_wall(pmesh->bdr_attributes.Max());
+   dir_bdr_wall    = 0; // Deactivate all boundaries
+   dir_bdr_wall[0] = 1; // Activate wall bdy 
+      
+   // For isothermal walls
+   VectorFunctionCoefficient u_wall_bnd(aux_dim, wall_bnd_cnd); // Defines wall boundary condition
+
+   // Will only be activated if there are boundaries
    if (num_bnd > 0)
    {
-       ///////////////////////////////////////////////////
-       // Define boundary terms
-       // Each boundary should have its own marker since they are passed by ref
-       Array<int> dir_bdr_wall(pmesh->bdr_attributes.Max());
-       dir_bdr_wall    = 0; // Deactivate all boundaries
-       dir_bdr_wall[0] = 1; // Activate wall bdy 
-    
-       VectorFunctionCoefficient u_wall_bnd(aux_dim, wall_bnd_cnd); // Defines wall boundary condition
-       VectorFunctionCoefficient u_adi_wall_bnd(dim, wall_adi_bnd_cnd); // Defines wall boundary condition
-       
        b->AddBdrFaceIntegrator(
           new DG_Euler_NoSlip_Isotherm_Integrator(
               R_gas, gamm, u_vec, f_vec, u_wall_bnd, -1.0), dir_bdr_wall); 
-    
-    
-       getAuxVar(dim, *u_sol, *aux_sol);
-       VectorGridFunctionCoefficient aux_vec(aux_sol);
-    
+       b->AddBdrFaceIntegrator(
+           new DG_CNS_Vis_Isotherm_Integrator(
+               R_gas, gamm, u_vec, vis_vec, aux_grad_vec, u_wall_bnd, mu, Pr, 1.0), dir_bdr_wall);
+
        b_aux_x->AddBdrFaceIntegrator(
               new DG_CNS_Aux_Integrator(
                   x_dir, aux_vec, u_wall_bnd,  1.0), dir_bdr_wall);
        b_aux_x->Assemble();
-    
+      
        b_aux_y->AddBdrFaceIntegrator(
                new DG_CNS_Aux_Integrator(
                    y_dir, aux_vec, u_wall_bnd,  1.0), dir_bdr_wall);
        b_aux_y->Assemble();
-       
+   
        if (dim == 3)
        {
            b_aux_z->AddBdrFaceIntegrator(
@@ -402,14 +417,8 @@ CNS::CNS()
                    z_dir, aux_vec, u_wall_bnd,  1.0), dir_bdr_wall);
            b_aux_z->Assemble();
        }
-
-       b->AddBdrFaceIntegrator(
-           new DG_CNS_Vis_Isotherm_Integrator(
-               R_gas, gamm, u_vec, vis_vec, aux_grad_vec, u_wall_bnd, mu, Pr, 1.0), dir_bdr_wall);
-
-
-       ///////////////////////////////////////////////////
    }
+
 
    b->Assemble();
 
