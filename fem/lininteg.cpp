@@ -1612,12 +1612,19 @@ void DG_CNS_Aux_Integrator::AssembleRHSElementVect(
 
    shape.SetSize(ndof);
 
+   Vector u1_dir(aux_dim), u2_bnd(aux_dim), u2_dir(aux_dim);
+   Vector nor_dim(dim);
+   Vector vel_L(dim);
+   Vector vel_R(dim);
+   Vector dir_(dim);
+   Vector u_common(aux_dim);
+
    const IntegrationRule *ir = IntRule;
    if (ir == NULL)
    {
       int order;
       // Assuming order(u)==order(mesh)
-      order = Trans.Elem1->OrderW() + 2*el.GetOrder();
+      order = 2*el.GetOrder();
       if (el.Space() == FunctionSpace::Pk)
       {
          order++;
@@ -1645,15 +1652,12 @@ void DG_CNS_Aux_Integrator::AssembleRHSElementVect(
          CalcOrtho(Trans.Face->Jacobian(), nor);
       }
 
-      Vector u1_dir(aux_dim), u2_bnd(aux_dim), u2_dir(aux_dim);
       uD.Eval(u1_dir, *Trans.Elem1, eip);
       u_bnd.Eval(u2_bnd, *Trans.Elem1, eip);
 
-      Vector nor_dim(dim);
       double nor_l2 = nor.Norml2();
       nor_dim.Set(1/nor_l2, nor);
 
-      Vector vel_L(dim);
       for (int j = 0; j < dim; j++) 
       {
           vel_L(j) = u1_dir(j);
@@ -1669,13 +1673,10 @@ void DG_CNS_Aux_Integrator::AssembleRHSElementVect(
           u2_dir(j) = vel_R(j);
       }
 
-      Vector dir_(dim);
       dir.Eval(dir_, *Trans.Elem1, eip);
 
       double un = dir_*nor;
       w = ip.weight * alpha * un; 
-
-      Vector u_common(aux_dim);
 
       add(0.5, u1_dir, u2_dir, u_common);
 
@@ -1956,12 +1957,20 @@ void DG_Euler_NoSlip_Isotherm_Integrator::AssembleRHSElementVect(
 
    shape.SetSize(ndof);
 
+   Vector u1_dir(var_dim), u2_dir(var_dim);
+   Vector u2_bnd(aux_dim);
+   Vector vel_L(dim);    
+   Vector vel_R(dim);   
+   Vector f_dir(dim*var_dim);
+   Vector f1_dir(dim*var_dim);
+   Vector face_f(var_dim), face_f1(var_dim); //Face fluxes (dot product with normal)
+
    const IntegrationRule *ir = IntRule;
    if (ir == NULL)
    {
       int order;
          
-      order = Trans.Elem1->OrderW() + 2*el.GetOrder();
+      order = 2*el.GetOrder();
       if (el.Space() == FunctionSpace::Pk)
       {
          order++;
@@ -1980,21 +1989,11 @@ void DG_Euler_NoSlip_Isotherm_Integrator::AssembleRHSElementVect(
 
       el.CalcShape(eip, shape);
 
-      if (dim == 1)
-      {
-         nor(0) = 2*eip.x - 1.0;
-      }
-      else
-      {
-         CalcOrtho(Trans.Face->Jacobian(), nor);
-      }
+      CalcOrtho(Trans.Face->Jacobian(), nor);
 
-      Vector u1_dir(var_dim), u2_dir(var_dim);
-      Vector u2_bnd(aux_dim);
       uD.Eval(u1_dir, *Trans.Elem1, eip);
       u_bnd.Eval(u2_bnd, *Trans.Elem1, eip);
 
-      Vector vel_L(dim);    
       double rho_L = u1_dir(0);
       double v_sq  = 0.0;
       for (int j = 0; j < dim; j++)
@@ -2005,7 +2004,6 @@ void DG_Euler_NoSlip_Isotherm_Integrator::AssembleRHSElementVect(
       double p_L = (gamm - 1)*(u1_dir(var_dim - 1) - 0.5*rho_L*v_sq);
 
       double p_R = p_L; // Extrapolate pressure
-      Vector vel_R(dim);   
       v_sq  = 0.0;
       for (int j = 0; j < dim; j++)
       {
@@ -2023,14 +2021,11 @@ void DG_Euler_NoSlip_Isotherm_Integrator::AssembleRHSElementVect(
       }
       u2_dir(var_dim - 1) = E_R;
 
-      Vector f_dir(dim*var_dim);
       getLFFlux(R, gamm, u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using local Lax Friedrichs
 //      getConvectiveFlux(R, gamm, u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using central convective flux 
 
-      Vector f1_dir(dim*var_dim);
       fD.Eval(f1_dir, *Trans.Elem1, eip); // Get discontinuous flux at face
 
-      Vector face_f(var_dim), face_f1(var_dim); //Face fluxes (dot product with normal)
       face_f = 0.0; face_f1 = 0.0; 
       for (int i = 0; i < dim; i++)
       {
@@ -2659,12 +2654,23 @@ void DG_CNS_Vis_Isotherm_Integrator::AssembleRHSElementVect(
 
    shape.SetSize(ndof);
 
+   Vector nor_dim(dim);
+   Vector u1_dir(var_dim), u2_dir(var_dim);
+   Vector u2_bnd(aux_dim);
+   Vector aux1_dir(dim*aux_dim), aux2_dir(dim*aux_dim);
+   Vector vel_L(dim);    
+   Vector vel_R(dim);   
+   Vector fL_dir(dim*var_dim), fR_dir(dim*var_dim);
+   Vector f_dir(dim*var_dim);
+   Vector f1_dir(dim*var_dim);
+   Vector face_f(var_dim), face_f1(var_dim); //Face fluxes (dot product with normal)
+
    const IntegrationRule *ir = IntRule;
    if (ir == NULL)
    {
       int order;
      
-      order = Tr.Elem1->OrderW() + 2*el.GetOrder();
+      order = 2*el.GetOrder();
       
       if (el.Space() == FunctionSpace::Pk)
       {
@@ -2693,19 +2699,14 @@ void DG_CNS_Vis_Isotherm_Integrator::AssembleRHSElementVect(
          CalcOrtho(Tr.Face->Jacobian(), nor);
       }
 
-      Vector nor_dim(dim);
       double nor_l2 = nor.Norml2();
       nor_dim.Set(1/nor_l2, nor);
 
-      Vector u1_dir(var_dim), u2_dir(var_dim);
-      Vector u2_bnd(aux_dim);
       uD.Eval(u1_dir, *Tr.Elem1, eip);
       u_bnd.Eval(u2_bnd, *Tr.Elem1, eip);
 
-      Vector aux1_dir(dim*aux_dim), aux2_dir(dim*aux_dim);
       auxD.Eval(aux1_dir, *Tr.Elem1, eip);
 
-      Vector vel_L(dim);    
       double rho_L = u1_dir(0);
       double v_sq  = 0.0;
       for (int j = 0; j < dim; j++)
@@ -2716,7 +2717,6 @@ void DG_CNS_Vis_Isotherm_Integrator::AssembleRHSElementVect(
       double p_L = (gamm - 1)*(u1_dir(var_dim - 1) - 0.5*rho_L*v_sq);
 
       double p_R = p_L; // Extrapolate pressure
-      Vector vel_R(dim);   
       v_sq  = 0.0;
       for (int j = 0; j < dim; j++)
       {
@@ -2736,16 +2736,12 @@ void DG_CNS_Vis_Isotherm_Integrator::AssembleRHSElementVect(
 
       aux2_dir = aux1_dir;
 
-      Vector fL_dir(dim*var_dim), fR_dir(dim*var_dim);
-      Vector f_dir(dim*var_dim);
       getViscousCNSFlux(R, gamm, u1_dir, aux1_dir, mu, Pr, fL_dir);
       getViscousCNSFlux(R, gamm, u2_dir, aux2_dir, mu, Pr, fR_dir);
       add(0.5, fL_dir, fR_dir, f_dir);
 
-      Vector f1_dir(dim*var_dim);
       fD.Eval(f1_dir, *Tr.Elem1, eip);        // Get discontinuous flux at face
 
-      Vector face_f(var_dim), face_f1(var_dim); //Face fluxes (dot product with normal)
       face_f = 0.0; face_f1 = 0.0; 
       for (int i = 0; i < dim; i++)
       {
@@ -2834,7 +2830,7 @@ void DG_CNS_WallModel_Integrator::AssembleRHSElementVect(
    double eps = 1E-14;
 
    ElementTransformation *Elem1 = Tr.Elem1; // We need y co-ordinate to calculate y+
-   Vector loc;
+   Vector loc(dim);
 
    for (int p = 0; p < ir->GetNPoints(); p++)
    {
