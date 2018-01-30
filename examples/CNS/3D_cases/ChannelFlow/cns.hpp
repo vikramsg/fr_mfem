@@ -25,12 +25,15 @@ void getMoreFields(const double gamm, const double R_gas,
 
 // Analysis functions
 void ComputeGlobPeriodicMean(MPI_Comm &comm, const vector< vector<int> > &ids, const vector<double> &loc_u_mean, 
+                             const vector<double> &loc_v_mean, const vector<double> &loc_w_mean, 
                             const vector<double> &loc_uu_mean, const vector<double> &loc_vv_mean,
                             const vector<double> &loc_ww_mean, const vector<double> &loc_uv_mean, 
-                            vector<double> &glob_u_mean, vector<double> &glob_uu_mean, vector<double> &glob_vv_mean, 
+                            vector<double> &glob_u_mean, vector<double> &glob_v_mean, vector<double> &glob_w_mean, 
+                            vector<double> &glob_uu_mean, vector<double> &glob_vv_mean, 
                             vector<double> &glob_ww_mean, vector<double> &glob_uv_mean);
 void ComputePeriodicMean(int dim, const GridFunction &uD, const vector< vector<int> > &ids, 
-                         vector<double> &u_mean,  vector<double> &uu_mean, vector<double> &vv_mean, 
+                         vector<double> &u_mean, vector<double> &v_mean, vector<double> &w_mean, 
+                         vector<double> &uu_mean, vector<double> &vv_mean, 
                          vector<double> &ww_mean, vector<double> &uv_mean);
 
 void GetPeriodicIds(const FiniteElementSpace &fes, const vector<double> &y_unique, vector< vector<int> > &ids);
@@ -266,16 +269,18 @@ void getMoreFields(const double gamm, const double R_gas,
 }
 
 void ComputeGlobPeriodicMean(MPI_Comm &comm, const vector< vector<int> > &ids, const vector<double> &loc_u_mean, 
+                             const vector<double> &loc_v_mean, const vector<double> &loc_w_mean, 
                             const vector<double> &loc_uu_mean, const vector<double> &loc_vv_mean,
                             const vector<double> &loc_ww_mean, const vector<double> &loc_uv_mean, 
-                            vector<double> &glob_u_mean, vector<double> &glob_uu_mean, vector<double> &glob_vv_mean, 
+                            vector<double> &glob_u_mean, vector<double> &glob_v_mean, vector<double> &glob_w_mean, 
+                            vector<double> &glob_uu_mean, vector<double> &glob_vv_mean, 
                             vector<double> &glob_ww_mean, vector<double> &glob_uv_mean)
 {
     int rank, size;
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &size);
 
-    vector<double> glob_u;
+    vector<double> glob_u, glob_v, glob_w;
     vector<double> glob_uu, glob_vv, glob_ww, glob_uv;
 
     int vert_nodes = ids.size();
@@ -283,15 +288,19 @@ void ComputeGlobPeriodicMean(MPI_Comm &comm, const vector< vector<int> > &ids, c
     {
         int loc_row_size = ids.at(i).size();            
         double loc_row_u  = loc_u_mean.at(i)*loc_row_size;
+        double loc_row_v  = loc_v_mean.at(i)*loc_row_size;
+        double loc_row_w  = loc_w_mean.at(i)*loc_row_size;
         double loc_row_uu = loc_uu_mean.at(i)*loc_row_size;
         double loc_row_vv = loc_vv_mean.at(i)*loc_row_size;
         double loc_row_ww = loc_ww_mean.at(i)*loc_row_size;
         double loc_row_uv = loc_uv_mean.at(i)*loc_row_size;
 
         int glob_row_size ;            
-        double glob_row_u, glob_row_uu, glob_row_vv, glob_row_ww, glob_row_uv ;
+        double glob_row_u, glob_row_v, glob_row_w, glob_row_uu, glob_row_vv, glob_row_ww, glob_row_uv ;
 
         MPI_Allreduce(&loc_row_u,    &glob_row_u,    1, MPI_DOUBLE, MPI_SUM, comm); // Get global u_max across processors
+        MPI_Allreduce(&loc_row_v,    &glob_row_v,    1, MPI_DOUBLE, MPI_SUM, comm); // Get global u_max across processors
+        MPI_Allreduce(&loc_row_w,    &glob_row_w,    1, MPI_DOUBLE, MPI_SUM, comm); // Get global u_max across processors
         MPI_Allreduce(&loc_row_uu,   &glob_row_uu,   1, MPI_DOUBLE, MPI_SUM, comm); // Get global u_max across processors
         MPI_Allreduce(&loc_row_vv,   &glob_row_vv,   1, MPI_DOUBLE, MPI_SUM, comm); // Get global u_max across processors
         MPI_Allreduce(&loc_row_ww,   &glob_row_ww,   1, MPI_DOUBLE, MPI_SUM, comm); // Get global u_max across processors
@@ -300,6 +309,8 @@ void ComputeGlobPeriodicMean(MPI_Comm &comm, const vector< vector<int> > &ids, c
         MPI_Allreduce(&loc_row_size, &glob_row_size, 1, MPI_INT,    MPI_SUM, comm); // Get global u_max across processors
 
         glob_u.push_back( glob_row_u/double(glob_row_size));
+        glob_v.push_back( glob_row_v/double(glob_row_size));
+        glob_w.push_back( glob_row_w/double(glob_row_size));
         glob_uu.push_back(glob_row_uu/double(glob_row_size));
         glob_vv.push_back(glob_row_vv/double(glob_row_size));
         glob_ww.push_back(glob_row_ww/double(glob_row_size));
@@ -307,6 +318,8 @@ void ComputeGlobPeriodicMean(MPI_Comm &comm, const vector< vector<int> > &ids, c
 
     }
     glob_u_mean  = glob_u;
+    glob_v_mean  = glob_v;
+    glob_w_mean  = glob_w;
     glob_uu_mean = glob_uu;
     glob_vv_mean = glob_vv;
     glob_ww_mean = glob_ww;
@@ -314,10 +327,11 @@ void ComputeGlobPeriodicMean(MPI_Comm &comm, const vector< vector<int> > &ids, c
 }
 
 void ComputePeriodicMean(int dim, const GridFunction &uD, const vector< vector<int> > &ids, 
-                         vector<double> &u_mean,  vector<double> &uu_mean, vector<double> &vv_mean, 
+                         vector<double> &u_mean, vector<double> &v_mean, vector<double> &w_mean, 
+                         vector<double> &uu_mean, vector<double> &vv_mean, 
                          vector<double> &ww_mean, vector<double> &uv_mean)
 {
-   vector<double> u_m;
+   vector<double> u_m, v_m, w_m;
    vector<double> uu_m, vv_m, ww_m, uv_m;
 
    int var_dim = dim + 2;
@@ -328,7 +342,7 @@ void ComputePeriodicMean(int dim, const GridFunction &uD, const vector< vector<i
    {
        vector<int> row_ids = ids.at(i);          
        int row_nodes = row_ids.size();
-       double u = 0.0;
+       double u = 0.0, v = 0.0, w = 0.0;
        double uu = 0.0, vv = 0.0, ww = 0.0, uv = 0;
        for(int j = 0; j < row_nodes; j++)
        {
@@ -338,6 +352,8 @@ void ComputePeriodicMean(int dim, const GridFunction &uD, const vector< vector<i
            double irho =  1/rho;
 
            u          += irho*uD[1*offset + sub];
+           v          += irho*uD[2*offset + sub];
+           w          += irho*uD[3*offset + sub];
            uu         += irho*uD[1*offset + sub]*irho*uD[1*offset + sub];
            vv         += irho*uD[2*offset + sub]*irho*uD[2*offset + sub];
            ww         += irho*uD[3*offset + sub]*irho*uD[3*offset + sub];
@@ -347,6 +363,8 @@ void ComputePeriodicMean(int dim, const GridFunction &uD, const vector< vector<i
        if (row_nodes > 0)
        {
            u   =  u/double(row_nodes);
+           v   =  v/double(row_nodes);
+           w   =  w/double(row_nodes);
            uu  = uu/double(row_nodes);
            vv  = vv/double(row_nodes);
            ww  = ww/double(row_nodes);
@@ -355,6 +373,8 @@ void ComputePeriodicMean(int dim, const GridFunction &uD, const vector< vector<i
        else
        {
            u  = 0;
+           v  = 0;
+           w  = 0;
            uu = 0;
            vv = 0;
            ww = 0;
@@ -362,6 +382,8 @@ void ComputePeriodicMean(int dim, const GridFunction &uD, const vector< vector<i
        }
 
        u_m.push_back(u);
+       v_m.push_back(v);
+       w_m.push_back(w);
        uu_m.push_back(uu);
        vv_m.push_back(vv);
        ww_m.push_back(ww);
@@ -369,6 +391,8 @@ void ComputePeriodicMean(int dim, const GridFunction &uD, const vector< vector<i
    }
 
    u_mean  = u_m;
+   v_mean  = v_m;
+   w_mean  = w_m;
    uu_mean = uu_m;
    vv_mean = vv_m;
    ww_mean = ww_m;
@@ -557,7 +581,8 @@ void GetUniqueY(const FiniteElementSpace &fes, VarFiniteElementCollection &vfec,
 
 
 
-void writeUMean(int ti, vector<double> y_uni, const vector<double> inst_u_mean, const vector<double> u_mean, 
+void writeUMean(int ti, vector<double> y_uni, const vector<double> inst_u_mean, 
+                const vector<double> u_mean, const vector<double> v_mean, const vector<double> w_mean, 
                 const vector<double> uu_mean, const vector<double> vv_mean,
                 const vector<double> ww_mean, const vector<double> uv_mean)
 {
@@ -572,7 +597,8 @@ void writeUMean(int ti, vector<double> y_uni, const vector<double> inst_u_mean, 
     int vert_nodes = y_uni.size();
     for(int i = 0; i < vert_nodes; i++)
     {
-        f_file << setprecision(7) << y_uni.at(i) << "\t" << inst_u_mean.at(i) << "\t" << u_mean.at(i) 
+        f_file << setprecision(6) << y_uni.at(i) << "\t" << inst_u_mean.at(i) << "\t" << u_mean.at(i) 
+                << "\t" << v_mean.at(i) << "\t" << w_mean.at(i) 
                 << "\t" << uu_mean.at(i) << "\t" << vv_mean.at(i) << "\t" << ww_mean.at(i) << "\t" 
                 << uv_mean.at(i) << endl;    
     }

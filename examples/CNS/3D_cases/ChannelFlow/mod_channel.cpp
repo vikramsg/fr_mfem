@@ -14,8 +14,8 @@ const double R_gas = 287;
 const double   Pr  = 0.71;
 
 //Run parameters
-const char *mesh_file        =  "channel_tiny.mesh";
-const int    order           =  1;
+const char *mesh_file        =  "channel_test.mesh";
+const int    order           =  3;
 const double t_final         =   0.500  ;
 const int    problem         =  0;
 const int    ref_levels      =  0;
@@ -60,19 +60,10 @@ void getAuxGrad(int dim, const HypreParMatrix &K_x, const HypreParMatrix &K_y, c
         Vector &aux_grad);
 void getAuxVar(int dim, const Vector &u, Vector &aux_sol);
 
-void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, Vector &u1, Vector &u2, 
-                Vector &E, Vector &u_x, Vector &u_y, Vector &v_x, Vector &v_y);
-void getMoreFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, Vector &M,
-                Vector &p, Vector &T, Vector &E, Vector &u, Vector &v, Vector &w,
-                Vector &vort, Vector &q);
+void ComputeWallForces(FiniteElementSpace &fes, VectorGridFunctionCoefficient &uD, 
+                       VectorGridFunctionCoefficient &f_vis_D, 
+                       const Array<int> &bdr, const double gamm, Vector &force);
 
-void postProcess(Mesh &mesh, GridFunction &u_sol, GridFunction &aux_grad,
-        int cycle, double time);
-
-void getEleOrder(FiniteElementSpace &fes, Array<int> &newEleOrder, GridFunction &order);
-
-
-void GetWallIds(const FiniteElementSpace &fes, const GridFunction &f_inv);
 
 /** A time-dependent operator for the right-hand side of the ODE. The DG weak
     form is M du/dt = K u + b, where M and K are the mass
@@ -202,7 +193,6 @@ CNS::CNS()
 
    fes = new ParFiniteElementSpace(pmesh, &fec, var_dim);
 
-   
    ///////////////////////////////////////////////////////
    //Get periodic ids for turbulent channel flow
    vector< vector<int> > ids;
@@ -299,10 +289,9 @@ CNS::CNS()
    b->AddFaceIntegrator(
       new DGEulerIntegrator(R_gas, gamm, u_vec, f_vec, var_dim, -1.0));
    b->AddBdrFaceIntegrator(
-      new DG_Euler_Slip_Isotherm_Integrator(
+          new DG_Euler_Slip_Isotherm_Integrator(
+//          new DG_Euler_NoSlip_Isotherm_Integrator(
           R_gas, gamm, u_vec, f_vec, u_wall_bnd, -1.0), dir_bdr_wall); 
-//      new DG_Euler_NoSlip_Integrator(
-//          R_gas, gamm, u_vec, f_vec, u_adi_wall_bnd, -1.0), dir_bdr_wall); 
 
    b->Assemble();
 
@@ -411,8 +400,6 @@ CNS::CNS()
 //           new DG_CNS_Vis_Isotherm_Integrator(
            new DG_CNS_WallModel_Integrator(
                R_gas, gamm, u_vec, vis_vec, aux_grad_vec, u_wall_bnd, mu, Pr, 1.0), dir_bdr_wall);
-//           new DG_CNS_Vis_Adiabatic_Integrator(
-//               R_gas, gamm, u_vec, vis_vec, aux_grad_vec, u_adi_wall_bnd, mu, Pr, 1.0), dir_bdr_wall);
 
    b->Assemble();
 
@@ -428,13 +415,9 @@ CNS::CNS()
    }
 
    {// Post process initially
-       getAuxGrad(dim, *K_vis_x, *K_vis_y, *K_vis_z, 
-          adv->GetMSolver(), *u_b,
-          *b_aux_x, *b_aux_y, *b_aux_z, 
-          *aux_grad);
-
        ti = ti_in; t = t_in;
-       postProcess(*pmesh, *u_sol, *aux_grad, ti, t);
+       postProcess(*pmesh, order, gamm, R_gas, 
+                   *u_sol, *aux_grad, ti, t);
    }
 
 
@@ -467,7 +450,9 @@ CNS::CNS()
    force_file.open ("forces.dat");
    force_file << "Iteration \t dt \t time \t F_x \t F_y \n";
 
-   vector<double> loc_u_mean, glob_u_mean, temp_u_mean;
+   vector<double> loc_u_mean, loc_v_mean, loc_w_mean;
+   vector<double> temp_u_mean, temp_v_mean, temp_w_mean ;
+   vector<double> glob_u_mean, glob_v_mean, glob_w_mean ;
    vector<double> loc_uu_mean, glob_uu_mean, loc_vv_mean, glob_vv_mean;
    vector<double> loc_ww_mean, glob_ww_mean, loc_uv_mean, glob_uv_mean;
    vector<double> temp_uu_mean, temp_vv_mean, temp_ww_mean, temp_uv_mean;
@@ -495,7 +480,9 @@ CNS::CNS()
           *b_aux_x, *b_aux_y, *b_aux_z, 
           *aux_grad);
 
-          postProcess(*pmesh, *u_sol, *aux_grad, ti, t);
+          postProcess(*pmesh, order, gamm, R_gas, 
+                   *u_sol, *aux_grad, ti, t);
+
       }
       
       if (done || ti % restart_freq == 0) // Write restart file 
@@ -522,11 +509,12 @@ CNS::CNS()
           glob_ub = glob_ub/glob_vol;
           glob_vb = glob_vb/glob_vol;
           glob_wb = glob_wb/glob_vol;
-          flo_file << setprecision(12) << ti << "\t" << t << "\t" << glob_tk << "\t" 
-              << glob_ub << "\t" << glob_vb << "\t" << glob_wb<< endl;
+          flo_file << setprecision(8) << ti << "\t" << t << "\t" << glob_tk << "\t" 
+              << glob_ub << "\t" << glob_vol_fx << "\t" << glob_vb << "\t" << glob_wb<< endl;
       }
 
-      ComputeWallForces(*fes, *u_sol, *f_vis, dir_bdr_wall, gamm, forces);
+      ComputeWallForces(*fes, u_vec, vis_vec, dir_bdr_wall, gamm, forces);
+//      ComputeWallForces(*fes, *u_sol, *f_vis, dir_bdr_wall, gamm, forces);
       double fx = forces(0), fy = forces(1);
       double glob_fx, glob_fy;
       MPI_Allreduce(&fx, &glob_fx, 1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
@@ -537,12 +525,12 @@ CNS::CNS()
           force_file << ti << "\t" <<  dt_real << "\t" << t << "\t" << glob_fx << "\t" << glob_fy <<  endl;
       }
       
-      ComputePeriodicMean(dim, *u_sol, ids, loc_u_mean, loc_uu_mean, loc_vv_mean, 
-                         loc_ww_mean, loc_uv_mean);
-      ComputeGlobPeriodicMean(comm, ids, loc_u_mean, loc_uu_mean, loc_vv_mean,
-                              loc_ww_mean, loc_uv_mean, 
-                              glob_u_mean, glob_uu_mean, glob_vv_mean, 
-                              glob_ww_mean, glob_uv_mean);
+      ComputePeriodicMean(dim, *u_sol, ids, loc_u_mean, loc_v_mean, loc_w_mean, 
+                          loc_uu_mean, loc_vv_mean, loc_ww_mean, loc_uv_mean);
+      ComputeGlobPeriodicMean(comm, ids, loc_u_mean, loc_v_mean, loc_w_mean, 
+                              loc_uu_mean, loc_vv_mean, loc_ww_mean, loc_uv_mean, 
+                              glob_u_mean, glob_v_mean, glob_w_mean, 
+                              glob_uu_mean, glob_vv_mean, glob_ww_mean, glob_uv_mean);
 
       int c_ti = 1;
       if (restart == true)
@@ -550,6 +538,8 @@ CNS::CNS()
       if (ti == c_ti)
       {
           temp_u_mean  = glob_u_mean;
+          temp_v_mean  = glob_v_mean;
+          temp_w_mean  = glob_w_mean;
           temp_uu_mean = glob_uu_mean;
           temp_vv_mean = glob_vv_mean;
           temp_ww_mean = glob_ww_mean;
@@ -561,6 +551,8 @@ CNS::CNS()
           for(int i = 0; i < vert_nodes; i++)
           {
               temp_u_mean.at(i)  = temp_u_mean.at(i)*(ti - c_ti)  + glob_u_mean.at(i);          
+              temp_v_mean.at(i)  = temp_v_mean.at(i)*(ti - c_ti)  + glob_v_mean.at(i);          
+              temp_w_mean.at(i)  = temp_w_mean.at(i)*(ti - c_ti)  + glob_w_mean.at(i);          
               temp_uu_mean.at(i) = temp_uu_mean.at(i)*(ti - c_ti) + glob_uu_mean.at(i);          
               temp_vv_mean.at(i) = temp_vv_mean.at(i)*(ti - c_ti) + glob_vv_mean.at(i);          
               temp_ww_mean.at(i) = temp_ww_mean.at(i)*(ti - c_ti) + glob_ww_mean.at(i);          
@@ -575,9 +567,8 @@ CNS::CNS()
           if (ti % vis_steps == 0) // Write mean u
           {
               if (myid == 0)
-                  writeUMean(ti, y_uni, glob_u_mean, temp_u_mean, temp_uu_mean,
-                            temp_vv_mean, temp_ww_mean, temp_uv_mean);
-
+                  writeUMean(ti, y_uni, glob_u_mean, temp_u_mean, temp_v_mean, temp_w_mean, 
+                            temp_uu_mean, temp_vv_mean, temp_ww_mean, temp_uv_mean);
           }
       }
   
@@ -1316,239 +1307,6 @@ void wall_adi_bnd_cnd(const Vector &x, Vector &v)
 }
 
 
-
-void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, Vector &M,
-                Vector &p, Vector &vort, Vector &q)
-{
-
-    int vDim    = u_sol.VectorDim();
-    int dofs    = u_sol.Size()/vDim;
-    int dim     = vDim - 2;
-
-    int aux_dim = vDim - 1;
-
-    double u_grad[dim][dim], omega_sq, s_sq;
-
-    for (int i = 0; i < dofs; i++)
-    {
-        rho[i]   = u_sol[         i];        
-        double vel[dim]; 
-        for (int j = 0; j < dim; j++)
-        {
-            vel[j] =  u_sol[(1 + j)*dofs + i]/rho[i];        
-        }
-        double E  = u_sol[(vDim - 1)*dofs + i];        
-
-        double v_sq = 0.0;    
-        for (int j = 0; j < dim; j++)
-        {
-            v_sq += pow(vel[j], 2); 
-        }
-
-        p[i]     = (E - 0.5*rho[i]*v_sq)*(gamm - 1);
-
-        M[i]     = sqrt(v_sq)/sqrt(gamm*p[i]/rho[i]);
-        
-        for (int j = 0; j < dim; j++)
-        {
-            for (int k = 0; k < dim; k++)
-            {
-                u_grad[j][k] = aux_grad[(k*aux_dim + j  )*dofs + i];
-            }
-        }
-    
-        if (dim == 2)
-        {
-           vort[i] = u_grad[1][0] - u_grad[0][1];     
-        }
-        else if (dim == 3)
-        {
-            double w_x  = u_grad[2][1] - u_grad[1][2];
-            double w_y  = u_grad[0][2] - u_grad[2][0];
-            double w_z  = u_grad[1][0] - u_grad[0][1];
-            double w_sq = pow(w_x, 2) + pow(w_y, 2) + pow(w_z, 2); 
-
-            vort[i]   = sqrt(w_sq);
-        }
-        if (dim == 2)
-        {
-            double s_z      = u_grad[1][0] + u_grad[0][1];     
-                   s_sq     = pow(s_z, 2); 
-                   omega_sq = s_sq; // q criterion makes sense in 3D only
-        }
-        else if (dim == 3)
-        {
-            double omega_x  = 0.5*(u_grad[2][1] - u_grad[1][2]);
-            double omega_y  = 0.5*(u_grad[0][2] - u_grad[2][0]);
-            double omega_z  = 0.5*(u_grad[1][0] - u_grad[0][1]);
-                   omega_sq = 2*(pow(omega_x, 2) + pow(omega_y, 2) + pow(omega_z, 2)); 
-
-            double s_23  = 0.5*(u_grad[2][1] + u_grad[1][2]);
-            double s_13  = 0.5*(u_grad[0][2] + u_grad[2][0]);
-            double s_12  = 0.5*(u_grad[1][0] + u_grad[0][1]);
-
-            double s_11  = u_grad[0][0]; 
-            double s_22  = u_grad[1][1]; 
-            double s_33  = u_grad[2][2]; 
-
-                   s_sq = 2*(pow(s_12, 2) + pow(s_13, 2) + pow(s_23, 2)) + s_11*s_11 + s_22*s_22 + s_33*s_33; 
-        }
-            
-        q[i]      = 0.5*(omega_sq - s_sq);
-    }
-}
-
-
-void getMoreFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, Vector &M,
-                Vector &p, Vector &T, Vector &E, Vector &u, Vector &v, Vector &w,
-                Vector &vort, Vector &q)
-{
-
-    int vDim    = u_sol.VectorDim();
-    int dofs    = u_sol.Size()/vDim;
-    int dim     = vDim - 2;
-
-    int aux_dim = vDim - 1;
-
-    double u_grad[dim][dim], omega_sq, s_sq;
-
-    for (int i = 0; i < dofs; i++)
-    {
-        rho[i]   = u_sol[         i];        
-        double vel[dim]; 
-        for (int j = 0; j < dim; j++)
-        {
-            vel[j] =  u_sol[(1 + j)*dofs + i]/rho[i];        
-        }
-        u[i] = vel[0];
-        v[i] = vel[1];
-        if (dim == 3)
-            w[i] = vel[2];
-
-        E[i]  = u_sol[(vDim - 1)*dofs + i];        
-
-        double v_sq = 0.0;    
-        for (int j = 0; j < dim; j++)
-        {
-            v_sq += pow(vel[j], 2); 
-        }
-
-        p[i]     = (E[i] - 0.5*rho[i]*v_sq)*(gamm - 1);
-        T[i]     =  p[i]/(R_gas*rho[i]);
-
-        M[i]     = sqrt(v_sq)/sqrt(gamm*p[i]/rho[i]);
-        
-        for (int j = 0; j < dim; j++)
-        {
-            for (int k = 0; k < dim; k++)
-            {
-                u_grad[j][k] = aux_grad[(k*aux_dim + j  )*dofs + i];
-            }
-        }
-        
-        if (dim == 2)
-        {
-           vort[i] = u_grad[1][0] - u_grad[0][1];     
-        }
-        else if (dim == 3)
-        {
-            double w_x  = u_grad[2][1] - u_grad[1][2];
-            double w_y  = u_grad[0][2] - u_grad[2][0];
-            double w_z  = u_grad[1][0] - u_grad[0][1];
-            double w_sq = pow(w_x, 2) + pow(w_y, 2) + pow(w_z, 2); 
-
-            vort[i]   = sqrt(w_sq);
-        }
-        if (dim == 2)
-        {
-            double s_z      = u_grad[1][0] + u_grad[0][1];     
-                   s_sq     = pow(s_z, 2); 
-                   omega_sq = s_sq; // q criterion makes sense in 3D only
-        }
-        else if (dim == 3)
-        {
-            double omega_x  = 0.5*(u_grad[2][1] - u_grad[1][2]);
-            double omega_y  = 0.5*(u_grad[0][2] - u_grad[2][0]);
-            double omega_z  = 0.5*(u_grad[1][0] - u_grad[0][1]);
-                   omega_sq = 2*(pow(omega_x, 2) + pow(omega_y, 2) + pow(omega_z, 2)); 
-
-            double s_23  = 0.5*(u_grad[2][1] + u_grad[1][2]);
-            double s_13  = 0.5*(u_grad[0][2] + u_grad[2][0]);
-            double s_12  = 0.5*(u_grad[1][0] + u_grad[0][1]);
-
-            double s_11  = u_grad[0][0]; 
-            double s_22  = u_grad[1][1]; 
-            double s_33  = u_grad[2][2]; 
-
-                   s_sq = 2*(pow(s_12, 2) + pow(s_13, 2) + pow(s_23, 2)) + s_11*s_11 + s_22*s_22 + s_33*s_33; 
-        }
-            
-        q[i]      = 0.5*(omega_sq - s_sq);
-
-    }
-}
-
-
-
-
-void postProcess(Mesh &mesh, GridFunction &u_sol, GridFunction &aux_grad,
-                int cycle, double time)
-{
-   int dim     = mesh.Dimension();
-   int var_dim = dim + 2;
-
-   DG_FECollection fec(order , dim);
-   FiniteElementSpace fes_post(&mesh, &fec, var_dim);
-   FiniteElementSpace fes_post_grad(&mesh, &fec, (dim+1)*dim);
-
-   GridFunction u_post(&fes_post);
-   u_post.GetValuesFrom(u_sol); // Create a temp variable to get the previous space solution
- 
-   GridFunction aux_grad_post(&fes_post_grad);
-   aux_grad_post.GetValuesFrom(aux_grad); // Create a temp variable to get the previous space solution
-
-   fes_post.Update();
-   u_post.Update();
-   aux_grad_post.Update();
-
-   VisItDataCollection dc("CNS", &mesh);
-   dc.SetPrecision(8);
- 
-   FiniteElementSpace fes_fields(&mesh, &fec);
-   GridFunction rho(&fes_fields);
-   GridFunction M(&fes_fields);
-   GridFunction p(&fes_fields);
-   GridFunction T(&fes_fields);
-   GridFunction E(&fes_fields);
-   GridFunction u(&fes_fields);
-   GridFunction v(&fes_fields);
-   GridFunction w(&fes_fields);
-   GridFunction q(&fes_fields);
-   GridFunction vort(&fes_fields);
-
-   dc.RegisterField("rho", &rho);
-   dc.RegisterField("M", &M);
-   dc.RegisterField("p", &p);
-   dc.RegisterField("T", &T);
-   dc.RegisterField("E", &E);
-   dc.RegisterField("u", &u);
-   dc.RegisterField("v", &v);
-   dc.RegisterField("w", &w);
-   dc.RegisterField("q", &q);
-   dc.RegisterField("vort", &vort);
-
-//   getFields(u_post, aux_grad_post, rho, M, p, vort, q);
-   getMoreFields(u_post, aux_grad_post, rho, M, p, T, E, u, v, w, vort, q);
-
-   dc.SetCycle(cycle);
-   dc.SetTime(time);
-   dc.Save();
-  
-}
-
-
-
-
 void FE_Evolution::GetMomentum(const ParGridFunction &x, double &Fx) 
 {
     int dim = x.Size()/K_inv_x.GetNumRows() - 2;
@@ -1688,44 +1446,176 @@ void FE_Evolution::GetMomentum(const ParGridFunction &x, double &Fx)
 
 }
 
-
-
-/*
- */
-void GetWallIds(const FiniteElementSpace &fes, const GridFunction &f_vis)
+// Compute force for Wall model
+void ComputeWallForces(FiniteElementSpace &fes, VectorGridFunctionCoefficient &uD, 
+                       VectorGridFunctionCoefficient &f_vis_D, 
+                       const Array<int> &bdr, const double gamm, Vector &force)
 {
-   double eps = 1E-11;
+   force = 0.0; 
+
+   const FiniteElement *el;
+   FaceElementTransformations *T;
 
    Mesh *mesh = fes.GetMesh();
-   int   dim  = mesh->Dimension();
-   int meshNE = mesh->GetNE();
 
-   FiniteElementSpace fes_nodes(mesh, fes.FEColl(), dim);
-   GridFunction nodes(&fes_nodes);
-   mesh->GetNodes(nodes);
+   int dim, var_dim;
+   Vector nor;
 
-   int nodeSize        = nodes.Size()/dim ;
-
-   Array<int> vdofs;
-
-   FaceElementTransformations *T_temp;
-   int nbfaces_temp = mesh->GetNBE();
-   for (int i = 0; i < nbfaces_temp; i++)
-   {
-       T_temp = mesh->GetBdrFaceTransformations(i);
-
-       int elNo = T_temp->Elem1No ;
-
-       fes_nodes . GetElementVDofs (i, vdofs);
-
-       int ndof = vdofs.Size()/dim;
+   Vector vals,   vis_vals;
+   Vector u_wall, vis_wall;
+          
+   Vector nor_dim;
    
-       for (int j = 0; j < ndof; j++)
+   Vector loc;
+          
+   Vector vel;    
+
+   Poly_1D poly;
+   double eps = 1E-14;
+
+   for (int i = 0; i < fes.GetNBE(); i++)
+   {
+       const int bdr_attr = mesh->GetBdrAttribute(i);
+
+       if (bdr[bdr_attr-1] == 0) { continue; } // Skip over non-active boundaries
+
+       T = mesh->GetBdrFaceTransformations(i);
+ 
+       el = fes.GetFE(T -> Elem1No);
+   
+       dim     = el->GetDim();
+       var_dim = dim + 2;
+      
+       const IntegrationRule *ir ;
+       int order;
+       
+       order = T->Elem1->OrderW() + 2*el->GetOrder();
+       
+       if (el->Space() == FunctionSpace::Pk)
        {
-//           cout << i << "\t" << nodes[vdofs[j]] << "\t" << nodes[vdofs[ndof + j]]<< endl;
-           cout << i << "\t" << f_vis[vdofs[j]] << "\t" << f_vis[vdofs[ndof + j]]<< endl;
+          order++;
        }
+       ir = &IntRules.Get(T->FaceGeom, order);
 
-   }
+       int elOrder = el->GetOrder();
+       const double *pts = poly.GetPoints(elOrder, 0);
 
+       for (int p = 0; p < ir->GetNPoints(); p++)
+       {
+          const IntegrationPoint &ip = ir->IntPoint(p);
+          IntegrationPoint eip, eip2;
+          T->Loc1.Transform(ip, eip);
+    
+          T->Face->SetIntPoint(&ip);
+          T->Elem1->SetIntPoint(&eip);
+
+          nor.SetSize(dim);          
+          if (dim == 1)
+          {
+             nor(0) = 2*eip.x - 1.0;
+          }
+          else
+          {
+             CalcOrtho(T->Face->Jacobian(), nor);
+          }
+ 
+          nor_dim.SetSize(dim);
+          double nor_l2 = nor.Norml2();
+          nor_dim.Set(1/nor_l2, nor);
+
+          double y_wm;
+
+          eip2 = eip;
+          loc.SetSize(dim);
+
+          // Convert point to the top most point in the element
+          if (abs(eip2.y - 1.0) < eps)
+          {
+              eip2.y = pts[0];
+              T->Elem1->Transform(eip2, loc);
+              y_wm   = 2 - loc[1]; // FIXME doing purely for Channel Flow
+          }
+          else if (abs(eip2.y - 0.0) < eps)
+          {
+              eip2.y = pts[elOrder];
+              T->Elem1->Transform(eip2, loc);
+              y_wm   = loc[1];
+          }
+
+          vals.SetSize(var_dim);
+          uD.Eval(vals, *T->Elem1, eip);
+
+          u_wall.SetSize(var_dim);
+          uD.Eval(u_wall, *T->Elem1, eip2);
+
+          double rho_wm  = u_wall[0];
+          double u_wm    = u_wall[1]/rho_wm;
+
+          double rho_0   = vals[0];
+    
+          vis_vals.SetSize(var_dim*dim);
+          f_vis_D.Eval(vis_vals, *T->Elem1, eip);
+
+          double tau_wall_0 = abs(vis_vals[0*(var_dim) + 1 + 1]); // 0th order approximation to tau_wall
+
+          double u_tau_0, yplus_0, uplus, utau_wm, tau_wm;
+          if (tau_wall_0 > 100*eps)
+          {
+              u_tau_0      = sqrt(tau_wall_0/rho_0);
+              yplus_0      = u_tau_0*y_wm/(mu/rho_0); 
+        
+              double kappa = 0.38, C = 4.1;
+        
+              for(int it = 0; it <10; it++) // Perform a few iterations to get to tau_wm
+              {
+                  uplus      = (1/kappa)*log(1 + kappa*yplus_0) + 
+                                (C - (1/kappa)*log(kappa))*(1 - exp(-yplus_0/11.0) - (yplus_0/11.0)*exp(-yplus_0/3.0));
+        
+                  utau_wm    = u_wm/uplus;
+                  tau_wm     = pow(utau_wm, 2)*rho_0;
+              
+                  u_tau_0    = sqrt(tau_wm/rho_0);
+                  yplus_0    = u_tau_0*y_wm/(mu/rho_0); 
+              }
+          }
+          else
+              tau_wm = abs(tau_wall_0); // We don't touch it until its atleast a little bigger than 0
+    
+          tau_wm = -1*tau_wm*nor[1]/std::abs(nor[1]); // It needs to point away from the wall
+
+          vel.SetSize(dim);    
+          double rho = vals(0);
+          double v_sq  = 0.0;
+          for (int j = 0; j < dim; j++)
+          {
+              vel(j) = vals(1 + j)/rho;      
+              v_sq    += pow(vel(j), 2);
+          }
+          double pres = (gamm - 1)*(vals(dim + 1) - 0.5*rho*v_sq);
+
+          // nor is measure(face) so area is included
+          // The normal is always going into the boundary element
+          // F = -p n_j with n_j going out
+          force(0) += pres*nor(0)*ip.weight; // Quadrature of pressure 
+          force(1) += pres*nor(1)*ip.weight; // Quadrature of pressure 
+
+          vis_vals.SetSize(var_dim*dim);
+          f_vis_D.Eval(vis_vals, *T->Elem1, eip);
+        
+          double tau[dim][dim];
+          for(int i = 0; i < dim ; i++)
+              for(int j = 0; j < dim ; j++) tau[i][j] = 0.0;
+
+          tau[0][1] = tau_wm;
+          tau[1][0] = tau_wm;
+
+          // The normal is always going into the boundary element
+          // F = sigma_{ij}n_j with n_j going out
+          for(int i = 0; i < dim ; i++)
+          {
+              force(0) -= tau[0][i]*nor(i)*ip.weight; // Quadrature of shear stress 
+              force(1) -= tau[1][i]*nor(i)*ip.weight; // Quadrature of shear stress 
+          }
+       } // p loop
+   } // NBE loop
 }
