@@ -2903,7 +2903,7 @@ void DG_CNS_WallModel_Integrator::AssembleRHSElementVect(
       else
           tau_wm = abs(tau_wall_0); // We don't touch it until its atleast a little bigger than 0
 
-      tau_wm = -1*tau_wm*nor[1]/abs(nor[1]); // It needs to point away from the wall
+      tau_wm = -1*tau_wm*nor[1]/std::abs(nor[1]); // It needs to point away from the wall
 
 //      std::cout << y_wm << "\t" << aux1_dir[aux_dim] << "\t" << tau_wm/mu << std::endl;
 //      std::cout << y_wm << "\t" << rho_wm << "\t" << u_wm << "\t" << rho_0 << std::endl;
@@ -2943,7 +2943,7 @@ void DG_CNS_WallModel_Integrator::AssembleRHSElementVect(
       {
           aux2_dir(j*aux_dim + aux_dim - 1) = aux1_dir(j*aux_dim + aux_dim - 1); // Restore temperature gradients
       }
-      aux2_dir(aux_dim) = 2*tau_wm/mu; // Now f_vis will have f(1) = tau_wm
+      aux2_dir(aux_dim) += 2*tau_wm/mu; // Now f_vis will have f(1) = tau_wm
 
       getViscousCNSFlux(R, gamm, u1_dir, aux1_dir, mu, Pr, fL_dir);
       getViscousCNSFlux(R, gamm, u2_dir, aux2_dir, mu, Pr, fR_dir);
