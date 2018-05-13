@@ -1049,8 +1049,7 @@ void DGEulerIntegrator::AssembleRHSElementVect(
       int order;
       // Assuming order(u)==order(mesh)
       if (Trans.Elem2No >= 0)
-         order = (std::min(Trans.Elem1->OrderW(), Trans.Elem2->OrderW()) +
-                  2*std::max(el1.GetOrder(), el2.GetOrder()));
+         order = 2*std::max(el1.GetOrder(), el2.GetOrder());
       else
       {
          order = Trans.Elem1->OrderW() + 2*el1.GetOrder();
@@ -1110,6 +1109,11 @@ void DGEulerIntegrator::AssembleRHSElementVect(
       w = ip.weight * alpha; 
 
       subtract(face_f, face_f1, face_f1); //f_comm - f1
+      subtract(face_f, face_f2, face_f2); //fcomm - f2
+
+//      if (Trans.Elem1No == 36)
+//          std::cout << Trans.Elem1No << "\t" << face_f2(0) << std::endl;
+
       for (int j = 0; j < vDim; j++)
       {
           for (int i = 0; i < ndof1; i++)
@@ -1118,7 +1122,6 @@ void DGEulerIntegrator::AssembleRHSElementVect(
           }
       }
 
-      subtract(face_f, face_f2, face_f2); //fcomm - f2
       for (int j = 0; j < vDim; j++)
       {
           for (int i = 0; i < ndof2; i++)
@@ -1673,6 +1676,8 @@ void DG_CNS_Aux_Integrator::AssembleRHSElementVect(
           u2_dir(j) = vel_R(j);
       }
 
+      u2_dir(aux_dim - 1) = 2*u2_bnd(aux_dim - 1) - u1_dir(aux_dim - 1);
+
       dir.Eval(dir_, *Trans.Elem1, eip);
 
       double un = dir_*nor;
@@ -2002,17 +2007,16 @@ void DG_Euler_NoSlip_Isotherm_Integrator::AssembleRHSElementVect(
           v_sq    += pow(vel_L(j), 2);
       }
       double p_L = (gamm - 1)*(u1_dir(var_dim - 1) - 0.5*rho_L*v_sq);
+      double E_L = u1_dir(var_dim - 1);
 
-      double p_R = p_L; // Extrapolate pressure
+      double rho_R = rho_L; // Extrapolate pressure
       v_sq  = 0.0;
       for (int j = 0; j < dim; j++)
       {
           vel_R(j) = 2*u2_bnd(j) - vel_L(j);      
           v_sq    += pow(vel_R(j), 2);
       }
-      double T_R   = u2_bnd(aux_dim - 1);
-      double rho_R = p_R/(R*T_R);
-      double E_R   = p_R/(gamm - 1) + 0.5*rho_R*v_sq;
+      double E_R   = E_L; 
 
       u2_dir(0) = rho_R;
       for (int j = 0; j < dim; j++)
@@ -2715,16 +2719,17 @@ void DG_CNS_Vis_Isotherm_Integrator::AssembleRHSElementVect(
           v_sq    += pow(vel_L(j), 2);
       }
       double p_L = (gamm - 1)*(u1_dir(var_dim - 1) - 0.5*rho_L*v_sq);
+      double T_L = p_L/(rho_L*R);
 
-      double p_R = p_L; // Extrapolate pressure
+      double rho_R = rho_L; // Extrapolate pressure
       v_sq  = 0.0;
       for (int j = 0; j < dim; j++)
       {
           vel_R(j) = 2*u2_bnd(j) - vel_L(j);      
           v_sq    += pow(vel_R(j), 2);
       }
-      double T_R   = u2_bnd(aux_dim - 1);
-      double rho_R = p_R/(R*T_R);
+      double T_R   = 2*u2_bnd(aux_dim - 1) - T_L;
+      double p_R   = rho_R*R*T_R;
       double E_R   = p_R/(gamm - 1) + 0.5*rho_R*v_sq;
 
       u2_dir(0) = rho_R;
