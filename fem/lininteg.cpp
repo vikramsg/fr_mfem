@@ -931,6 +931,183 @@ void EulerIntegrator::getHLLFlux(const double R, const double gamm, const Vector
 
 }
 
+/*
+ * Get Interaction flux using the local Roe solver 
+ * solver, u1 is the left value and u2 the right value
+ * Copied from Dr. Katate Masatsuka (info[at]cfdbooks.com),
+ */
+void EulerIntegrator::getRoeFlux(const double R, const double gamm, const Vector &u1, const Vector &u2, 
+                                const Vector &nor, Vector &f)
+{
+    int var_dim = u1.Size();
+    int dim     = var_dim - 2;
+
+    double Cv   = R/(gamm - 1);
+
+    double rho_L = u1(0);
+    
+    Vector vel_L(dim);
+    for (int i = 0; i < dim; i++)
+    {
+        vel_L(i) = u1(1 + i)/rho_L;    
+    }
+    double E_L   = u1(var_dim - 1);
+
+    double vel_sq_L = 0.0;
+    for (int i = 0; i < dim; i++)
+    {
+        vel_sq_L += pow(vel_L(i), 2) ;
+    }
+    double T_L       = (E_L - 0.5*rho_L*vel_sq_L)/(rho_L*Cv);
+    double p_L       = rho_L*R*T_L;
+    double h_L       = (E_L + p_L)/rho_L;
+    double sqrtRho_L = std::sqrt(rho_L);
+
+    double a_L   = sqrt(gamm * R * T_L);
+
+    double rho_R = u2(0);
+    Vector vel_R(dim);
+    for (int i = 0; i < dim; i++)
+    {
+        vel_R(i) = u2(1 + i)/rho_R;    
+    }
+    double E_R   = u2(var_dim - 1);
+
+    double vel_sq_R = 0.0;
+    for (int i = 0; i < dim; i++)
+    {
+        vel_sq_R += pow(vel_R(i), 2) ;
+    }
+    double T_R       = (E_R - 0.5*rho_R*vel_sq_R)/(rho_R*Cv);
+    double p_R       = rho_R*R*T_R;
+    double h_R       = (E_R + p_R)/rho_R;
+    double sqrtRho_R = std::sqrt(rho_R);
+
+    double a_R   = sqrt(gamm * R * T_R);
+
+    Vector nor_dim(dim);
+    double nor_l2 = nor.Norml2();
+    nor_dim.Set(1/nor_l2, nor);
+
+    double vnl   = 0.0, vnr = 0.0;
+    for (int i = 0; i < dim; i++)
+    {
+        vnl += vel_L[i]*nor_dim(i); 
+        vnr += vel_R[i]*nor_dim(i); 
+    }
+
+    double sSqrtRho = 1./(sqrtRho_L + sqrtRho_R); 
+    Vector velRho(dim);
+    double vel_sq_rho = 0.0;;
+    for (int i = 0; i < dim; i++)
+    {
+        velRho(i)   = (sqrtRho_L*vel_L(i) + sqrtRho_R*vel_R(i))*sSqrtRho;
+        vel_sq_rho += velRho(i)*velRho(i);
+    }
+    double r_rho = (sqrtRho_L*rho_L + sqrtRho_R*rho_R)*sSqrtRho;
+    double rho_h = (sqrtRho_L*h_L   + sqrtRho_R*h_R)*sSqrtRho;
+    double rho_a = std::sqrt((gamm - 1)*(rho_h - 0.5*vel_sq_rho));
+
+    double vn_rho   = 0.0;
+    for (int i = 0; i < dim; i++)
+    {
+        vn_rho += velRho[i]*nor_dim(i); 
+    }
+
+//!Wave Strengths
+
+   double drho = rho_R - rho_L ;//Density difference
+   double dp   = p_R - p_L     ;//Pressure difference
+   double dvn  = vnr - vnl     ;//Normal velocity difference
+
+   Vector LdU(4);
+
+   LdU(0) = (dp - r_rho*rho_a*dvn )/(2.*rho_a*rho_a); //Left-moving acoustic wave strength
+   LdU(1) =  drho - dp/(rho_a*rho_a);                 //Entropy wave strength
+   LdU(2) = (dp + r_rho*rho_a*dvn )/(2.*rho_a*rho_a); //Right-moving acoustic wave strength
+   LdU(3) = r_rho;                                    //Shear wave strength 
+
+//!Absolute values of the wave Speeds
+
+   Vector ws(4);
+   ws(0) = std::abs(vn_rho - rho_a) ;//Left-moving acoustic wave
+   ws(1) = std::abs(vn_rho);         //Entropy wave
+   ws(2) = std::abs(vn_rho + rho_a) ;//Right-moving acoustic wave
+   ws(3) = std::abs(vn_rho) ;        //Shear waves
+
+//Harten's Entropy Fix JCP(1983), 49, pp357-393: only for the nonlinear fields.
+//NOTE: It avoids vanishing wave speeds by making a parabolic fit near ws = 0.
+
+   Vector dws(4);
+   dws(0) = 0.2; 
+   if ( ws(0) < dws(0) ) 
+        ws(0) = 0.5 * ( ws(0)*ws(0)/dws(0)+dws(0) );
+   dws(2) = 0.2; 
+   if ( ws(2) < dws(2) ) 
+        ws(3) = 0.5 * ( ws(2)*ws(2)/dws(2)+dws(2) );
+
+//Right Eigenvectors
+//Note: Two shear wave components are combined into one, so that tangent vectors
+//      are not required. And that's why there are only 4 vectors here.
+//      See "I do like CFD, VOL.1" about how tangent vectors are eliminated.
+
+   DenseMatrix roeM(dim + 2, 4);
+
+//  Left-moving acoustic wave
+
+   roeM(0,0) = 1.; 
+   roeM(1,0) = velRho(0) - rho_a*nor_dim(0);
+   roeM(2,0) = velRho(1) - rho_a*nor_dim(1);  
+   roeM(3,0) = velRho(2) - rho_a*nor_dim(2);
+   roeM(4,0) = rho_h - rho_a*vn_rho;
+
+// Entropy wave
+   
+   roeM(0,1) = 1.; 
+   roeM(1,1) = velRho(0);
+   roeM(2,1) = velRho(1);
+   roeM(3,1) = velRho(2); 
+   roeM(4,1) = 0.5*vel_sq_rho;
+
+// Right-moving acoustic wave
+
+   roeM(0,2) = 1.; 
+   roeM(1,2) = velRho(0) + rho_a*nor_dim(0);
+   roeM(2,2) = velRho(1) + rho_a*nor_dim(1);  
+   roeM(3,2) = velRho(2) + rho_a*nor_dim(2);
+   roeM(4,2) = rho_h + rho_a*vn_rho;
+
+// Two shear wave components combined into one (wave strength incorporated).
+  
+   double du = vel_R(0) - vel_L(0);
+   double dv = vel_R(1) - vel_L(1);
+   double dw = vel_R(2) - vel_L(2);
+
+   roeM(0,3) = 0.; 
+   roeM(1,3) = du - dvn*nor_dim(0);
+   roeM(2,3) = dv - dvn*nor_dim(1);
+   roeM(3,3) = dw - dvn*nor_dim(2);
+   roeM(4,3) = velRho(0)*du + velRho(1)*dv + velRho(2)*dw - vn_rho*dvn;
+
+//!Dissipation Term: |An|(UR-UL) = R|Lambda|L*dU = sum_k of [ ws(k) * R(:,k) * L*dU(k) ]
+
+    Vector diss(var_dim); // dissipation 
+    for(int j = 0; j < var_dim; j++)
+        diss(j) = ws(0)*LdU(0)*roeM(j,0) + ws(1)*LdU(1)*roeM(j,1) 
+         + ws(2)*LdU(2)*roeM(j,2) + ws(3)*LdU(3)*roeM(j,3);
+
+
+// This is the numerical flux: Roe flux = 1/2 *[  Fn(UL)+Fn(UR) - |An|(UR-UL) ]
+
+    Vector fl(dim*var_dim), fr(dim*var_dim);
+    getEulerFlux(R, gamm, u1, fl);
+    getEulerFlux(R, gamm, u2, fr);
+    add(0.5, fl, fr, f); //Common flux without dissipation
+
+    for(int i = 0; i < dim; i++)
+        for(int j = 0; j < var_dim; j++)
+            f(i*var_dim + j) += -0.5*nor_dim(i)*diss(j);
+}
 
 
 

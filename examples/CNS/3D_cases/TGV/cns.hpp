@@ -10,6 +10,7 @@ using namespace mfem;
 
 // Restart Functions
 void writeRestart(Mesh &mesh, GridFunction &u_sol, int cycle, double time);
+void writeRestart(Mesh &mesh, int order, GridFunction &u_sol, int cycle, double time);
 void doRestart(const int cycle, ParMesh &pmesh, ParGridFunction &u_sol,
         double &time, int &time_step);
 
@@ -68,8 +69,7 @@ void doRestart(const int cycle, ParMesh &pmesh, ParGridFunction &u_sol,
 
    GridFunction *u_temp = dc.GetField("u_cns");
 
-   for(int i = 0; i < u_temp->Size(); i++) 
-       u_sol[i] = (*u_temp)[i];
+   u_sol.GetValuesFrom(*u_temp);
 
 }
 
@@ -90,6 +90,30 @@ void writeRestart(Mesh &mesh, GridFunction &u_sol, int cycle, double time)
    dc.Save();
   
 }
+
+// In case of variable p, we want to save at a higher order to allow
+// interpolation to intermediate order values
+void writeRestart(Mesh &mesh_, int order_, GridFunction &u_sol_, int cycle_, double time_)
+{
+   int dim     = mesh_.Dimension();
+   int var_dim = dim + 2;
+
+   DG_FECollection fec_temp(order_ + 1, dim);
+   FiniteElementSpace fes_temp(&mesh_, &fec_temp, var_dim);
+
+   GridFunction u_temp(&fes_temp);
+   u_temp.GetValuesFrom(u_sol_);
+
+   VisItDataCollection dc("Restart", &mesh_);
+   dc.SetPrecision(16);
+ 
+   dc.RegisterField("u_cns", &u_temp);
+
+   dc.SetCycle(cycle_);
+   dc.SetTime(time_);
+   dc.Save();
+}
+
 
 
 
