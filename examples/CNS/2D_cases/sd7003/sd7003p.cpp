@@ -420,7 +420,7 @@ CNS::CNS()
 
       done = (t >= t_final - 1e-8*dt);
 
-      if ((ti % 25 == 0) && (,yid == 0)) // Check time
+      if ((ti % 25 == 0) && (myid == 0)) // Check time
       {
           chrono.Stop();
           if (myid == 0)
