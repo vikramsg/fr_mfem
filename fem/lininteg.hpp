@@ -378,6 +378,7 @@ public:
 
    void getLFFlux(const double R, const double gamm, const Vector &u1, const Vector &u2, const Vector &nor, Vector &f);
    void getHLLFlux(const double R, const double gamm, const Vector &u1, const Vector &u2, const Vector &nor, Vector &f);
+   void getRoeFlux(const double R, const double gamm, const Vector &u1, const Vector &u2, const Vector &nor, Vector &f);
 
    void getConvectiveFlux(const double R, const double gamm, const Vector &u1, const Vector &u2, const Vector &nor, Vector &f);
 };
