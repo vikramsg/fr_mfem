@@ -559,6 +559,8 @@ CNS::CNS()
               temp_uv_mean.at(i) = temp_uv_mean.at(i)*(ti - c_ti) + glob_uv_mean.at(i);          
 
               temp_u_mean.at(i)  = temp_u_mean.at(i)/double(ti - c_ti + 1);
+              temp_v_mean.at(i)  = temp_v_mean.at(i)/double(ti - c_ti + 1);
+              temp_w_mean.at(i)  = temp_w_mean.at(i)/double(ti - c_ti + 1);
               temp_uu_mean.at(i) = temp_uu_mean.at(i)/double(ti - c_ti + 1);
               temp_vv_mean.at(i) = temp_vv_mean.at(i)/double(ti - c_ti + 1);
               temp_ww_mean.at(i) = temp_ww_mean.at(i)/double(ti - c_ti + 1);

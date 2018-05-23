@@ -1,4 +1,5 @@
 #include "mfem.hpp"
+#include "cns.hpp"
 #include <fstream>
 #include <iostream>
 #include <algorithm>
@@ -8,50 +9,44 @@ using namespace mfem;
 
 //Constants
 const double gamm  = 1.4;
-const double   mu  = 0.000625;
-const double R_gas = 287;
+const double   mu  = 0.000625; 
+const double R_gas = 1;
 const double   Pr  = 0.72;
 
 //Run parameters
-//const char *mesh_file        =  "periodic-cube.mesh";
-const char *mesh_file        =  "per_5.mesh";
-const int    order           =  3;
-const double t_final         =  1.0    ;
+const char *mesh_file        =  "1d.mesh";
+const int    order           =  2; int np = order + 1;
+const double t_final         = 20.00000;
 const int    problem         =  1;
-const int    ref_levels      =  3;
+const int    ref_levels      =  0;
 
-const bool   time_adapt      =  false;
-const double cfl             =  1.1  ;
-const double dt_const        =  0.001  ;
+const bool   time_adapt      =  true ;
+const double cfl             =  0.50 ;
+const double dt_const        =  0.0025 ;
 const int    ode_solver_type =  3; // 1. Forward Euler 2. TVD SSP 3 Stage
 
-const int    vis_steps       = 50;
+const int    vis_steps       =1000 ;
 
 const bool   adapt           =  false;
 const int    adapt_iter      =  200  ; // Time steps after which adaptation is done
 const double tolerance       =  5e-4 ; // Tolerance for adaptation
 
+//Source Term
+const bool addSource         = false;                   // Add source term
+const double fx              =  0.0;                    // Force x 
+
+//Restart parameters
+const bool restart           =  false;
+const int  restart_freq      =  1000; // Create restart file after every 1000 time steps
+const int  restart_cycle     =  4000; // File number used for restart
 
 // Velocity coefficient
 void init_function(const Vector &x, Vector &v);
-void char_bnd_cnd(const Vector &x, Vector &v);
+//void char_bnd_cnd(const Vector &x, Vector &v);
 void wall_bnd_cnd(const Vector &x, Vector &v);
 void wall_adi_bnd_cnd(const Vector &x, Vector &v);
 
 double getUMax(int dim, const Vector &u);
-
-int GetFacePtsSize(Mesh &mesh, FiniteElementSpace &fes);
-void AssembleFaceMatrices(Mesh &mesh, FiniteElementSpace &fes, FiniteElementSpace &fes_var,
-        Vector &u, Vector &f,
-        SparseMatrix &face_project_l, SparseMatrix &face_project_r, SparseMatrix &wts,
-        Vector &nor_face);
-void getVectorLFFlux(const double R, const double gamm, const int dim, const Vector &u1, const Vector &u2, 
-                                const Vector &nor, Vector &f);
-void getFaceDotNorm(int dim, const Vector &f, const Vector &nor_face, Vector &face_f);
-void getEulerDGTranspose(int dim, SparseMatrix &face_project_l, SparseMatrix &face_project_r, 
-        SparseMatrix &wts, Vector &nor,
-        const Vector &u, const Vector &f, Vector &b);
-
 
 void getInvFlux(int dim, const Vector &u, Vector &f);
 void getVisFlux(int dim, const Vector &u, const Vector &aux_grad, Vector &f);
@@ -62,15 +57,12 @@ void getAuxGrad(int dim, const HypreParMatrix &K_x, const HypreParMatrix &K_y, c
         Vector &aux_grad);
 void getAuxVar(int dim, const Vector &u, Vector &aux_sol);
 
-void ComputeLift(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, GridFunction &f_vis_D, 
-                    const Array<int> &bdr, const double gamm, Vector &force);
-
-void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, Vector &u1, Vector &u2, 
-                Vector &E, Vector &u_x, Vector &u_y, Vector &v_x, Vector &v_y);
-void postProcess(Mesh &mesh, GridFunction &u_sol, GridFunction &aux_grad,
-        int cycle, double time);
-
 void getEleOrder(FiniteElementSpace &fes, Array<int> &newEleOrder, GridFunction &order);
+
+void getVectorLFFlux(const double R, const double gamm, const int dim, const Vector &u1, const Vector &u2, 
+                                const Vector &nor, Vector &f);
+void getFaceDotNorm(int dim, const Vector &f, const Vector &nor_face, Vector &face_f);
+
 
 /** A time-dependent operator for the right-hand side of the ODE. The DG weak
     form is M du/dt = K u + b, where M and K are the mass
@@ -82,25 +74,27 @@ class FE_Evolution : public TimeDependentOperator
 private:
    HypreParMatrix &M, &K_inv_x, &K_inv_y, &K_inv_z;
    HypreParMatrix &K_vis_x, &K_vis_y, &K_vis_z;
+   HypreParMatrix &Up_vis_x, &Up_vis_y, &Up_vis_z;
    ParLinearForm  &b, &b_aux_x, &b_aux_y, &b_aux_z;
-
-   SparseMatrix   &face_proj_l, &face_proj_r, &wts;
-   Vector         &nor_face;
 
    HypreSmoother M_prec;
    CGSolver M_solver;
                             
    ParGridFunction &u, &u_aux, &u_grad, &f_I, &f_V;
-                            
+    
+   Vector nor_face, wts;
+
+   SparseMatrix   face_t_r;
+   HypreParMatrix *glob_proj_l, *glob_proj_r;
+                        
 public:
    FE_Evolution(HypreParMatrix &_M, HypreParMatrix &_K_inv_x, HypreParMatrix &_K_inv_y, HypreParMatrix &_K_inv_z, 
                             HypreParMatrix &_K_vis_x, HypreParMatrix &_K_vis_y, HypreParMatrix &_K_vis_z,
+                            HypreParMatrix &_Up_vis_x, HypreParMatrix &_Up_vis_y, HypreParMatrix &_Up_vis_z,
                             ParGridFunction &u_,   ParGridFunction &u_aux, ParGridFunction &u_grad, 
                             ParGridFunction &f_I_, ParGridFunction &f_V_,
                             ParLinearForm &_b_aux_x, ParLinearForm &_b_aux_y, ParLinearForm &_b_aux_z, 
-                            ParLinearForm &_b,
-                            SparseMatrix &face_proj_l_, SparseMatrix &face_proj_r_, SparseMatrix &wts_,
-                            Vector &nor_face_);
+                            ParLinearForm &_b);
 
    void GetSize() ;
 
@@ -109,6 +103,14 @@ public:
    void Update();
 
    virtual void Mult(const ParGridFunction &x, ParGridFunction &y) const;
+
+   void Source(const ParGridFunction &x, ParGridFunction &y) const;
+
+   void GetMomentum(const ParGridFunction &x, double &fx);
+
+   void AssembleSharedFaceMatrices(const ParGridFunction &x) ;
+   void getParEulerDGTranspose(const ParGridFunction &u_sol, const ParGridFunction &f_inv,
+                                          Vector &b_nl) const;
 
    virtual ~FE_Evolution() { }
 };
@@ -131,8 +133,10 @@ private:
     FE_Evolution *adv;
     ParGridFunction *u_t, *k_t, *y_t;   
 
-    SparseMatrix *face_proj_l, *face_proj_r, *wts;
-    Vector nor_face;
+    Vector nor_face, wts;
+
+    SparseMatrix   face_t_r;
+    HypreParMatrix *glob_proj_l, *glob_proj_r;
 
     int dim;
 
@@ -144,6 +148,10 @@ public:
    CNS();
 
    void Step();
+
+   void AssembleSharedFaceMatrices(const int glob_nFacePts, ParFiniteElementSpace &fes);
+
+   void getParEulerDGTranspose();
 
    ~CNS(); 
 };
@@ -183,13 +191,16 @@ CNS::CNS()
    {
       mesh->UniformRefinement();
    }
+
    pmesh = new ParMesh(MPI_COMM_WORLD, *mesh);
    delete mesh;
+
+   DG_FECollection fec(order, dim);
+//   DG_FECollection fec(order, dim, BasisType::GaussLobatto);
 
    double kappa_min, kappa_max;
    pmesh->GetCharacteristics(h_min, h_max, kappa_min, kappa_max);
 
-   DG_FECollection fec(order, dim);
    fes = new ParFiniteElementSpace(pmesh, &fec, var_dim);
 
    HYPRE_Int global_vSize = fes->GlobalTrueVSize();
@@ -198,84 +209,83 @@ CNS::CNS()
       cout << "Number of unknowns: " << global_vSize << endl;
    }
 
-   VectorFunctionCoefficient u0(var_dim, init_function);
-   
-   u_sol = new ParGridFunction(fes);
-   u_sol->ProjectCoefficient(u0);
+//   VectorFunctionCoefficient u0(var_dim, init_function);
+//   
+//   u_sol = new ParGridFunction(fes);
+//
+//   double r_t; int r_ti;
+//   if (restart == false)
+//       u_sol->ProjectCoefficient(u0);
+//   else
+//       doRestart(restart_cycle, *pmesh, *u_sol, r_t, r_ti);
 
-   fes_vec = new ParFiniteElementSpace(pmesh, &fec, dim*var_dim);
-       
-   f_inv = new ParGridFunction(fes_vec);
-   getInvFlux(dim, *u_sol, *f_inv);
-
-   f_vis = new ParGridFunction(fes_vec);
-
-   ParFiniteElementSpace fes_aux(pmesh, &fec, aux_dim);
-   aux_sol = new ParGridFunction(&fes_aux);
-
-   ParFiniteElementSpace fes_aux_grad(pmesh, &fec, dim*aux_dim);
-   aux_grad = new ParGridFunction(&fes_aux_grad);
-
-   // For time stepping
-   u_t = new ParGridFunction(fes);
-   k_t = new ParGridFunction(fes);
-   y_t = new ParGridFunction(fes);
+//   fes_vec = new ParFiniteElementSpace(pmesh, &fec, dim*var_dim);
+//       
+//   f_inv = new ParGridFunction(fes_vec);
+//   getInvFlux(dim, *u_sol, *f_inv);
+//
+//   f_vis = new ParGridFunction(fes_vec);
+//
+//   ParFiniteElementSpace fes_aux(pmesh, &fec, aux_dim);
+//   aux_sol = new ParGridFunction(&fes_aux);
+//
+//   ParFiniteElementSpace fes_aux_grad(pmesh, &fec, dim*aux_dim);
+//   aux_grad = new ParGridFunction(&fes_aux_grad);
+//
+//   // For time stepping
+//   u_t = new ParGridFunction(fes);
+//   k_t = new ParGridFunction(fes);
+//   y_t = new ParGridFunction(fes);
    ///////////////////////////////////////////////////////////
    // Setup bilinear form for x derivative and the mass matrix
    Vector xdir(dim), ydir(dim), zdir(dim); 
    xdir = 0.0; xdir(0) = 1.0;
    VectorConstantCoefficient x_dir(xdir);
-   ydir = 0.0; ydir(1) = 1.0;
-   VectorConstantCoefficient y_dir(ydir);
-
+//   ydir = 0.0; ydir(1) = 1.0;
+//   VectorConstantCoefficient y_dir(ydir);
+//   VectorConstantCoefficient z_dir(ydir);
+//   if (dim == 3)
+//   {
+//       zdir = 0.0; zdir(2) = 1.0;
+//       VectorConstantCoefficient temp_z_dir(zdir);
+//       z_dir = temp_z_dir;
+//   }
+//
    ParBilinearForm *m, *k_inv_x, *k_inv_y, *k_inv_z;
    ParBilinearForm     *k_vis_x, *k_vis_y, *k_vis_z;
+   ParBilinearForm     *up_vis_x, *up_vis_y, *up_vis_z;
+
+   IntegrationRules GLIntRules(0, Quadrature1D::GaussLobatto);
+   MassIntegrator *mass_integ = new MassIntegrator;
+   mass_integ->SetIntRule(&GLIntRules.Get(Geometry::CUBE, 2*np-3));
 
    fes_op = new ParFiniteElementSpace(pmesh, &fec);
    m      = new ParBilinearForm(fes_op);
    m->AddDomainIntegrator(new MassIntegrator);
+//   m->AddDomainIntegrator(mass_integ);
    k_inv_x = new ParBilinearForm(fes_op);
    k_inv_x->AddDomainIntegrator(new ConvectionIntegrator(x_dir, -1.0));
-   k_inv_y = new ParBilinearForm(fes_op);
-   k_inv_y->AddDomainIntegrator(new ConvectionIntegrator(y_dir, -1.0));
+//   k_inv_y = new ParBilinearForm(fes_op);
+//   k_inv_y->AddDomainIntegrator(new ConvectionIntegrator(y_dir, -1.0));
 
    m->Assemble();
    m->Finalize();
    int skip_zeros = 1;
    k_inv_x->Assemble(skip_zeros);
    k_inv_x->Finalize(skip_zeros);
-   k_inv_y->Assemble(skip_zeros);
-   k_inv_y->Finalize(skip_zeros);
+//   k_inv_y->Assemble(skip_zeros);
+//   k_inv_y->Finalize(skip_zeros);
 
-   /////////////////////////////////////////////////////////////
+   k_inv_x->SpMat().Print();
 
-   u_b    = new ParGridFunction(fes);
-   f_I_b  = new ParGridFunction(fes_vec);
-
-   VectorGridFunctionCoefficient u_vec(u_b);
-   VectorGridFunctionCoefficient f_vec(f_I_b);
-
-   *u_b   = *u_sol;
-   *f_I_b = *f_inv;
-
-   u_b  ->ExchangeFaceNbrData(); //Exchange data across processors
-   f_I_b->ExchangeFaceNbrData();
-   
-   aux_grad->ExchangeFaceNbrData();
-
-   ///////////////////////////////////////////////////
-   // Linear form representing the Euler boundary non-linear term
-   b = new ParLinearForm(fes);
-   b->AddFaceIntegrator(
-      new DGEulerIntegrator(R_gas, gamm, u_vec, f_vec, var_dim, -1.0));
-
-   b->Assemble();
-
-   getAuxVar(dim, *u_sol, *aux_sol);
-   VectorGridFunctionCoefficient aux_vec(aux_sol);
-
-   b_aux_x = new ParLinearForm(&fes_aux);
-   b_aux_y = new ParLinearForm(&fes_aux);
+//   if (dim == 3)
+//   {
+//       k_inv_z = new ParBilinearForm(fes_op);
+//       k_inv_z->AddDomainIntegrator(new ConvectionIntegrator(z_dir, -1.0));
+//    
+//       k_inv_z->Assemble(skip_zeros);
+//       k_inv_z->Finalize(skip_zeros);
+//   }
 
    ///////////////////////////////////////////////////////////
    // Setup bilinear form for viscous terms 
@@ -284,126 +294,204 @@ CNS::CNS()
    k_vis_x->AddInteriorFaceIntegrator(
       new TransposeIntegrator(new DGTraceIntegrator(x_dir, -1.0,  0.0)));// Beta 0 means central flux
 
-   k_vis_y = new ParBilinearForm(fes_op);
-   k_vis_y->AddDomainIntegrator(new ConvectionIntegrator(y_dir,  1.0));
-   k_vis_y->AddInteriorFaceIntegrator(
-      new TransposeIntegrator(new DGTraceIntegrator(y_dir, -1.0,  0.0)));// Beta 0 means central flux
+//   k_vis_y = new ParBilinearForm(fes_op);
+//   k_vis_y->AddDomainIntegrator(new ConvectionIntegrator(y_dir,  1.0));
+//   k_vis_y->AddInteriorFaceIntegrator(
+//      new TransposeIntegrator(new DGTraceIntegrator(y_dir, -1.0,  0.5)));// Beta 0 means central flux
+
+   up_vis_x = new ParBilinearForm(fes_op);
+   up_vis_x->AddInteriorFaceIntegrator(
+      new TransposeIntegrator(new DGTraceIntegrator(x_dir, -0.0, -1.0)));// Beta 0 means central flux
+//   up_vis_y = new ParBilinearForm(fes_op);
+//   up_vis_y->AddInteriorFaceIntegrator(
+//      new TransposeIntegrator(new DGTraceIntegrator(y_dir, -0.0, -1.0)));// Beta 0 means central flux
 
    k_vis_x->Assemble(skip_zeros);
    k_vis_x->Finalize(skip_zeros);
-   k_vis_y->Assemble(skip_zeros);
-   k_vis_y->Finalize(skip_zeros);
+   
+//   k_vis_y->Assemble(skip_zeros);
+//   k_vis_y->Finalize(skip_zeros);
 
-   VectorConstantCoefficient z_dir(ydir);
-   if (dim == 3)
-   {
-       zdir = 0.0; zdir(2) = 1.0;
-       VectorConstantCoefficient temp_z_dir(zdir);
-       z_dir = temp_z_dir;
-      
-       k_inv_z = new ParBilinearForm(fes_op);
-       k_inv_z->AddDomainIntegrator(new ConvectionIntegrator(z_dir, -1.0));
-    
-       k_inv_z->Assemble(skip_zeros);
-       k_inv_z->Finalize(skip_zeros);
-       
-       k_vis_z = new ParBilinearForm(fes_op);
-       k_vis_z->AddDomainIntegrator(new ConvectionIntegrator(z_dir,  1.0));
-       k_vis_z->AddInteriorFaceIntegrator(
-          new TransposeIntegrator(new DGTraceIntegrator(z_dir, -1.0,  0.0)));// Beta 0 means central flux
-    
-       k_vis_z->Assemble(skip_zeros);
-       k_vis_z->Finalize(skip_zeros);
-       
-       b_aux_z = new ParLinearForm(&fes_aux);
-   }
+   up_vis_x->Assemble(skip_zeros);
+   up_vis_x->Finalize(skip_zeros);
 
-   HypreParMatrix *M       = m->ParallelAssemble();
-   HypreParMatrix *K_inv_x = k_inv_x->ParallelAssemble();
-   HypreParMatrix *K_inv_y = k_inv_y->ParallelAssemble();
-
-   HypreParMatrix *K_vis_x = k_vis_x->ParallelAssemble();
-   HypreParMatrix *K_vis_y = k_vis_y->ParallelAssemble();
-
-   HypreParMatrix *K_inv_z;
-   HypreParMatrix *K_vis_z;
-
-   int n_face_pts = GetFacePtsSize(*pmesh, *fes_op); 
-   face_proj_l    = new SparseMatrix(n_face_pts, fes_op->GetVSize());
-   face_proj_r    = new SparseMatrix(n_face_pts, fes_op->GetVSize());
-   wts            = new SparseMatrix(n_face_pts);
-   nor_face.SetSize(dim*n_face_pts);
-   AssembleFaceMatrices(*pmesh, *fes_op, *fes, *u_sol, *f_inv, 
-           *face_proj_l, *face_proj_r, *wts, nor_face);
-
-   ///////////////////////////////////////////////////////////////
-   //Setup time stepping objects and do initial post-processing
-   if (dim == 3)
-   {
-       K_inv_z = k_inv_z->ParallelAssemble();
-       K_vis_z = k_vis_z->ParallelAssemble();
-
-       adv  = new FE_Evolution(*M, *K_inv_x, *K_inv_y, *K_inv_z,
-                            *K_vis_x, *K_vis_y, *K_vis_z, 
-                            *u_b, *aux_sol, *aux_grad, *f_I_b, *f_vis,
-                            *b_aux_x, *b_aux_y, *b_aux_z, 
-                            *b,
-                            *face_proj_l, *face_proj_r, *wts,
-                            nor_face);
-   }
-   else if (dim == 2)
-   {
-       adv  = new FE_Evolution(*M, *K_inv_x, *K_inv_y, *K_inv_z,
-                            *K_vis_x, *K_vis_y, *K_vis_z, 
-                            *u_b, *aux_sol, *aux_grad, *f_I_b, *f_vis,
-                            *b_aux_x, *b_aux_y, *b_aux_z, 
-                            *b,
-                            *face_proj_l, *face_proj_r, *wts,
-                            nor_face);
-   }
-   delete m, k_inv_x, k_inv_y, k_inv_z;
-   delete    k_vis_x, k_vis_y, k_vis_z;
-
-
-   {// Post process initially
-       ti = 0; t = 0;
-       postProcess(*pmesh, *u_sol, *aux_grad, ti, t);
-   }
-
-   if (time_adapt == false)
-   {
-       dt = dt_const; 
-   }
-   else
-   {
-       MPI_Comm comm = pmesh->GetComm();
-
-       double loc_u_max, glob_u_max; 
-       loc_u_max = getUMax(dim, *u_sol); // Get u_max on local processor
-       MPI_Allreduce(&loc_u_max, &glob_u_max, 1, MPI_DOUBLE, MPI_MAX, comm); // Get global u_max across processors
-
-       dt = cfl*((h_min/(2.0*order + 1))/glob_u_max);
-   }
-    
-   MPI_Comm comm = pmesh->GetComm();
-
-   StopWatch chrono;
-   chrono.Clear();
-   chrono.Start();
-
-   Step();
+//   up_vis_y->Assemble(skip_zeros);
+//   up_vis_y->Finalize(skip_zeros);
+//
+//   if (dim == 3)
+//   {
+//       k_vis_z = new ParBilinearForm(fes_op);
+//       k_vis_z->AddDomainIntegrator(new ConvectionIntegrator(z_dir,  1.0));
+//       k_vis_z->AddInteriorFaceIntegrator(
+//          new TransposeIntegrator(new DGTraceIntegrator(z_dir, -1.0,  0.5)));// Beta 0 means central flux
+//    
+//       up_vis_z = new ParBilinearForm(fes_op);
+//       up_vis_z->AddInteriorFaceIntegrator(
+//               new TransposeIntegrator(new DGTraceIntegrator(z_dir, -0.0, -1.0)));// Beta 0 means central flux
+//
+//       k_vis_z->Assemble(skip_zeros);
+//       k_vis_z->Finalize(skip_zeros);
+//       
+//       up_vis_z->Assemble(skip_zeros);
+//       up_vis_z->Finalize(skip_zeros);
+//
+//   }
+//
+//   /////////////////////////////////////////////////////////////
+//   //Setup Hypre matrices
+//   HypreParMatrix *M       = m->ParallelAssemble();
+//   HypreParMatrix *K_inv_x = k_inv_x->ParallelAssemble();
+//   HypreParMatrix *K_inv_y = k_inv_y->ParallelAssemble();
+//
+//   HypreParMatrix *K_vis_x = k_vis_x->ParallelAssemble();
+//   HypreParMatrix *K_vis_y = k_vis_y->ParallelAssemble();
+//
+//   HypreParMatrix *Up_vis_x = up_vis_x->ParallelAssemble();
+//   HypreParMatrix *Up_vis_y = up_vis_y->ParallelAssemble();
+//
+//   HypreParMatrix *K_inv_z;
+//   HypreParMatrix *K_vis_z;
+//
+//   HypreParMatrix *Up_vis_z;
+//
+//   if (dim == 3)
+//   {
+//       K_inv_z = k_inv_z->ParallelAssemble();
+//       K_vis_z = k_vis_z->ParallelAssemble();
+//
+//       Up_vis_z = up_vis_z->ParallelAssemble();
+//   }
+//
+//   delete m, k_inv_x, k_inv_y, k_inv_z;
+//   delete    k_vis_x, k_vis_y, k_vis_z;
+//   delete    up_vis_x, up_vis_y, up_vis_z;
+//
+//   /////////////////////////////////////////////////////////////
+//   // Define grid function coefficients
+//
+//   u_b    = new ParGridFunction(fes);
+//   f_I_b  = new ParGridFunction(fes_vec);
+//
+//   VectorGridFunctionCoefficient u_vec(u_b);
+//   VectorGridFunctionCoefficient f_vec(f_I_b);
+//
+//   *u_b   = *u_sol;
+//   *f_I_b = *f_inv;
+//
+//   u_b  ->ExchangeFaceNbrData(); //Exchange data across processors
+//   f_I_b->ExchangeFaceNbrData();
+//
+//   getAuxVar(dim, *u_sol, *aux_sol);
+//   VectorGridFunctionCoefficient aux_vec(aux_sol);
+//
+//   ///////////////////////////////////////////////////
+//   // Define face integration terms 
+//   b = new ParLinearForm(fes);
+//   
+//   DGEulerIntegrator *dgeuler = new DGEulerIntegrator(R_gas, gamm, u_vec, f_vec, var_dim, -1.0);
+//   dgeuler->SetIntRule(&GLIntRules.Get(Geometry::SQUARE, 2*np-3));
+//
+//   b->AddFaceIntegrator(
+//      new DGEulerIntegrator(R_gas, gamm, u_vec, f_vec, var_dim, -1.0));
+////      dgeuler);
+//   b->Assemble();
+//
+//   b_aux_x     = new ParLinearForm(&fes_aux);
+//   b_aux_y     = new ParLinearForm(&fes_aux);
+//   b_aux_z     = new ParLinearForm(&fes_aux);
+//
+//   (*b_aux_x) *= 0.0; // Initialize to 0
+//   (*b_aux_y) *= 0.0;
+//   (*b_aux_z) *= 0.0;
+//
+//   ///////////////////////////////////////////////////
+//   //Setup time stepping objects 
+//   if (dim == 3)
+//   {
+//       adv  = new FE_Evolution(*M, *K_inv_x, *K_inv_y, *K_inv_z,
+//                            *K_vis_x, *K_vis_y, *K_vis_z, 
+//                            *Up_vis_x, *Up_vis_y, *Up_vis_z, 
+//                            *u_b, *aux_sol, *aux_grad, *f_I_b, *f_vis,
+//                            *b_aux_x, *b_aux_y, *b_aux_z, 
+//                            *b);
+//   }
+//   else if (dim == 2)
+//   {
+//       adv  = new FE_Evolution(*M, *K_inv_x, *K_inv_y, *K_inv_z,
+//                            *K_vis_x, *K_vis_y, *K_vis_z, 
+//                            *Up_vis_x, *Up_vis_y, *Up_vis_z, 
+//                            *u_b, *aux_sol, *aux_grad, *f_I_b, *f_vis,
+//                            *b_aux_x, *b_aux_y, *b_aux_z, 
+//                            *b);
+//   }
+//
+//   ///////////////////////////////////////////////////
+//   //Setup viscous coefficients
+//   getVisFlux(dim, *u_sol, *aux_grad, *f_vis);
+//
+//   VectorGridFunctionCoefficient vis_vec(f_vis);
+//   VectorGridFunctionCoefficient aux_grad_vec(aux_grad);
+//
+//   ///////////////////////////////////////////////////
+//   
+//   int ti_in; double t_in;
+//   if (restart == true)
+//   {
+//       ti_in = restart_cycle ;
+//       t_in  = r_t ;
+//   }
+//   else
+//   {
+//       ti_in = 0; t_in = 0;
+//   }
+//
+//   {// Post process initially
+//       ti = ti_in; t = t_in;
+//       postProcess(*pmesh, order, gamm, R_gas, 
+//                   *u_sol, *aux_grad, ti, t);
+//   }
+//
+//
+//   if (time_adapt == false)
+//   {
+//       dt = dt_const; 
+//   }
+//   else
+//   {
+//       MPI_Comm comm = pmesh->GetComm();
+//
+//       double loc_u_max, glob_u_max; 
+//       loc_u_max = getUMax(dim, *u_sol); // Get u_max on local processor
+//       MPI_Allreduce(&loc_u_max, &glob_u_max, 1, MPI_DOUBLE, MPI_MAX, comm); // Get global u_max across processors
+//
+//       dt = cfl*((h_min/(2.0*order + 1))/glob_u_max);
+//   }
+//    
+//   MPI_Comm comm = pmesh->GetComm();
+//
+//   ofstream flo_file;
+//   flo_file.open("flow_char.dat");
+//
+//   StopWatch chrono;
+//   chrono.Clear();
+//   chrono.Start();
+//
+//   {
+//       ParGridFunction z(fes);
+//       adv->Mult(*u_sol, z);
+//   }
 
 //   bool done = false;
-//   for (ti = 0; !done; )
+//   for (ti = ti_in; !done; )
 //   {
 //      Step(); // Step in time
 //
 //      done = (t >= t_final - 1e-8*dt);
 //
-//      if ((ti % 10 == 0) && (myid == 0)) // Check time
+//      if ((ti % 25 == 0) && (myid == 0)) // Check time
 //      {
 //          chrono.Stop();
-//          cout << "10 Steps took "<< chrono.RealTime() << " s "<< endl;
+//          cout << "25 Steps took "<< chrono.RealTime() << " s "<< endl;
 //
 //          chrono.Clear();
 //          chrono.Start();
@@ -411,37 +499,49 @@ CNS::CNS()
 //    
 //      if (done || ti % vis_steps == 0) // Visualize
 //      {
-//       
 //          getAuxGrad(dim, *K_vis_x, *K_vis_y, *K_vis_z, 
 //          adv->GetMSolver(), *u_b,
 //          *b_aux_x, *b_aux_y, *b_aux_z, 
 //          *aux_grad);
 //
-//          postProcess(*pmesh, *u_sol, *aux_grad, ti, t);
+//          postProcess(*pmesh, order, gamm, R_gas, 
+//                   *u_sol, *aux_grad, ti, t);
+//      }
+//      
+//      if (done || ti % restart_freq == 0) // Write restart file 
+//      {
+//          writeRestart(*pmesh, *u_sol, ti, t);
+//      }
+//
+//      double tk = ComputeTKE(*fes, *u_sol);
+//      double glob_tk;
+//      MPI_Allreduce(&tk,  &glob_tk,  1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
+//
+//      if (myid == 0)
+//      {
+//          flo_file << setprecision(12) << ti << "\t" << t << "\t" << glob_tk << endl;
 //      }
 //  
 //   }
+//   flo_file.close();
    
-   
-   delete adv;
-   delete K_inv_x, K_vis_x;
-   delete K_inv_y, K_vis_y;
-   delete K_inv_z, K_vis_z;
+//   delete adv;
+//   delete K_inv_x, K_vis_x;
+//   delete K_inv_y, K_vis_y;
+//   delete K_inv_z, K_vis_z;
 }
 
 
 CNS::~CNS()
 {
-    delete pmesh;
-    delete u_b, f_I_b;
-    delete u_t, k_t, y_t;
-    delete u_sol, f_inv, f_vis, aux_sol, aux_grad ;
-    delete b, b_aux_x, b_aux_y, b_aux_z;
-    delete fes;
-    delete fes_vec;
-    delete fes_op;
-
-    delete face_proj_l, face_proj_r, wts;
+//    delete pmesh;
+//    delete u_b, f_I_b;
+//    delete u_t, k_t, y_t;
+//    delete u_sol, f_inv, f_vis, aux_sol, aux_grad ;
+//    delete b, b_aux_x, b_aux_y, b_aux_z;
+//    delete fes;
+//    delete fes_vec;
+//    delete fes_op;
 
     MPI_Finalize();
 }
@@ -527,19 +627,16 @@ void CNS::Step()
 // Implementation of class FE_Evolution
 FE_Evolution::FE_Evolution(HypreParMatrix &_M, HypreParMatrix &_K_inv_x, HypreParMatrix &_K_inv_y, HypreParMatrix &_K_inv_z, 
                             HypreParMatrix &_K_vis_x, HypreParMatrix &_K_vis_y, HypreParMatrix &_K_vis_z,
+                            HypreParMatrix &_Up_vis_x, HypreParMatrix &_Up_vis_y, HypreParMatrix &_Up_vis_z,
                             ParGridFunction &u_,   ParGridFunction &u_aux_, ParGridFunction &u_grad_, 
                             ParGridFunction &f_I_, ParGridFunction &f_V_,
                             ParLinearForm &_b_aux_x, ParLinearForm &_b_aux_y, ParLinearForm &_b_aux_z, 
-                            ParLinearForm &_b,
-                            SparseMatrix &face_proj_l_, SparseMatrix &face_proj_r_, SparseMatrix &wts_,
-                            Vector &nor_face_)
+                            ParLinearForm &_b)
    : TimeDependentOperator(_b.Size()), M(_M), K_inv_x(_K_inv_x), K_inv_y(_K_inv_y), K_inv_z(_K_inv_z),
                             K_vis_x(_K_vis_x), K_vis_y(_K_vis_y), K_vis_z(_K_vis_z), 
+                            Up_vis_x(_Up_vis_x), Up_vis_y(_Up_vis_y), Up_vis_z(_Up_vis_z), 
                             u(u_), u_aux(u_aux_), u_grad(u_grad_), f_I(f_I_), f_V(f_V_), 
-                            b_aux_x(_b_aux_x), b_aux_y(_b_aux_y), b_aux_z(_b_aux_z), b(_b),
-                            face_proj_l(face_proj_l_), face_proj_r(face_proj_r_), wts(wts_),
-                            nor_face(nor_face_)
-
+                            b_aux_x(_b_aux_x), b_aux_y(_b_aux_y), b_aux_z(_b_aux_z), b(_b)
 {
    M_solver.SetPreconditioner(M_prec);
    M_solver.SetOperator(M);
@@ -549,6 +646,8 @@ FE_Evolution::FE_Evolution(HypreParMatrix &_M, HypreParMatrix &_K_inv_x, HyprePa
    M_solver.SetAbsTol(0.0);
    M_solver.SetMaxIter(10);
    M_solver.SetPrintLevel(0);
+
+   AssembleSharedFaceMatrices(u);
 }
 
 
@@ -561,24 +660,28 @@ void FE_Evolution::Mult(const ParGridFunction &x, ParGridFunction &y) const
     u = x;
     getInvFlux(dim, u, f_I); // To update f_vec
     u.ExchangeFaceNbrData();
+   
+    Vector b_nl(x.Size());
+    getParEulerDGTranspose(u, f_I, b_nl);
     
     getAuxVar(dim, x, u_aux);
     u_aux.ExchangeFaceNbrData();
-
-    b_aux_x *= 0.0;    
-    b_aux_y *= 0.0;    
+    
+    b_aux_x.Assemble();
+    b_aux_y.Assemble();
     if (dim == 3)
-        b_aux_z *= 0.0;
+    {
+        b_aux_z.Assemble();
+    }
+
     getAuxGrad(dim, K_vis_x, K_vis_y, K_vis_z, M_solver, x, 
             b_aux_x, b_aux_y, b_aux_z,
             u_grad);
     getVisFlux(dim, x, u_grad, f_V);
 
-    b.Assemble();
+//    b.Assemble();
+    b.Set(-1, b_nl);
 
-    getEulerDGTranspose(dim, face_proj_l, face_proj_r, 
-        wts, nor_face, u, f_I, b);
-    
     y.SetSize(x.Size()); // Needed since by default ode_init will set it as size of K
 
     Vector y_temp;
@@ -638,6 +741,7 @@ void FE_Evolution::Mult(const ParGridFunction &x, ParGridFunction &y) const
     {
         f_V.GetSubVector(offsets[i], f_sol);
         K_vis_x.Mult(f_sol, f_x);
+        Up_vis_x.Mult(1.0, f_sol, 1.0, f_x);
         y_temp.SetSubVector(offsets[i], f_x);
     }
     y += y_temp;
@@ -646,6 +750,7 @@ void FE_Evolution::Mult(const ParGridFunction &x, ParGridFunction &y) const
     {
         f_V.GetSubVector(offsets[i], f_sol);
         K_vis_y.Mult(f_sol, f_x);
+        Up_vis_y.Mult(1.0, f_sol, 1.0, f_x);
         y_temp.SetSubVector(offsets[i - var_dim], f_x);
     }
     y += y_temp;
@@ -656,6 +761,7 @@ void FE_Evolution::Mult(const ParGridFunction &x, ParGridFunction &y) const
         {
             f_V.GetSubVector(offsets[i], f_sol);
             K_vis_z.Mult(f_sol, f_x);
+            Up_vis_z.Mult(1.0, f_sol, 1.0, f_x);
             y_temp.SetSubVector(offsets[i - 2*var_dim], f_x);
         }
         y += y_temp;
@@ -667,13 +773,464 @@ void FE_Evolution::Mult(const ParGridFunction &x, ParGridFunction &y) const
         M_solver.Mult(f_x, f_x_m);
         y.SetSubVector(offsets[i], f_x_m);
     }
+    
+//    for(int i = 0; i < offset; i++)
+//        cout << i << "\t" << u[i] << "\t" << y[i] << endl;
+
+    if (addSource == true)
+        Source(x, y);  // Add source to y
 }
+
+// Generate matrices for projecting data to faces
+// This should in theory speed up calculations
+//void FE_Evolution::AssembleSharedFaceMatrices(const int glob_nFacePts, ParFiniteElementSpace &fes) 
+void FE_Evolution::AssembleSharedFaceMatrices(const ParGridFunction &x) 
+{
+   ParFiniteElementSpace *fes_temp = x.ParFESpace();
+   ParMesh *pmesh = fes_temp->GetParMesh();
+   MPI_Comm comm              = fes_temp->GetComm();
+
+   int dim     = pmesh->SpaceDimension();
+   int var_dim = dim + 2;
+
+   /////////////////////////////////////////////
+   //Defined only for getting number of face pts
+   DG_Interface_FECollection fec_hdg(order, dim);
+   ParFiniteElementSpace fes_hdg(pmesh, &fec_hdg);
+
+   int glob_nFacePts = fes_hdg.GlobalTrueVSize();
+   /////////////////////////////////////////////
+   
+   ParFiniteElementSpace fes(pmesh, fes_temp->FEColl());
+   fes.ExchangeFaceNbrData();
+
+   const FiniteElement *el1, *el2;
+   FaceElementTransformations *T;
+
+   int ndof1, ndof2;
+   int order;
+
+   double w; // weight
+   double alpha =  -1.0;
+
+   Vector shape1, shape2;
+
+   Array<int> vdofs, vdofs2;
+
+   int dofs       = fes.GetVSize();
+
+   Vector nor(dim);
+
+   int nfaces = pmesh->GetNumFaces(); // Total number of faces on this processor (including shared faces)
+
+   int n_sh_faces = pmesh->GetNSharedFaces(); // Shared faces number
+
+   Array<int> faceCounter(nfaces), facePts(nfaces); // Get face no and num of face points for each face
+   for (int i = 0; i < nfaces; i++)
+   {
+       T = pmesh->GetInteriorFaceTransformations(i);
+
+       if(T != NULL)
+       {
+           el1 = fes.GetFE(T -> Elem1No);
+           el2 = fes.GetFE(T -> Elem2No);
+
+           const IntegrationRule *ir ;
+
+           int order = 2*std::max(el1->GetOrder(), el2->GetOrder());
+       
+           ir = &IntRules.Get(T->FaceGeom, order);
+           
+           facePts[i]   = ir->GetNPoints();
+       } // If loop
+   }
+
+   for (int i = 0; i < n_sh_faces; i++)
+   {
+       T = pmesh->GetSharedFaceTransformations(i);
+ 
+       el1 = fes.GetFE(T -> Elem1No);
+       el2 = fes.GetFaceNbrFE(T -> Elem2No);
+  
+       fes.GetElementVDofs (T -> Elem1No, vdofs);
+       fes.GetFaceNbrElementVDofs (T -> Elem2No, vdofs2);
+
+       const IntegrationRule *ir ;
+
+       int order = 2*std::max(el1->GetOrder(), el2->GetOrder());
+       
+       ir = &IntRules.Get(T->FaceGeom, order);
+       
+       facePts[pmesh->GetSharedFace(i)] = ir->GetNPoints();
+   }
+   int nFacePts = facePts.Sum();
+   
+   nor_face.SetSize(dim*nFacePts); wts.SetSize(nFacePts); 
+
+   faceCounter[0] = facePts[0]; // Running counter for number of face points
+   for (int i = 1; i < nfaces; i++)
+   {
+       faceCounter[i] = faceCounter[i - 1] + facePts[i];   
+   }
+
+   int nbr_size = fes.GetFaceNbrVSize();
+   int loc_size = fes.GetVSize(); 
+
+   SparseMatrix face_proj_l(nFacePts, loc_size + nbr_size); // Second subscript refers to internal dofs and shared dofs
+   SparseMatrix face_proj_r(nFacePts, loc_size + nbr_size);
+   
+   SparseMatrix temp_face(nFacePts, loc_size);
+   face_t_r.Swap(temp_face);
+
+//   double eps = std::numeric_limits<double>::epsilon();
+   double eps = 1E-12; 
+
+   for (int i = 0; i < nfaces; i++)
+   {
+       T = pmesh->GetInteriorFaceTransformations(i);
+
+       if(T != NULL)
+       {
+           fes.GetElementVDofs (T -> Elem1No, vdofs);
+           fes.GetElementVDofs (T -> Elem2No, vdofs2);
+
+           el1 = fes.GetFE(T -> Elem1No);
+           el2 = fes.GetFE(T -> Elem2No);
+
+           const IntegrationRule *ir ;
+
+           int order = 2*std::max(el1->GetOrder(), el2->GetOrder());
+       
+           ir = &IntRules.Get(T->FaceGeom, order);
+           
+           for (int p = 0; p < ir->GetNPoints(); p++)
+           {
+              const IntegrationPoint &ip = ir->IntPoint(p);
+              IntegrationPoint eip1, eip2;
+              T->Loc1.Transform(ip, eip1);
+              T->Loc2.Transform(ip, eip2);
+    
+              T->Face->SetIntPoint(&ip);
+              T->Elem1->SetIntPoint(&eip1);
+              T->Elem2->SetIntPoint(&eip2);
+ 
+              ndof1   = el1->GetDof();
+              ndof2   = el2->GetDof();
+
+              shape1.SetSize(ndof1);
+              shape2.SetSize(ndof2);
+   
+              el1->CalcShape(eip1, shape1);
+              el2->CalcShape(eip2, shape2);
+    
+              for(int j=0; j < shape1.Size(); j++)
+              {
+                  if (std::abs(shape1(j)) < eps )
+                      shape1(j) = 0.0;
+              }
+              for(int j=0; j < shape2.Size(); j++)
+              {
+                  if (std::abs(shape2(j)) < eps )
+                      shape2(j) = 0.0;
+              }
+
+              CalcOrtho(T->Face->Jacobian(), nor);
+
+              int face_coun;
+              if (i == 0)
+                  face_coun = p;
+              else
+                  face_coun = faceCounter[i - 1] + p;
+
+              face_proj_l.SetRow(face_coun, vdofs,  shape1);
+              face_proj_r.SetRow(face_coun, vdofs2, shape2);
+
+              face_t_r.SetRow(face_coun, vdofs2, shape2);
+
+              for(int i=0; i < dim; i++)
+                  nor_face(i*nFacePts + face_coun) = nor(i);
+
+              wts(face_coun) = ip.weight;
+
+         }// p loop 
+
+       } // If loop
+
+   }
+
+   for (int i = 0; i < n_sh_faces; i++)
+   {
+       T = pmesh->GetSharedFaceTransformations(i);
+ 
+       el1 = fes.GetFE(T -> Elem1No);
+       el2 = fes.GetFaceNbrFE(T -> Elem2No);
+  
+       fes.GetElementVDofs        (T -> Elem1No, vdofs);
+       fes.GetFaceNbrElementVDofs (T -> Elem2No, vdofs2);
+   
+       for (int j = 0; j < vdofs2.Size(); j++)
+       {
+           vdofs2[j] += loc_size; // Neighbour dofs start after local dofs       
+       }
+
+       const IntegrationRule *ir ;
+
+       int order = 2*std::max(el1->GetOrder(), el2->GetOrder());
+       
+       ir = &IntRules.Get(T->FaceGeom, order);
+       
+       for (int p = 0; p < ir->GetNPoints(); p++)
+       {
+          const IntegrationPoint &ip = ir->IntPoint(p);
+          IntegrationPoint eip1, eip2;
+          T->Loc1.Transform(ip, eip1);
+          T->Loc2.Transform(ip, eip2);
+    
+          T->Face->SetIntPoint(&ip);
+          T->Elem1->SetIntPoint(&eip1);
+          T->Elem2->SetIntPoint(&eip2);
+ 
+          ndof1   = el1->GetDof();
+          ndof2   = el2->GetDof();
+
+          shape1.SetSize(ndof1);
+          shape2.SetSize(ndof2);
+   
+          el1->CalcShape(eip1, shape1);
+          el2->CalcShape(eip2, shape2);
+    
+          for(int j=0; j < shape1.Size(); j++)
+          {
+              if (std::abs(shape1(j)) < eps )
+                  shape1(j) = 0.0;
+          }
+          for(int j=0; j < shape2.Size(); j++)
+          {
+              if (std::abs(shape2(j)) < eps )
+                  shape2(j) = 0.0;
+          }
+              
+          CalcOrtho(T->Face->Jacobian(), nor);
+
+          int face_coun;
+          int globFaceNo = pmesh->GetSharedFace(i);
+          if (globFaceNo == 0)
+              face_coun = p;
+          else
+              face_coun = faceCounter[globFaceNo - 1] + p;
+
+          face_proj_l.SetRow(face_coun, vdofs,  shape1);
+          face_proj_r.SetRow(face_coun, vdofs2, shape2);
+          
+          for(int i=0; i < dim; i++)
+                  nor_face(i*nFacePts + face_coun) = nor(i);
+
+          wts(face_coun) = ip.weight;
+              
+       } // p loop
+      
+   }
+
+   face_proj_l.Finalize();
+   face_proj_r.Finalize();
+
+   face_t_r.Finalize();
+
+   //Now generate the Hypre matrices
+
+
+   // handle the case when 'a' contains offdiagonal
+   int lvsize = fes.GetVSize();
+   const HYPRE_Int *face_nbr_glob_ldof = fes.GetFaceNbrGlobalDofMap();
+   HYPRE_Int ldof_offset = fes.GetMyDofOffset();
+
+   Array<HYPRE_Int> glob_J_l(face_proj_l.NumNonZeroElems());
+   int *J_l = face_proj_l.GetJ();
+
+   for (int i = 0; i < glob_J_l.Size(); i++)
+   {
+      if (J_l[i] < lvsize)
+      {
+         glob_J_l[i] = J_l[i] + ldof_offset;
+      }
+      else
+      {
+         glob_J_l[i] = face_nbr_glob_ldof[J_l[i] - lvsize];
+      }
+   }
+
+   Array<HYPRE_Int> glob_J_r(face_proj_r.NumNonZeroElems());
+   int *J_r = face_proj_r.GetJ();
+
+   for (int i = 0; i < glob_J_r.Size(); i++)
+   {
+      if (J_r[i] < lvsize)
+      {
+         glob_J_r[i] = J_r[i] + ldof_offset;
+      }
+      else
+      {
+         glob_J_r[i] = face_nbr_glob_ldof[J_r[i] - lvsize];
+      }
+   }
+
+   HYPRE_Int ldof = nFacePts; 
+   Array<HYPRE_Int> dof_off, *offsets[1] = { &dof_off };
+
+   pmesh->GenerateOffsets(1, &ldof, offsets);
+
+   glob_proj_l = new HypreParMatrix(fes.GetComm(), nFacePts, glob_nFacePts,
+                            fes.GlobalVSize(), face_proj_l.GetI(), glob_J_l,
+                            face_proj_l.GetData(), dof_off,
+                            fes.GetDofOffsets());
+
+   glob_proj_r = new HypreParMatrix(fes.GetComm(), nFacePts, glob_nFacePts,
+                            fes.GlobalVSize(), face_proj_r.GetI(), glob_J_r,
+                            face_proj_r.GetData(), dof_off,
+                            fes.GetDofOffsets());
+}
+
+/*
+ * Any source terms that need to be added to the RHS
+ * du/dt + dF/dx = S
+ * For example if we have a forcing term
+ * Since we'll call this at the end of all steps in Mult no Jacobians need be considered
+ */
+void FE_Evolution::Source(const ParGridFunction &x, ParGridFunction &y) const
+{
+    int myid;
+    MPI_Comm_rank(MPI_COMM_WORLD, &myid);
+
+    ParFiniteElementSpace *fes = x.ParFESpace();
+    MPI_Comm comm              = fes->GetComm();
+   
+    double ub, vb, wb, vol;
+    ComputeUb(x, ub, vb, wb, vol);
+    double glob_ub, glob_vol;
+    MPI_Allreduce(&ub,  &glob_ub,  1, MPI_DOUBLE, MPI_SUM, comm); // Get global u_max across processors
+    MPI_Allreduce(&vol, &glob_vol, 1, MPI_DOUBLE, MPI_SUM, comm); // Get global u_max across processors
+
+    ub = glob_ub/glob_vol;
+
+    int dim     = x.Size()/K_inv_x.GetNumRows() - 2;
+    int var_dim = dim + 2;
+
+    int offset  = K_inv_x.GetNumRows();
+   
+    Array<int> offsets[var_dim];
+    for(int i = 0; i < var_dim; i++)
+    {
+        offsets[i].SetSize(offset);
+    }
+
+    for(int j = 0; j < var_dim; j++)
+    {
+        for(int i = 0; i < offset; i++)
+        {
+            offsets[j][i] = j*offset + i ;
+        }
+    }
+
+    Vector s(offset), y_temp(var_dim*offset);
+    for(int i = 0; i < var_dim; i++)
+    {
+        s = 0.0;
+        if (i == 1)
+            s = fx; 
+        else if (i == var_dim - 1)
+            s = fx*ub;
+        y_temp.SetSubVector(offsets[i], s);
+    }
+
+    add(y_temp, y, y);
+}
+
 
 
 CGSolver &FE_Evolution::GetMSolver() 
 {
     return M_solver;
 }
+
+void FE_Evolution::getParEulerDGTranspose(const ParGridFunction &u_sol, const ParGridFunction &f_inv,
+                                          Vector &b_nl) const
+{
+   int var_dim    = u_sol.VectorDim(); 
+   int dim        = var_dim - 2;
+   int n_face_pts = wts.Size();
+   int dofs       = u_sol.Size()/var_dim;
+
+   Array<int> offsets[dim*var_dim], offsets_face[dim*var_dim];
+   for(int i = 0; i < dim*var_dim; i++)
+   {
+       offsets_face[i].SetSize(n_face_pts);
+       offsets     [i].SetSize(dofs);
+   }
+   for(int j = 0; j < dim*var_dim; j++)
+   {
+       for(int i = 0; i < n_face_pts; i++)
+       {
+           offsets_face[j][i] = j*n_face_pts + i ;
+       }
+       for(int i = 0; i < dofs; i++)
+       {
+           offsets     [j][i] = j*dofs + i ;
+       }
+   }
+
+   Vector u_l(var_dim*n_face_pts), u_r(var_dim*n_face_pts);
+   Vector u_f_sub(n_face_pts), u_sub(dofs);
+   for(int j = 0; j < var_dim; j++)
+   {
+       u_sol.GetSubVector(offsets[j], u_sub);
+
+       glob_proj_l->Mult(u_sub, u_f_sub);
+       u_l.SetSubVector(offsets_face[j], u_f_sub);
+       
+       glob_proj_r->Mult(u_sub, u_f_sub);
+       u_r.SetSubVector(offsets_face[j], u_f_sub);
+   }
+   Vector f_l(dim*var_dim*n_face_pts), f_r(dim*var_dim*n_face_pts);
+   for(int j = 0; j < dim*var_dim; j++)
+   {
+       f_inv.GetSubVector(offsets[j], u_sub);
+
+       glob_proj_l->Mult(u_sub, u_f_sub);
+       f_l.SetSubVector(offsets_face[j], u_f_sub);
+
+       glob_proj_r->Mult(u_sub, u_f_sub);
+       f_r.SetSubVector(offsets_face[j], u_f_sub);
+   }
+       
+   Vector f_com(dim*var_dim*n_face_pts);
+   Vector f_left(dim*var_dim*n_face_pts), f_rght(dim*var_dim*n_face_pts) ;
+   getVectorLFFlux(R_gas, gamm, dim, u_l, u_r, nor_face, f_com);
+   subtract(f_com, f_l, f_left);
+   subtract(f_com, f_r, f_rght);
+
+   Vector face_f_l(var_dim*n_face_pts), face_f_r(var_dim*n_face_pts);
+   getFaceDotNorm(dim, f_left, nor_face, face_f_l);
+   getFaceDotNorm(dim, f_rght, nor_face, face_f_r);
+
+   Vector f_sub(n_face_pts), temp1(dofs), temp2(dofs), f_dofs(dofs);
+   for(int j = 0; j < var_dim; j++)
+   {
+       face_f_l.GetSubVector(offsets_face[j], u_f_sub);
+       for(int pt = 0;  pt < n_face_pts; pt++)
+           f_sub(pt) = wts(pt)*u_f_sub(pt);
+       glob_proj_l->MultTranspose(f_sub, temp1);
+
+       face_f_r.GetSubVector(offsets_face[j], u_f_sub);
+       for(int pt = 0;  pt < n_face_pts; pt++)
+           f_sub(pt) = wts(pt)*u_f_sub(pt);
+       face_t_r.MultTranspose(f_sub, temp2);
+
+       subtract(temp1, temp2, f_dofs);
+
+       b_nl.SetSubVector(offsets[j], f_dofs);
+   }
+}
+
 
 
 // Get max signal speed 
@@ -691,7 +1248,7 @@ double getUMax(int dim, const Vector &u)
     {
         rho = u[j];
     
-        for(int i = 0; i < dim; i++) vel[i] = u[i*offset + j]/rho;
+        for(int i = 0; i < dim; i++) vel[i] = u[(1 + i)*offset + j]/rho;
 
         double v_sq =  0;
         for(int i = 0; i < dim; i++)
@@ -756,7 +1313,7 @@ void getInvFlux(int dim, const Vector &u, Vector &f)
 
             for (int k = 0; k < dim ; k++)
             {
-                f(j*var_dim*offset + (k + 1)*offset + i)     = rho_vel[j](i)*vel[k]; //rho*u*u + p    
+                f(j*var_dim*offset + (k + 1)*offset + i)     = rho_vel[j][i]*vel[k]; //rho*u*u + p    
             }
             f(j*var_dim*offset + (j + 1)*offset + i)        += pres; 
 
@@ -893,7 +1450,7 @@ void getVisFlux(int dim, const Vector &u, const Vector &aux_grad, Vector &f)
         }
     }
 
-    Vector rho(offset), rho_u1(offset), rho_u2(offset), E(offset);
+    Vector rho(offset), E(offset);
     u.GetSubVector(offsets[0],           rho   );
     u.GetSubVector(offsets[var_dim - 1],      E);
 
@@ -947,560 +1504,78 @@ void getVisFlux(int dim, const Vector &u, const Vector &aux_grad, Vector &f)
 
 
 
+
 //  Initialize variables coefficient
-void init_function(const Vector &x, Vector &v)
+void init_function(const Vector &x, Vector &y)
 {
-   //Space dimensions 
+    //Space dimensions 
    int dim = x.Size();
 
-   if (dim == 2)
+   double radius = 0, Minf = 0, beta = 0;
+   if (problem == 1)
    {
-       double rho, u1, u2, p;
-
-       if (problem == 0) // Smooth periodic density. Exact solution to Euler 
-       {
-           rho =  1.0 + 0.2*sin(M_PI*(x(0) + x(1)));
-           p   =  1.0; 
-           u1  =  1.0;
-           u2  =  1.0;
-       }
-       else if (problem == 1) // Taylor Green Vortex; exact solution of incompressible NS
-       {
-           rho =  1.0;
-           p   =  100 + (rho/4.0)*(cos(2.0*M_PI*x(0)) + cos(2.0*M_PI*x(1)));
-           u1  =      sin(M_PI*x(0))*cos(M_PI*x(1));
-           u2  = -1.0*cos(M_PI*x(0))*sin(M_PI*x(1));
-       }
-       else if (problem == 2) // Isentropic vortex; exact solution for Euler
-       {
-           double T, M;
-           double beta, omega, f, du, dv, dT;
-    
-           beta = 5;
-    
-           f     = (pow(x(0), 2) + pow(x(1), 2));
-           omega = (beta/(2*M_PI))*exp(0.5*(1 - f));
-           du    = -x(1)*omega;
-           dv    =  x(0)*omega;
-           dT    = - (gamm - 1)*beta*beta/(8*gamm*M_PI*M_PI) * exp(1 - f);
-    
-           u1    = 1 + du;
-           u2    = dv;
-           T     = 1 + dT;
-           rho   = pow(T, 1/(gamm - 1));
-           p     = rho*R_gas*T;
-
-       }
-       
-       double v_sq = pow(u1, 2) + pow(u2, 2);
-    
-       v(0) = rho;                     //rho
-       v(1) = rho * u1;                //rho * u
-       v(2) = rho * u2;                //rho * v
-       v(3) = p/(gamm - 1) + 0.5*rho*v_sq;
+      // "Fast vortex"
+      radius = 0.2;
+      Minf = 0.5;
+      beta = 1. / 5.;
    }
-   else if (dim == 3)
+   else if (problem == 2)
    {
-       double rho, u1, u2, u3, p;
-
-       if (problem == 0) // Smooth periodic density. Exact solution to Euler 
-       {
-           rho =  1.0 + 0.2*sin(M_PI*(x(0) + x(1) + x(3)));
-           p   =  1.0; 
-           u1  =  1.0;
-           u2  =  1.0;
-           u3  =  1.0;
-       }
-       else if (problem == 1) // Taylor Green Vortex; exact solution of incompressible NS
-       {
-           rho =  1.0;
-           p   =  100 + (rho/16.0)*(cos(2.0*x(0)) + cos(2.0*x(1)))*(cos(2.0*x(2) + 2));
-           u1  =      sin(x(0))*cos(x(1))*cos(x(2));
-           u2  = -1.0*cos(x(0))*sin(x(1))*cos(x(2));
-           u3  =  0.0;
-       }
-       else if (problem == 2) // Isentropic vortex; exact solution for Euler
-       {
-           double T, M;
-           double beta, omega, f, du, dv, dT;
-    
-           beta = 5;
-    
-           f     = (pow(x(0), 2) + pow(x(1), 2));
-           omega = (beta/(2*M_PI))*exp(0.5*(1 - f));
-           du    = -x(1)*omega;
-           dv    =  x(0)*omega;
-           dT    = - (gamm - 1)*beta*beta/(8*gamm*M_PI*M_PI) * exp(1 - f);
-    
-           u1    = 1 + du;
-           u2    = dv;
-           u3    = 0;
-           T     = 1 + dT;
-           rho   = pow(T, 1/(gamm - 1));
-           p     = rho*R_gas*T;
-       }
-       
- 
-
-       double v_sq = pow(u1, 2) + pow(u2, 2) + pow(u3, 2);
-    
-       v(0) = rho;                     //rho
-       v(1) = rho * u1;                //rho * u
-       v(2) = rho * u2;                //rho * v
-       v(3) = rho * u3;                //rho * v
-       v(4) = p/(gamm - 1) + 0.5*rho*v_sq;
+      // "Slow vortex"
+      radius = 0.2;
+      Minf = 0.05;
+      beta = 1. / 50.;
+   }
+   else
+   {
+      mfem_error("Cannot recognize problem."
+                 "Options are: 1 - fast vortex, 2 - slow vortex");
    }
 
-}
+   const double xc = 0.0, yc = 0.0;
 
-void char_bnd_cnd(const Vector &x, Vector &v)
-{
-   //Space dimensions 
-   int dim = x.Size();
+   // Nice units
+   const double vel_inf = 1.;
+   const double den_inf = 1.;
 
-   if (dim == 2)
-   {
-       double rho, u1, u2, p;
-       rho = 1;
-       u1  = 3.0924; u2 = 0.2162; 
-       p   = 172.2;
-    
-       double v_sq = pow(u1, 2) + pow(u2, 2);
-    
-       v(0) = rho;                     //rho
-       v(1) = rho * u1;                //rho * u
-       v(2) = rho * u2;                //rho * v
-       v(3) = p/(gamm - 1) + 0.5*rho*v_sq;
-   }
-   else if (dim == 3)
-   {
-       double rho, u1, u2, u3, p;
-       rho = 1;
-       u1  = 3.0924; u2 = 0.2162; u3 = 0.0;
-       p   =172.2;
-    
-       double v_sq = pow(u1, 2) + pow(u2, 2) + pow(u3, 2);
-    
-       v(0) = rho;                     //rho
-       v(1) = rho * u1;                //rho * u
-       v(2) = rho * u2;                //rho * v
-       v(3) = rho * u3;                //rho * w
-       v(4) = p/(gamm - 1) + 0.5*rho*v_sq;
-   }
+   // Derive remainder of background state from this and Minf
+   const double pres_inf = (den_inf / gamm) * (vel_inf / Minf) *
+                           (vel_inf / Minf);
+   const double temp_inf = pres_inf / (den_inf * R_gas);
+
+   double r2rad = 0.0;
+   r2rad += (x(0) - xc) * (x(0) - xc);
+   r2rad += (x(1) - yc) * (x(1) - yc);
+   r2rad /= (radius * radius);
+
+   const double shrinv1 = 1.0 / (gamm - 1.);
+
+   const double velX = vel_inf * (1 - beta * (x(1) - yc) / radius * exp(
+                                     -0.5 * r2rad));
+   const double velY = vel_inf * beta * (x(0) - xc) / radius * exp(-0.5 * r2rad);
+   const double vel2 = velX * velX + velY * velY;
+
+   const double specific_heat = R_gas * gamm * shrinv1;
+   const double temp = temp_inf - 0.5 * (vel_inf * beta) *
+                       (vel_inf * beta) / specific_heat * exp(-r2rad);
+
+   const double den = den_inf * pow(temp/temp_inf, shrinv1);
+   const double pres = den * R_gas * temp;
+   const double energy = shrinv1 * pres / den + 0.5 * vel2;
+
+   y(0) = den;
+   y(1) = den * velX;
+   y(2) = den * velY;
+   y(3) = den * energy;
 
 }
 
 
-void wall_bnd_cnd(const Vector &x, Vector &v)
-{
-   //Space dimensions 
-   int dim = x.Size();
-
-   if (dim == 2)
-   {
-       v(0) = 0.0;  // x velocity   
-       v(1) = 0.0;  // y velocity 
-       v(2) = 0.6;  // Temp 
-   }
-   else if (dim == 3)
-   {
-       v(0) = 0.0;  // x velocity   
-       v(1) = 0.0;  // y velocity 
-       v(2) = 0.0;  // z velocity 
-       v(3) = 0.6;  // Temp 
-   }
-}
-
-void wall_adi_bnd_cnd(const Vector &x, Vector &v)
-{
-   //Space dimensions 
-   int dim = x.Size();
-
-   if (dim == 2)
-   {
-       v(0) = 0.0;  // x velocity   
-       v(1) = 0.0;  // y velocity 
-   }
-   if (dim == 3)
-   {
-       v(0) = 0.0;  // x velocity   
-       v(1) = 0.0;  // y velocity 
-       v(2) = 0.0;  // y velocity 
-   }
-
-}
-
-
-
-void getFields(const GridFunction &u_sol, const Vector &aux_grad, Vector &rho, Vector &M,
-                Vector &p, Vector &vort, Vector &q)
-{
-
-    int vDim    = u_sol.VectorDim();
-    int dofs    = u_sol.Size()/vDim;
-    int dim     = vDim - 2;
-
-    int aux_dim = vDim - 1;
-
-    double u_grad[dim][dim], omega_sq, s_sq;
-
-    for (int i = 0; i < dofs; i++)
-    {
-        rho[i]   = u_sol[         i];        
-        double vel[dim]; 
-        for (int j = 0; j < dim; j++)
-        {
-            vel[j] =  u_sol[(1 + j)*dofs + i]/rho[i];        
-        }
-        double E  = u_sol[(vDim - 1)*dofs + i];        
-
-        double v_sq = 0.0;    
-        for (int j = 0; j < dim; j++)
-        {
-            v_sq += pow(vel[j], 2); 
-        }
-
-        p[i]     = (E - 0.5*rho[i]*v_sq)*(gamm - 1);
-
-        M[i]     = sqrt(v_sq)/sqrt(gamm*p[i]/rho[i]);
-        
-        for (int j = 0; j < dim; j++)
-        {
-            for (int k = 0; k < dim; k++)
-            {
-                u_grad[j][k] = aux_grad[(k*aux_dim + j  )*dofs + i];
-            }
-        }
-    
-        if (dim == 2)
-        {
-           vort[i] = u_grad[1][0] - u_grad[0][1];     
-        }
-        else if (dim == 3)
-        {
-            double w_x  = u_grad[2][1] - u_grad[1][2];
-            double w_y  = u_grad[0][2] - u_grad[2][0];
-            double w_z  = u_grad[1][0] - u_grad[0][1];
-            double w_sq = pow(w_x, 2) + pow(w_y, 2) + pow(w_z, 2); 
-
-            vort[i]   = sqrt(w_sq);
-        }
-        if (dim == 2)
-        {
-            double s_z      = u_grad[1][0] + u_grad[0][1];     
-                   s_sq     = pow(s_z, 2); 
-                   omega_sq = s_sq; // q criterion makes sense in 3D only
-        }
-        else if (dim == 3)
-        {
-            double omega_x  = 0.5*(u_grad[2][1] - u_grad[1][2]);
-            double omega_y  = 0.5*(u_grad[0][2] - u_grad[2][0]);
-            double omega_z  = 0.5*(u_grad[1][0] - u_grad[0][1]);
-                   omega_sq = 2*(pow(omega_x, 2) + pow(omega_y, 2) + pow(omega_z, 2)); 
-
-            double s_23  = 0.5*(u_grad[2][1] + u_grad[1][2]);
-            double s_13  = 0.5*(u_grad[0][2] + u_grad[2][0]);
-            double s_12  = 0.5*(u_grad[1][0] + u_grad[0][1]);
-
-            double s_11  = u_grad[0][0]; 
-            double s_22  = u_grad[1][1]; 
-            double s_33  = u_grad[2][2]; 
-
-                   s_sq = 2*(pow(s_12, 2) + pow(s_13, 2) + pow(s_23, 2)) + s_11*s_11 + s_22*s_22 + s_33*s_33; 
-        }
-            
-        q[i]      = 0.5*(omega_sq - s_sq);
-    }
-}
-
-
-
-
-void postProcess(Mesh &mesh, GridFunction &u_sol, GridFunction &aux_grad,
-                int cycle, double time)
-{
-   int dim     = mesh.Dimension();
-   int var_dim = dim + 2;
-
-   DG_FECollection fec(order , dim);
-   FiniteElementSpace fes_post(&mesh, &fec, var_dim);
-   FiniteElementSpace fes_post_grad(&mesh, &fec, (dim+1)*dim);
-
-   GridFunction u_post(&fes_post);
-   u_post.GetValuesFrom(u_sol); // Create a temp variable to get the previous space solution
- 
-   GridFunction aux_grad_post(&fes_post_grad);
-   aux_grad_post.GetValuesFrom(aux_grad); // Create a temp variable to get the previous space solution
-
-   VisItDataCollection dc("CNS", &mesh);
-   dc.SetPrecision(8);
- 
-   FiniteElementSpace fes_fields(&mesh, &fec);
-   GridFunction rho(&fes_fields);
-   GridFunction M(&fes_fields);
-   GridFunction p(&fes_fields);
-   GridFunction vort(&fes_fields);
-   GridFunction q(&fes_fields);
-
-   dc.RegisterField("rho", &rho);
-   dc.RegisterField("M", &M);
-   dc.RegisterField("p", &p);
-   dc.RegisterField("vort", &vort);
-   dc.RegisterField("q_criterion", &q);
-
-   getFields(u_post, aux_grad_post, rho, M, p, vort, q);
-
-   dc.SetCycle(cycle);
-   dc.SetTime(time);
-   dc.Save();
-  
-}
-
-
-void ComputeLift(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, GridFunction &f_vis_D, 
-                    const Array<int> &bdr, const double gamm, Vector &force)
-{
-   force = 0.0; 
-
-   const FiniteElement *el;
-   FaceElementTransformations *T;
-
-   int dim;
-   Vector nor;
-
-   Vector vals, vis_vals;
-   
-   for (int i = 0; i < fes.GetNBE(); i++)
-   {
-       const int bdr_attr = mesh.GetBdrAttribute(i);
-
-       if (bdr[bdr_attr-1] == 0) { continue; } // Skip over non-active boundaries
-
-       T = mesh.GetBdrFaceTransformations(i);
- 
-       el = fes.GetFE(T -> Elem1No);
-   
-       dim = el->GetDim();
-      
-       const IntegrationRule *ir ;
-       int order;
-       
-       order = T->Elem1->OrderW() + 2*el->GetOrder();
-       
-       if (el->Space() == FunctionSpace::Pk)
-       {
-          order++;
-       }
-       ir = &IntRules.Get(T->FaceGeom, order);
-
-       for (int p = 0; p < ir->GetNPoints(); p++)
-       {
-          const IntegrationPoint &ip = ir->IntPoint(p);
-          IntegrationPoint eip;
-          T->Loc1.Transform(ip, eip);
-    
-          T->Face->SetIntPoint(&ip);
-          T->Elem1->SetIntPoint(&eip);
-
-          nor.SetSize(dim);          
-          if (dim == 1)
-          {
-             nor(0) = 2*eip.x - 1.0;
-          }
-          else
-          {
-             CalcOrtho(T->Face->Jacobian(), nor);
-          }
- 
-          Vector nor_dim(dim);
-          double nor_l2 = nor.Norml2();
-          nor_dim.Set(1/nor_l2, nor);
-     
-          uD.GetVectorValue(T->Elem1No, eip, vals);
-
-          Vector vel(dim);    
-          double rho = vals(0);
-          double v_sq  = 0.0;
-          for (int j = 0; j < dim; j++)
-          {
-              vel(j) = vals(1 + j)/rho;      
-              v_sq    += pow(vel(j), 2);
-          }
-          double pres = (gamm - 1)*(vals(dim + 1) - 0.5*rho*v_sq);
-
-          // nor is measure(face) so area is included
-          // The normal is always going into the boundary element
-          // F = -p n_j with n_j going out
-          force(0) += pres*nor(0)*ip.weight; // Quadrature of pressure 
-          force(1) += pres*nor(1)*ip.weight; // Quadrature of pressure 
-
-          f_vis_D.GetVectorValue(T->Elem1No, eip, vis_vals);
-        
-          double tau[dim][dim];
-          for(int i = 0; i < dim ; i++)
-              for(int j = 0; j < dim ; j++) tau[i][j] = vis_vals[i*(dim + 2) + 1 + j];
-
-
-          // The normal is always going into the boundary element
-          // F = sigma_{ij}n_j with n_j going out
-          for(int i = 0; i < dim ; i++)
-          {
-              force(0) -= tau[0][i]*nor(i)*ip.weight; // Quadrature of shear stress 
-              force(1) -= tau[1][i]*nor(i)*ip.weight; // Quadrature of shear stress 
-          }
-       } // p loop
-   } // NBE loop
-}
-
-
-int GetFacePtsSize(Mesh &mesh, FiniteElementSpace &fes)
-{
-   const FiniteElement *el1, *el2;
-   FaceElementTransformations *T;
-
-   int dim, var_dim, ndof1, ndof2;
-   int order;
-
-   double w; // weight
-   double alpha =  -1.0;
-
-   Vector shape1, shape2;
-
-   Vector nor;
-   Array<int> vdofs, vdofs2;
-
-   int n_face_pts = 0;
-   for (int i = 0; i < mesh.GetNumFaces(); i++)
-   {
-       T = mesh.GetInteriorFaceTransformations(i);
- 
-       el1 = fes.GetFE(T -> Elem1No);
-       el2 = fes.GetFE(T -> Elem2No);
-
-       dim     = el1->GetDim();
-       var_dim = dim + 2;
-
-       const IntegrationRule *ir ;
-
-       order = (std::min(T->Elem1->OrderW(), T->Elem2->OrderW()) +
-               2*std::max(el1->GetOrder(), el2->GetOrder()));
-       
-       ir = &IntRules.Get(T->FaceGeom, order);
-
-       n_face_pts += ir->GetNPoints(); 
-   }
-   return n_face_pts;
-}
-
-
-void AssembleFaceMatrices(Mesh &mesh, FiniteElementSpace &fes, FiniteElementSpace &fes_var,
-        Vector &u, Vector &f,
-        SparseMatrix &face_project_l, SparseMatrix &face_project_r, SparseMatrix &wts,
-        Vector &nor_face)
-
-{
-   const FiniteElement *el1, *el2;
-   FaceElementTransformations *T;
-
-   int dim, var_dim, ndof1, ndof2;
-   int order;
-
-   double w; // weight
-   double alpha =  -1.0;
-
-   Vector shape1, shape2;
-
-   Vector nor;
-   Array<int> vdofs, vdofs2;
-
-   int n_face_pts = wts.Size();
-   int dofs       = fes.GetVSize();
-
-   dim     = mesh.SpaceDimension();
-   var_dim = dim + 2;
-
-   int face_coun = 0;
-   for (int i = 0; i < mesh.GetNumFaces(); i++)
-   {
-       T = mesh.GetInteriorFaceTransformations(i);
-
-       fes.GetElementVDofs (T -> Elem1No, vdofs);
-       fes.GetElementVDofs (T -> Elem2No, vdofs2);
- 
-       el1 = fes.GetFE(T -> Elem1No);
-       el2 = fes.GetFE(T -> Elem2No);
-
-       ndof1   = el1->GetDof();
-       ndof2   = el2->GetDof();
-
-       shape1.SetSize(ndof1);
-       shape2.SetSize(ndof2);
-       
-       nor.SetSize(dim);
-
-       const IntegrationRule *ir ;
-
-       order = (std::min(T->Elem1->OrderW(), T->Elem2->OrderW()) +
-               2*std::max(el1->GetOrder(), el2->GetOrder()));
-       
-       ir = &IntRules.Get(T->FaceGeom, order);
-
-       for (int p = 0; p < ir->GetNPoints(); p++)
-       {
-          const IntegrationPoint &ip = ir->IntPoint(p);
-          IntegrationPoint eip1, eip2;
-          T->Loc1.Transform(ip, eip1);
-          T->Loc2.Transform(ip, eip2);
-
-          T->Face->SetIntPoint(&ip);
-          T->Elem1->SetIntPoint(&eip1);
-          T->Elem2->SetIntPoint(&eip2);
-
-          el1->CalcShape(eip1, shape1);
-          el2->CalcShape(eip2, shape2);
-
-          for(int i=0; i < shape1.Size(); i++)
-          {
-              if (std::abs(shape1(i)) < std::numeric_limits<double>::epsilon() )
-                  shape1(i) = 0.0;
-          }
-          for(int i=0; i < shape2.Size(); i++)
-          {
-              if (std::abs(shape2(i)) < std::numeric_limits<double>::epsilon() )
-                  shape2(i) = 0.0;
-          }
-
-          face_project_l.SetRow(face_coun, vdofs,  shape1);
-          face_project_r.SetRow(face_coun, vdofs2, shape2);
-
-          w = ip.weight * alpha; 
-          wts.Set(face_coun, face_coun, w);
-
-          CalcOrtho(T->Face->Jacobian(), nor);
-          for(int i=0; i < dim; i++)
-          {
-              nor_face(i*n_face_pts + face_coun) = nor(i);          
-          }
-
-          face_coun++;
-
-     }// p loop 
-
-   } // NumFaces loop
-
-   face_project_l.Finalize();
-   face_project_r.Finalize();
-   wts.Finalize();
-
-}
-
-void getEulerDGTranspose(int dim, SparseMatrix &face_project_l, SparseMatrix &face_project_r, 
-        SparseMatrix &wts, Vector &nor_face,
-        const Vector &u, const Vector &f, Vector &b)
+void CNS::getParEulerDGTranspose()
 {
    int var_dim    = dim + 2;
-   int n_face_pts = face_project_l.Size();
-   int dofs       = u.Size()/var_dim;
+   int n_face_pts = wts.Size();
+   int dofs       = u_sol->Size()/var_dim;
 
    Array<int> offsets[dim*var_dim], offsets_face[dim*var_dim];
    for(int i = 0; i < dim*var_dim; i++)
@@ -1524,50 +1599,55 @@ void getEulerDGTranspose(int dim, SparseMatrix &face_project_l, SparseMatrix &fa
    Vector u_f_sub(n_face_pts), u_sub(dofs);
    for(int j = 0; j < var_dim; j++)
    {
-       u.GetSubVector(offsets[j], u_sub);
+       u_sol->GetSubVector(offsets[j], u_sub);
 
-       face_project_l.Mult(u_sub, u_f_sub);
+       glob_proj_l->Mult(u_sub, u_f_sub);
        u_l.SetSubVector(offsets_face[j], u_f_sub);
-
-       face_project_r.Mult(u_sub, u_f_sub);
+       
+       glob_proj_r->Mult(u_sub, u_f_sub);
        u_r.SetSubVector(offsets_face[j], u_f_sub);
    }
    Vector f_l(dim*var_dim*n_face_pts), f_r(dim*var_dim*n_face_pts);
    for(int j = 0; j < dim*var_dim; j++)
    {
-       f.GetSubVector(offsets[j], u_sub);
+       f_inv->GetSubVector(offsets[j], u_sub);
 
-       face_project_l.Mult(u_sub, u_f_sub);
+       glob_proj_l->Mult(u_sub, u_f_sub);
        f_l.SetSubVector(offsets_face[j], u_f_sub);
 
-       face_project_r.Mult(u_sub, u_f_sub);
+       glob_proj_r->Mult(u_sub, u_f_sub);
        f_r.SetSubVector(offsets_face[j], u_f_sub);
    }
+       
    Vector f_com(dim*var_dim*n_face_pts);
+   Vector f_left(dim*var_dim*n_face_pts), f_rght(dim*var_dim*n_face_pts) ;
    getVectorLFFlux(R_gas, gamm, dim, u_l, u_r, nor_face, f_com);
-   subtract(f_com, f_l, f_l);
-   subtract(f_com, f_r, f_r);
-   
-   Vector face_f_l(var_dim*n_face_pts), face_f_r(var_dim*n_face_pts);
-   getFaceDotNorm(dim, f_l, nor_face, face_f_l);
-   getFaceDotNorm(dim, f_r, nor_face, face_f_r);
+   subtract(f_com, f_l, f_left);
+   subtract(f_com, f_r, f_rght);
 
-   Vector f_sub(n_face_pts), f_dofs(dofs);
+   Vector face_f_l(var_dim*n_face_pts), face_f_r(var_dim*n_face_pts);
+   getFaceDotNorm(dim, f_left, nor_face, face_f_l);
+   getFaceDotNorm(dim, f_rght, nor_face, face_f_r);
+
+   Vector b_face(dofs*var_dim);
+   Vector f_sub(n_face_pts), temp1(dofs), temp2(dofs), f_dofs(dofs);
    for(int j = 0; j < var_dim; j++)
    {
        face_f_l.GetSubVector(offsets_face[j], u_f_sub);
-       wts.Mult(u_f_sub, f_sub);
-       face_project_l.MultTranspose(f_sub, f_dofs);
+       for(int pt = 0;  pt < n_face_pts; pt++)
+           f_sub(pt) = wts(pt)*u_f_sub(pt);
+       glob_proj_l->MultTranspose(f_sub, temp1);
 
        face_f_r.GetSubVector(offsets_face[j], u_f_sub);
-       wts.Mult(u_f_sub, f_sub);
-       face_project_r.AddMultTranspose(f_sub, f_dofs, -1.0);
+       for(int pt = 0;  pt < n_face_pts; pt++)
+           f_sub(pt) = wts(pt)*u_f_sub(pt);
+       face_t_r.MultTranspose(f_sub, temp2);
 
-       b.SetSubVector(offsets[j], f_dofs);
+       subtract(temp1, temp2, f_dofs);
+
+       b_face.SetSubVector(offsets[j], f_dofs);
    }
 }
-
-
 
 
 /*
@@ -1595,7 +1675,7 @@ void getVectorLFFlux(const double R, const double gamm, const int dim,
     Vector nor_in(dim), nor_dim(dim);
     double nor_l2;
 
-    double vnl, vnr;
+    double vsl, vsr;
     double u_max;
     for(int p = 0; p < num_pts; p++)
     {
@@ -1638,14 +1718,9 @@ void getVectorLFFlux(const double R, const double gamm, const int dim,
         nor_l2 = nor_in.Norml2();
         nor_dim.Set(1/nor_l2, nor_in);
 
-        vnl   = 0.0; vnr = 0.0;
-        for (int i = 0; i < dim; i++)
-        {
-            vnl += vel_L[i]*nor_dim(i); 
-            vnr += vel_R[i]*nor_dim(i); 
-        }
+        vsl   = sqrt(vel_sq_L); vsr = sqrt(vel_sq_R);
 
-        u_max = std::max(a_L + std::abs(vnl), a_R + std::abs(vnr));
+        u_max = std::max(a_L + std::abs(vsl), a_R + std::abs(vsr));
 
         for (int i = 0; i < dim; i++)
         {
@@ -1666,14 +1741,15 @@ void getFaceDotNorm(int dim, const Vector &f, const Vector &nor_face, Vector &fa
     int num_pts = f.Size()/(dim*var_dim);
 
     face_f = 0.0;
-    for(int p = 0; p < num_pts; p++)
+    for(int i = 0; i < dim; i++)
     {
-        for(int i = 0; i < dim; i++)
+        for(int j = 0; j < var_dim; j++)
         {
-            for(int j = 0; j < var_dim; j++)
+            for(int p = 0; p < num_pts; p++)
             {
                 face_f(j*num_pts + p) +=  f((i*var_dim + j)*num_pts + p)*nor_face(i*num_pts + p);
             }
         }
     }
 }
+
