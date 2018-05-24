@@ -2765,8 +2765,8 @@ void DG_CNS_Vis_Adiabatic_Integrator::AssembleRHSElementVect(
 
       for (int i = 0; i < dim; i++)
       {
-           aux2_dir[i*aux_dim + aux_dim - 1] -= 2*T_dot_n*nor_dim(i); // T_x = T_x - 2*T_x.n
-//           aux2_dir[i*aux_dim + aux_dim - 1] = 0.0; // T_x = 0.0 
+//           aux2_dir[i*aux_dim + aux_dim - 1] -= 2*T_dot_n*nor_dim(i); // T_x = T_x - 2*T_x.n
+           aux2_dir[i*aux_dim + aux_dim - 1] = 0.0; // T_x = 0.0 
       }
 
 //      if ((Tr.Elem1No == 44) && (p == 0))
