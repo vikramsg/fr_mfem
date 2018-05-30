@@ -182,6 +182,7 @@ public:
    inline Ordering::Type GetOrdering() const { return ordering; }
 
    const FiniteElementCollection *FEColl() const { return fec; }
+   VarFiniteElementCollection *VFEColl() const { return vfec; }
 
    int GetNVDofs() const { return nvdofs; }
    int GetNEDofs() const { return nedofs; }
