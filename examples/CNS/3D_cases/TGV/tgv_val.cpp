@@ -604,6 +604,9 @@ void FE_Evolution::Mult(const ParGridFunction &x, ParGridFunction &y) const
         b_aux_z.Assemble();
     }
 
+    b_aux_x *= 0.0;
+    b_aux_y *= 0.0;
+    b_aux_z *= 0.0;
 
     getAuxGrad(dim, K_vis_x, K_vis_y, K_vis_z, M_solver, x, 
             b_aux_x, b_aux_y, b_aux_z,
