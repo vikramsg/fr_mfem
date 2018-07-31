@@ -1890,11 +1890,14 @@ void getKGSplitDx(int dim,
 
         getSparseMat(vel[0])    .Mult(rho_vel_dx[1], temp1);
         getSparseMat(rho_vel[1]).Mult(vel_dx[0],     temp2);
+        
+        temp += temp1; temp += temp2;
 
-        temp1 += temp2;
-        temp1 *= 2.;
+        getSparseMat(vel[1])    .Mult(rho_vel_dx[0], temp1);
+        getSparseMat(rho_vel[0]).Mult(vel_dx[1],     temp2);
+        
+        temp += temp1; temp += temp2;
 
-        temp  += temp1;
         temp  *= 0.25;
         
         fx.AddElementVector(offsets[1], temp );
@@ -2018,11 +2021,14 @@ void getKGSplitDx(int dim,
 
         getSparseMat(vel[0])    .Mult(rho_vel_dx[2], temp1);
         getSparseMat(rho_vel[2]).Mult(vel_dx[0],     temp2);
+        
+        temp += temp1; temp += temp2;
 
-        temp1 += temp2;
-        temp1 *= 2.;
+        getSparseMat(vel[2])    .Mult(rho_vel_dx[0], temp1);
+        getSparseMat(rho_vel[0]).Mult(vel_dx[2],     temp2);
+        
+        temp += temp1; temp += temp2;
 
-        temp  += temp1;
         temp  *= 0.25;
         
         fx.AddElementVector(offsets[1], temp);
