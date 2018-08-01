@@ -1772,7 +1772,7 @@ void init_function(const Vector &x, Vector &v)
 
        a_inf  = std::sqrt(gamm*p_inf/rho_inf);
 
-       u1     = M_inf*a_inf*cos(M_PI*aoa/180.); u2 = M_inf*a_inf*cos(M_PI*aoa/180.); u3 = 0.0;
+       u1     = M_inf*a_inf*cos(M_PI*aoa/180.); u2 = M_inf*a_inf*sin(M_PI*aoa/180.); u3 = 0.0;
     
        double v_sq = pow(u1, 2) + pow(u2, 2) + pow(u3, 2);
     
@@ -1792,7 +1792,7 @@ void init_function(const Vector &x, Vector &v)
 
        a_inf  = std::sqrt(gamm*p_inf/rho_inf);
 
-       u1     = M_inf*a_inf*cos(M_PI*aoa/180.); u2 = M_inf*a_inf*cos(M_PI*aoa/180.); u3 = 0.0;
+       u1     = M_inf*a_inf*cos(M_PI*aoa/180.); u2 = M_inf*a_inf*sin(M_PI*aoa/180.); u3 = 0.0;
 
        double v_sq = pow(u1, 2) + pow(u2, 2);
     
@@ -1842,7 +1842,7 @@ void char_bnd_cnd(const Vector &x, Vector &v)
 
        a_inf  = std::sqrt(gamm*p_inf/rho_inf);
 
-       u1     = M_inf*a_inf*cos(M_PI*aoa/180.); u2 = M_inf*a_inf*cos(M_PI*aoa/180.); u3 = 0.0;
+       u1     = M_inf*a_inf*cos(M_PI*aoa/180.); u2 = M_inf*a_inf*sin(M_PI*aoa/180.); u3 = 0.0;
  
        double v_sq = pow(u1, 2) + pow(u2, 2);
     
@@ -1860,7 +1860,7 @@ void char_bnd_cnd(const Vector &x, Vector &v)
 
        a_inf  = std::sqrt(gamm*p_inf/rho_inf);
 
-       u1     = M_inf*a_inf*cos(M_PI*aoa/180.); u2 = M_inf*a_inf*cos(M_PI*aoa/180.); u3 = 0.0;
+       u1     = M_inf*a_inf*cos(M_PI*aoa/180.); u2 = M_inf*a_inf*sin(M_PI*aoa/180.); u3 = 0.0;
 
        double v_sq = pow(u1, 2) + pow(u2, 2) + pow(u3, 2);
     
