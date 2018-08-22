@@ -9,22 +9,22 @@ using namespace mfem;
 
 //Constants
 const double gamm  = 1.4;
-const double   mu  = 3E-4; 
+const double   mu  = 1.6733E-06; 
 const double R_gas = 287;
 const double   Pr  = 0.71;
 
 //Run parameters
-const char *mesh_file        =  "mda_t1.mesh";
-const int    order           =  2; int np = order + 1;
+const char *mesh_file        =  "mda_c2.mesh";
+const int    order           =  3; int np = order + 1;
 const double t_final         = 22.00000;
 const int    ref_levels      =  0;
 
 const bool   time_adapt      =  true ;
-const double cfl             =  0.40 ;
+const double cfl             =  0.4  ;
 const double dt_const        =  0.0003 ;
 const int    ode_solver_type =  3; // 1. Forward Euler 2. TVD SSP 3 Stage
 
-const int    vis_steps       = 500 ;
+const int    vis_steps       = 4000;
 
 const bool   adapt           =  false;
 const int    adapt_iter      =  200  ; // Time steps after which adaptation is done
@@ -40,8 +40,8 @@ const double mdot_pres       =  7.20 ; // Prescribed mass flow
 
 //Restart parameters
 const bool restart           =  true ;
-const int  restart_freq      =  1000; // Create restart file after every 1000 time steps
-const int  restart_cycle     =  1000; // File number used for restart
+const int  restart_freq      =  7500; // Create restart file after every 1000 time steps
+const int  restart_cycle     =220000; // File number used for restart
 
 //Splitting Paramaeter
 const bool   split           =   true ;
@@ -280,6 +280,167 @@ void MInvIntegrator::AssembleElementMatrix
    }
 
    elmat.Invert();
+}
+
+
+/** Boundary face Riemann integrator
+    */
+class Bnd_Inv_NoSlip_Isotherm_Integrator: public LinearFormIntegrator, public EulerIntegrator
+{
+protected:
+   VectorCoefficient &uD;
+   VectorCoefficient &fD;
+   VectorCoefficient &u_bnd;
+
+   double alpha; // b = alpha*b
+
+   double gamm;
+   double R   ;
+
+public:
+   Bnd_Inv_NoSlip_Isotherm_Integrator(double R_, double gamm_, VectorCoefficient &uD_, VectorCoefficient &fD_, 
+                                VectorCoefficient &u_bnd_, double alpha_)
+      : uD(uD_), fD(fD_), u_bnd(u_bnd_), alpha(alpha_), R(R_), gamm(gamm_) { }
+
+   
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       ElementTransformation &Tr,
+                                       Vector &elvect);
+
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       FaceElementTransformations &Tr,
+                                       Vector &elvect);
+};
+
+void Bnd_Inv_NoSlip_Isotherm_Integrator::AssembleRHSElementVect(
+   const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
+{
+   mfem_error("Bnd_Inv_NoSlip_Isotherm::AssembleRHSElementVect");
+}
+
+
+void Bnd_Inv_NoSlip_Isotherm_Integrator::AssembleRHSElementVect(
+   const FiniteElement &el, FaceElementTransformations &Trans, Vector &elvect)
+{
+   int dim, var_dim, ndof, aux_dim;
+
+   double un, a, b, w;
+
+   Vector shape;
+
+   dim = el.GetDim();
+   aux_dim = dim + 1;
+   var_dim = dim + 2;
+   ndof = el.GetDof();
+   
+   Vector vu(dim), nor(dim);
+
+   elvect.SetSize(var_dim*(ndof));
+   elvect = 0.0;
+
+   shape.SetSize(ndof);
+
+   Vector u1_dir(var_dim), u2_dir(var_dim);
+   Vector u2_bnd(aux_dim);
+   Vector vel_L(dim);    
+   Vector vel_R(dim);   
+   Vector f_dir(dim*var_dim);
+   Vector f1_dir(dim*var_dim);
+   Vector face_f(var_dim), face_f1(var_dim); //Face fluxes (dot product with normal)
+
+   const IntegrationRule *ir = IntRule;
+   if (ir == NULL)
+   {
+      int order;
+         
+      order = 2*el.GetOrder();
+      if (el.Space() == FunctionSpace::Pk)
+      {
+         order++;
+      }
+      ir = &IntRules.Get(Trans.FaceGeom, order);
+   }
+
+   for (int p = 0; p < ir->GetNPoints(); p++)
+   {
+      const IntegrationPoint &ip = ir->IntPoint(p);
+      IntegrationPoint eip;
+      Trans.Loc1.Transform(ip, eip);
+
+      Trans.Face->SetIntPoint(&ip);
+      Trans.Elem1->SetIntPoint(&eip);
+
+      el.CalcShape(eip, shape);
+
+      CalcOrtho(Trans.Face->Jacobian(), nor);
+
+      uD.Eval(u1_dir, *Trans.Elem1, eip);
+      u_bnd.Eval(u2_bnd, *Trans.Elem1, eip);
+
+      double rho_L = u1_dir(0);
+      double v_sq  = 0.0;
+      for (int j = 0; j < dim; j++)
+      {
+          vel_L(j) = u1_dir(1 + j)/rho_L;      
+          v_sq    += pow(vel_L(j), 2);
+      }
+      double p_L = (gamm - 1)*(u1_dir(var_dim - 1) - 0.5*rho_L*v_sq);
+      double E_L = u1_dir(var_dim - 1);
+
+//      double rho_R = rho_L; // Extrapolate pressure
+//      v_sq  = 0.0;
+//      for (int j = 0; j < dim; j++)
+//      {
+//          vel_R(j) = 2*u2_bnd(j) - vel_L(j);      
+//          v_sq    += pow(vel_R(j), 2);
+//      }
+//      double E_R   = E_L;
+
+      double p_R = p_L*1.0001; // Extrapolate pressure
+      v_sq  = 0.0;
+      for (int j = 0; j < dim; j++)
+      {
+          vel_R(j) = 0.; 
+      }
+      double T_R   = u2_bnd(aux_dim - 1);
+      double rho_R = p_R/(R*T_R);
+      double E_R   = p_R/(gamm - 1) ;
+
+      u2_dir(0) = rho_R;
+      for (int j = 0; j < dim; j++)
+      {
+          u2_dir(1 + j)   = rho_R*vel_R(j)    ;
+      }
+      u2_dir(var_dim - 1) = E_R;
+
+      getLFFlux(R, gamm, u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using local Lax Friedrichs
+//      getConvectiveFlux(R, gamm, u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using central convective flux 
+
+      fD.Eval(f1_dir, *Trans.Elem1, eip); // Get discontinuous flux at face
+
+      face_f = 0.0; face_f1 = 0.0; 
+      for (int i = 0; i < dim; i++)
+      {
+          for (int j = 0; j < var_dim; j++)
+          {
+              face_f1(j) += f1_dir(i*var_dim + j)*nor(i);
+              face_f (j) += f_dir (i*var_dim + j)*nor(i);
+          }
+      }
+
+      w = ip.weight * alpha; 
+
+      subtract(face_f, face_f1, face_f1); //f_comm - f1
+      for (int j = 0; j < var_dim; j++)
+      {
+          for (int i = 0; i < ndof; i++)
+          {
+              elvect(j*ndof + i)              += face_f1(j)*w*shape(i); 
+          }
+      }
+
+   }// for ir loop
+
 }
 
 
@@ -531,7 +692,7 @@ CNS::CNS()
    VectorFunctionCoefficient u_wall_bnd(aux_dim, wall_bnd_cnd); // Defines wall boundary condition
    VectorFunctionCoefficient u_char_bnd(var_dim, char_bnd_cnd); // Defines characterstic boundary condition
 
-   DG_Euler_NoSlip_Isotherm_Integrator *dg_ns = new DG_Euler_NoSlip_Isotherm_Integrator(
+   Bnd_Inv_NoSlip_Isotherm_Integrator *dg_ns = new Bnd_Inv_NoSlip_Isotherm_Integrator(
               R_gas, gamm, u_vec, f_vec, u_wall_bnd, -1.0); 
    dg_ns->SetIntRule(&GLIntRules.Get(Geometry::SQUARE, 2*np-3));
    
@@ -548,6 +709,7 @@ CNS::CNS()
    
    b->AddBdrFaceIntegrator(dg_vis_iso, dir_bdr_wall);
    
+   b->Assemble();
    ///////////////////////////////////////////////////
 
    b_aux_x     = new ParLinearForm(&fes_aux);
@@ -586,8 +748,6 @@ CNS::CNS()
 
    ///////////////////////////////////////////////////
    
-   b->Assemble();
-
 
    int ti_in; double t_in;
    if (restart == true)
@@ -641,70 +801,68 @@ CNS::CNS()
 
    bool done = false;
 
-   Step();
-   
-//   for (ti = ti_in; !done; )
-//   {
-//      Step(); // Step in time
-//
-//      done = (t >= t_final - 1e-8*dt);
-//
-//      if ((ti % 25 == 0) && (myid == 0)) // Check time
-//      {
-//          chrono.Stop();
-//          cout << "25 Steps took "<< chrono.RealTime() << " s "<< endl;
-//
-//          chrono.Clear();
-//          chrono.Start();
-//      }
-//  
-//      if (done || ti % vis_steps == 0) // Visualize
-//      {
-//          getAuxGrad(dim, *K_vis_x, *K_vis_y, *K_vis_z, 
-//          *M, *u_sol,
-//          *b_aux_x, *b_aux_y, *b_aux_z, 
-//          *aux_grad);
-//
-//          postProcess(*pmesh, order, gamm, R_gas, 
-//                   *u_sol, *aux_grad, ti, t);
-//      }
-//    
-//      if (done || ti % restart_freq == 0) // Write restart file 
-//      {
-//          writeRestart(*pmesh, *u_sol, ti, t);
-//      }
-//
-//      ComputeLift(*pmesh, *fes, *u_sol, *f_vis, dir_bdr_wall, gamm, forces);
-//      double fx = forces(0), fy = forces(1);
-//      double glob_fx, glob_fy;
-//      MPI_Allreduce(&fx, &glob_fx, 1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
-//      MPI_Allreduce(&fy, &glob_fy, 1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
-//
-//      if (myid == 0)
-//      {
-//          force_file << ti << "\t" <<  dt_real << "\t" << t << "\t" << glob_fx << "\t" << glob_fy <<  endl;
-//      }
-//      
-//      Compute_Wall_Quant(*fes, *u_sol, *f_vis, 
-//                         gamm, x_uni, y_uni, p_wall, tau_wall, x_coun);
-//
-//      Compute_Global_Average(comm, p_wall,   x_coun, glob_p_wall);
-//      Compute_Global_Average(comm, tau_wall, x_coun, glob_tau_wall);
-//
-//      int c_ti = 1;
-//      if (restart == true)
-//          c_ti = restart_cycle + 1;
-//
-//      Compute_Time_Average(c_ti, ti, glob_p_wall,   time_p_wall);
-//      Compute_Time_Average(c_ti, ti, glob_tau_wall, time_tau_wall);
-//
-//      if (done || ti % vis_steps == 0) // 
-//      {
-//          if (myid == 0)
-//              Write_Time_Average(ti, x_uni, y_uni, glob_p_wall, glob_tau_wall, time_p_wall, time_tau_wall);
-//      }
-//
-//   }
+   for (ti = ti_in; !done; )
+   {
+      Step(); // Step in time
+
+      done = (t >= t_final - 1e-8*dt);
+
+      if ((ti % 25 == 0) && (myid == 0)) // Check time
+      {
+          chrono.Stop();
+          cout << "25 Steps took "<< chrono.RealTime() << " s "<< endl;
+
+          chrono.Clear();
+          chrono.Start();
+      }
+  
+      if (done || ti % vis_steps == 0) // Visualize
+      {
+          getAuxGrad(dim, *K_vis_x, *K_vis_y, *K_vis_z, 
+          *M, *u_sol,
+          *b_aux_x, *b_aux_y, *b_aux_z, 
+          *aux_grad);
+
+          postProcess(*pmesh, order, gamm, R_gas, 
+                   *u_sol, *aux_grad, ti, t);
+      }
+    
+      if (done || ti % restart_freq == 0) // Write restart file 
+      {
+          writeRestart(*pmesh, *u_sol, ti, t);
+      }
+
+      ComputeLift(*pmesh, *fes, *u_sol, *f_vis, dir_bdr_wall, gamm, forces);
+      double fx = forces(0), fy = forces(1);
+      double glob_fx, glob_fy;
+      MPI_Allreduce(&fx, &glob_fx, 1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
+      MPI_Allreduce(&fy, &glob_fy, 1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
+
+      if (myid == 0)
+      {
+          force_file << ti << "\t" <<  dt_real << "\t" << t << "\t" << glob_fx << "\t" << glob_fy <<  endl;
+      }
+      
+      Compute_Wall_Quant(*fes, *u_sol, *f_vis, 
+                         gamm, x_uni, y_uni, p_wall, tau_wall, x_coun);
+
+      Compute_Global_Average(comm, p_wall,   x_coun, glob_p_wall);
+      Compute_Global_Average(comm, tau_wall, x_coun, glob_tau_wall);
+
+      int c_ti = 1;
+      if (restart == true)
+          c_ti = restart_cycle + 1;
+
+      Compute_Time_Average(c_ti, ti, glob_p_wall,   time_p_wall);
+      Compute_Time_Average(c_ti, ti, glob_tau_wall, time_tau_wall);
+
+      if (done || ti % vis_steps == 0) // 
+      {
+          if (myid == 0)
+              Write_Time_Average(ti, x_uni, y_uni, glob_p_wall, glob_tau_wall, time_p_wall, time_tau_wall);
+      }
+
+   }
 
    force_file.close();
    
@@ -712,9 +870,6 @@ CNS::CNS()
    delete K_inv_x, K_vis_x;
    delete K_inv_y, K_vis_y;
    delete K_inv_z, K_vis_z;
-   delete cix, ciy;
-   delete tix, tiy;
-   delete cvix, cviy;
 
 }
 
@@ -799,10 +954,19 @@ void CNS::Step()
     MPI_Allreduce(&loc_rho_min, &glob_rho_min, 1, MPI_DOUBLE, MPI_MIN, comm); 
     MPI_Allreduce(&loc_p_min,   &glob_p_min,   1, MPI_DOUBLE, MPI_MIN, comm); 
 
-    if (myid == 0)
+      
+    if ((ti % 5 == 0) && (myid == 0)) // Check time
     {
         cout << setprecision(6) << "time step: " << ti << ", dt: " << dt_real << ", time: " << 
             t << ", max_u " << glob_u_max << ", rho_min "<< glob_rho_min << ", p_min "<< glob_p_min << ", fes_size " << fes->GlobalTrueVSize() << endl;
+    }
+
+    MPI_Comm_rank(comm, &myid);
+
+    if(myid == 0)
+    {
+        if ( (glob_p_min < 0) || (glob_rho_min < 0) || (isnan( glob_p_min ) ) || ( isnan(glob_rho_min) ) )
+            mfem_error("Invalid values encountered");
     }
 
     if (time_adapt == false)
@@ -2028,7 +2192,7 @@ void writeUMean(const vector<double> u_mean, const vector<double> inst_u_mean, i
     std::string f_name = "u_mean_" + oss.str();
 
     ofstream f_file;
-    f_file.open(f_name);
+    f_file.open(f_name.c_str());
 
     int vert_nodes = y_uni.size();
     for(int i = 0; i < vert_nodes; i++)

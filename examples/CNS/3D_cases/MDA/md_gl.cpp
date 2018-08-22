@@ -9,23 +9,22 @@ using namespace mfem;
 
 //Constants
 const double gamm  = 1.4;
-const double   mu  = 3.4895833E-4; 
-const double R_gas = 287.;
+const double   mu  = 1.6733E-06; 
+const double R_gas = 287;
 const double   Pr  = 0.71;
 
 //Run parameters
-const char *mesh_file        =  "mda_c2_dfq.mesh";
-const int    order           =  2; int np = order + 1;
-const double t_final         =2000.0001 ;
-const int    problem         =  0;
+const char *mesh_file        =  "mda_c2.mesh";
+const int    order           =  3; int np = order + 1;
+const double t_final         = 22.00000;
 const int    ref_levels      =  0;
 
 const bool   time_adapt      =  true ;
 const double cfl             =  0.4  ;
-const double dt_const        =  0.0001 ;
+const double dt_const        =  0.0003 ;
 const int    ode_solver_type =  3; // 1. Forward Euler 2. TVD SSP 3 Stage
 
-const int    vis_steps       = 5000;
+const int    vis_steps       = 4000;
 
 const bool   adapt           =  false;
 const int    adapt_iter      =  200  ; // Time steps after which adaptation is done
@@ -34,15 +33,15 @@ const double tolerance       =  5e-4 ; // Tolerance for adaptation
 //Source Term
 const bool addSource         = false;  // Add source term
 const bool constForcing      = false;  // Is the forcing constant //Only one type of forcing can be true
-const bool mdotForcing       =  true;  // Forcing for constant mass flow 
+const bool mdotForcing       = false;  // Forcing for constant mass flow 
 const double fx              =  0.088; // Force x 
 const double mdot_pres       =  7.20 ; // Prescribed mass flow 
       double mdot_fx         =  0.00 ; // Global variable for mass flow forcing 
 
 //Restart parameters
-const bool restart           =  false;
-const int  restart_freq      = 12000; // Create restart file after every 1000 time steps
-const int  restart_cycle     =160000; // File number used for restart
+const bool restart           =  true ;
+const int  restart_freq      =  7500; // Create restart file after every 1000 time steps
+const int  restart_cycle     =220000; // File number used for restart
 
 //Splitting Paramaeter
 const bool   split           =   true ;
@@ -52,62 +51,55 @@ const string splitform       =   "KG" ;
 const string riemann         =   "KEP";
 
 //Freestream conditions
-const double M_inf           =    0.2 ; 
+const double M_inf           =    0.17; 
 const double p_inf           =   200.; 
 const double rho_inf         =    1.0; 
-const double aoa             =   19.0; 
-
+const double aoa             =    5.5; 
 
 ////////////////////////////////////////////////////////////////////////
 
 
-
 // Velocity coefficient
 void init_function(const Vector &x, Vector &v);
-//void char_bnd_cnd(const Vector &x, Vector &v);
 void wall_bnd_cnd(const Vector &x, Vector &v);
 void wall_adi_bnd_cnd(const Vector &x, Vector &v);
 void char_bnd_cnd(const Vector &x, Vector &v);
 
-void getVectorLFFlux(const double R, const double gamm, const int dim, const Vector &u1, const Vector &u2, 
-                                const Vector &nor, Vector &f);
-void getVectorRoeFlux(const double R, const double gamm, const int dim, const Vector &u1, const Vector &u2, 
-                                const Vector &nor, Vector &f);
-void getVectorKEPFlux(const double R, const double gamm, const int dim, const Vector &u1, const Vector &u2, 
-                                const Vector &nor, Vector &f);
-
-SparseMatrix getSparseMat(const Vector &x);
-
-void getMorinishiDx(int dim, 
-        const HypreParMatrix &K_x, const HypreParMatrix &K_y, const HypreParMatrix &K_z, 
-        const Vector &u, Vector &f_dx); 
-void getKGSplitDx(int dim, 
-        const HypreParMatrix &K_x, const HypreParMatrix &K_y, const HypreParMatrix &K_z, 
-        const Vector &u, Vector &f_dx);
-
-void getFaceDotNorm(int dim, const Vector &f, const Vector &nor_face, Vector &face_f);
-
 double getUMax(int dim, const Vector &u);
+void getPRhoMin(int dim, const Vector &u, double &rho_min, double &p_min);
 
 void getInvFlux(int dim, const Vector &u, Vector &f);
 void getVisFlux(int dim, const Vector &u, const Vector &aux_grad, Vector &f);
 
 void getAuxGrad(int dim, const HypreParMatrix &K_x, const HypreParMatrix &K_y, const HypreParMatrix &K_z,
-        const CGSolver &M_solver, const Vector &u, 
+        const HypreParMatrix &M, const Vector &u, 
         const Vector &b_aux_x, const Vector &b_aux_y, const Vector &b_aux_z,        
         Vector &aux_grad);
 void getAuxVar(int dim, const Vector &u, Vector &aux_sol);
 
-void ComputeWallForces(FiniteElementSpace &fes, VectorGridFunctionCoefficient &uD, 
-                       VectorGridFunctionCoefficient &f_vis_D, 
-                       const Array<int> &bdr, const double gamm, Vector &force);
+void ComputeWallForces(FiniteElementSpace &fes, GridFunction &uD, GridFunction &f_vis_D, 
+                    const Array<int> &bdr, const double gamm, Vector &force);
+
+void writeUMean(const vector<double> u_mean, const vector<double> inst_u_mean, int ti, vector<double> y_uni);
+
+
+void getFaceDotNorm(int dim, const Vector &f, const Vector &nor_face, Vector &face_f);
+
+void getVectorLFFlux(const double R, const double gamm, const int dim, const Vector &u1, const Vector &u2, 
+                                const Vector &nor, Vector &f);
+void getVectorRoeFlux(const double R, const double gamm, const int dim, const Vector &u1, const Vector &u2, 
+                                const Vector &nor, Vector &f_com);
+void getVectorLMRoeFlux(const double R, const double gamm, const int dim, const Vector &u1, const Vector &u2, 
+                                const Vector &nor, Vector &f_com);
+void getVectorKEPFlux(const double R, const double gamm, const int dim, const Vector &u1, const Vector &u2, 
+                                const Vector &nor, Vector &f_com);
+
+void GetUniqueX(const FiniteElementSpace &fes, const int bdr,
+               vector<double> &x_uni, vector<double> &y_uni);
+
 void ComputeLift(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, GridFunction &f_vis_D, 
                     const Array<int> &bdr, const double gamm, Vector &force);
 
-void getPRhoMin(int dim, const Vector &u, double &rho_min, double &p_min);
-
-void GetUniqueX(const FiniteElementSpace &fes, const int bdr,
-                vector<double> &x_uni, vector<double> &y_uni);
 void Compute_Wall_Quant(FiniteElementSpace &fes, GridFunction &uD, GridFunction &f_vis_D, 
                     const double gamm, const vector<double> &x_uni, const vector<double> &y_uni,
                     vector<double> &p_wall, vector<double> &tau_wall, vector<int> &x_coun);
@@ -119,6 +111,32 @@ void Compute_Time_Average(int ti_in, int ti,
 void Write_Time_Average(int ti, const vector<double> &x_uni, const vector<double> &y_uni, 
                         const vector<double> &inst_p_wall, const vector<double> &inst_tau_wall,
                         const vector<double> &p_wall,      const vector<double> &tau_wall);
+
+
+SparseMatrix getSparseMat(const Vector &x);
+
+void getABCSplitDx(int dim, 
+        const HypreParMatrix &K, 
+        Vector &a, Vector &b, const Vector &c,
+        Vector &f_dx) ;
+
+
+void getSF1SplitDx(int dim, 
+        const HypreParMatrix &K_x, const HypreParMatrix &K_y, const HypreParMatrix &K_z, 
+        const Vector &u, Vector &f_dx) ;
+
+void getModMorinishiSplitDx(int dim, 
+        const HypreParMatrix &K_x, const HypreParMatrix &K_y, const HypreParMatrix &K_z, 
+        const Vector &u, Vector &f_dx) ;
+void getMorinishiDx(int dim, 
+        const HypreParMatrix &K_x, const HypreParMatrix &K_y, const HypreParMatrix &K_z, 
+        const Vector &u, Vector &f_dx); 
+void getMorinishiSplitDx(int dim, 
+        const HypreParMatrix &K_x, const HypreParMatrix &K_y, const HypreParMatrix &K_z, 
+        const Vector &u, Vector &f_dx);
+void getKGSplitDx(int dim, 
+        const HypreParMatrix &K_x, const HypreParMatrix &K_y, const HypreParMatrix &K_z, 
+        const Vector &u, Vector &f_dx); 
 
 
 
@@ -135,16 +153,13 @@ private:
    HypreParMatrix &K_vis_x, &K_vis_y, &K_vis_z;
    ParLinearForm  &b, &b_aux_x, &b_aux_y, &b_aux_z;
 
-   HypreSmoother M_prec;
-   CGSolver M_solver;
-                            
    ParGridFunction &u, &u_aux, &u_grad, &f_I, &f_V;
-
+    
    Vector nor_face, wts;
 
    SparseMatrix   face_t_r;
    HypreParMatrix *glob_proj_l, *glob_proj_r;
-                           
+                        
 public:
    FE_Evolution(HypreParMatrix &_M, HypreParMatrix &_K_inv_x, HypreParMatrix &_K_inv_y, HypreParMatrix &_K_inv_z, 
                             HypreParMatrix &_K_vis_x, HypreParMatrix &_K_vis_y, HypreParMatrix &_K_vis_z,
@@ -153,22 +168,15 @@ public:
                             ParLinearForm &_b_aux_x, ParLinearForm &_b_aux_y, ParLinearForm &_b_aux_z, 
                             ParLinearForm &_b);
 
-   void GetSize() ;
-
-   CGSolver &GetMSolver() ;
-
-   void Update();
+   void AssembleSharedFaceMatrices(const ParGridFunction &x) ;
+   void getParEulerDGTranspose(const ParGridFunction &u_sol, const ParGridFunction &f_inv,
+                                          Vector &b_nl) const;
 
    virtual void Mult(const ParGridFunction &x, ParGridFunction &y) const;
 
    void Source(const ParGridFunction &x, ParGridFunction &y) const;
 
-   void GetMomentum(const ParGridFunction &x, double &Fx);
-
-   void AssembleSharedFaceMatrices(const ParGridFunction &x) ;
-   void getParEulerDGTranspose(const ParGridFunction &u_sol, const ParGridFunction &f_inv,
-                                          Vector &b_nl) const;
-
+   void GetMomentum(const ParGridFunction &x, double &fx);
 
    virtual ~FE_Evolution() { }
 };
@@ -204,6 +212,236 @@ public:
    ~CNS(); 
 };
 
+
+
+/** Class for local mass matrix assembling a(u,v) := (Q u, v) */
+class MInvIntegrator: public BilinearFormIntegrator
+{
+protected:
+   Vector shape;
+   Coefficient *Q;
+
+public:
+   MInvIntegrator(const IntegrationRule *ir = NULL)
+      : BilinearFormIntegrator(ir) { Q = NULL; }
+   /// Construct a mass integrator with coefficient q
+   MInvIntegrator(Coefficient &q, const IntegrationRule *ir = NULL)
+      : BilinearFormIntegrator(ir), Q(&q) { }
+
+   /** Given a particular Finite Element
+       computes the element mass matrix elmat. */
+   virtual void AssembleElementMatrix(const FiniteElement &el,
+                                      ElementTransformation &Trans,
+                                      DenseMatrix &elmat);
+};
+
+
+void MInvIntegrator::AssembleElementMatrix
+( const FiniteElement &el, ElementTransformation &Trans,
+  DenseMatrix &elmat )
+{
+   int nd = el.GetDof();
+   // int dim = el.GetDim();
+   double w;
+
+   elmat.SetSize(nd);
+   shape.SetSize(nd);
+
+   const IntegrationRule *ir = IntRule;
+   if (ir == NULL)
+   {
+      // int order = 2 * el.GetOrder();
+      int order = 2 * el.GetOrder() + Trans.OrderW();
+
+      if (el.Space() == FunctionSpace::rQk)
+      {
+         ir = &RefinedIntRules.Get(el.GetGeomType(), order);
+      }
+      else
+      {
+         ir = &IntRules.Get(el.GetGeomType(), order);
+      }
+   }
+
+   elmat = 0.0;
+   for (int i = 0; i < ir->GetNPoints(); i++)
+   {
+      const IntegrationPoint &ip = ir->IntPoint(i);
+      el.CalcShape(ip, shape);
+
+      Trans.SetIntPoint (&ip);
+      w = Trans.Weight() * ip.weight;
+      if (Q)
+      {
+         w *= Q -> Eval(Trans, ip);
+      }
+
+      AddMult_a_VVt(w, shape, elmat);
+   }
+
+   elmat.Invert();
+}
+
+
+/** Boundary face Riemann integrator
+    */
+class Bnd_Inv_NoSlip_Isotherm_Integrator: public LinearFormIntegrator, public EulerIntegrator
+{
+protected:
+   VectorCoefficient &uD;
+   VectorCoefficient &fD;
+   VectorCoefficient &u_bnd;
+
+   double alpha; // b = alpha*b
+
+   double gamm;
+   double R   ;
+
+public:
+   Bnd_Inv_NoSlip_Isotherm_Integrator(double R_, double gamm_, VectorCoefficient &uD_, VectorCoefficient &fD_, 
+                                VectorCoefficient &u_bnd_, double alpha_)
+      : uD(uD_), fD(fD_), u_bnd(u_bnd_), alpha(alpha_), R(R_), gamm(gamm_) { }
+
+   
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       ElementTransformation &Tr,
+                                       Vector &elvect);
+
+   virtual void AssembleRHSElementVect(const FiniteElement &el,
+                                       FaceElementTransformations &Tr,
+                                       Vector &elvect);
+};
+
+void Bnd_Inv_NoSlip_Isotherm_Integrator::AssembleRHSElementVect(
+   const FiniteElement &el, ElementTransformation &Tr, Vector &elvect)
+{
+   mfem_error("Bnd_Inv_NoSlip_Isotherm::AssembleRHSElementVect");
+}
+
+
+void Bnd_Inv_NoSlip_Isotherm_Integrator::AssembleRHSElementVect(
+   const FiniteElement &el, FaceElementTransformations &Trans, Vector &elvect)
+{
+   int dim, var_dim, ndof, aux_dim;
+
+   double un, a, b, w;
+
+   Vector shape;
+
+   dim = el.GetDim();
+   aux_dim = dim + 1;
+   var_dim = dim + 2;
+   ndof = el.GetDof();
+   
+   Vector vu(dim), nor(dim);
+
+   elvect.SetSize(var_dim*(ndof));
+   elvect = 0.0;
+
+   shape.SetSize(ndof);
+
+   Vector u1_dir(var_dim), u2_dir(var_dim);
+   Vector u2_bnd(aux_dim);
+   Vector vel_L(dim);    
+   Vector vel_R(dim);   
+   Vector f_dir(dim*var_dim);
+   Vector f1_dir(dim*var_dim);
+   Vector face_f(var_dim), face_f1(var_dim); //Face fluxes (dot product with normal)
+
+   const IntegrationRule *ir = IntRule;
+   if (ir == NULL)
+   {
+      int order;
+         
+      order = 2*el.GetOrder();
+      if (el.Space() == FunctionSpace::Pk)
+      {
+         order++;
+      }
+      ir = &IntRules.Get(Trans.FaceGeom, order);
+   }
+
+   for (int p = 0; p < ir->GetNPoints(); p++)
+   {
+      const IntegrationPoint &ip = ir->IntPoint(p);
+      IntegrationPoint eip;
+      Trans.Loc1.Transform(ip, eip);
+
+      Trans.Face->SetIntPoint(&ip);
+      Trans.Elem1->SetIntPoint(&eip);
+
+      el.CalcShape(eip, shape);
+
+      CalcOrtho(Trans.Face->Jacobian(), nor);
+
+      uD.Eval(u1_dir, *Trans.Elem1, eip);
+      u_bnd.Eval(u2_bnd, *Trans.Elem1, eip);
+
+      double rho_L = u1_dir(0);
+      double v_sq  = 0.0;
+      for (int j = 0; j < dim; j++)
+      {
+          vel_L(j) = u1_dir(1 + j)/rho_L;      
+          v_sq    += pow(vel_L(j), 2);
+      }
+      double p_L = (gamm - 1)*(u1_dir(var_dim - 1) - 0.5*rho_L*v_sq);
+      double E_L = u1_dir(var_dim - 1);
+
+//      double rho_R = rho_L; // Extrapolate pressure
+//      v_sq  = 0.0;
+//      for (int j = 0; j < dim; j++)
+//      {
+//          vel_R(j) = 2*u2_bnd(j) - vel_L(j);      
+//          v_sq    += pow(vel_R(j), 2);
+//      }
+//      double E_R   = E_L;
+
+      double p_R = p_L*1.0001; // Extrapolate pressure
+      v_sq  = 0.0;
+      for (int j = 0; j < dim; j++)
+      {
+          vel_R(j) = 0.; 
+      }
+      double T_R   = u2_bnd(aux_dim - 1);
+      double rho_R = p_R/(R*T_R);
+      double E_R   = p_R/(gamm - 1) ;
+
+      u2_dir(0) = rho_R;
+      for (int j = 0; j < dim; j++)
+      {
+          u2_dir(1 + j)   = rho_R*vel_R(j)    ;
+      }
+      u2_dir(var_dim - 1) = E_R;
+
+      getLFFlux(R, gamm, u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using local Lax Friedrichs
+//      getConvectiveFlux(R, gamm, u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using central convective flux 
+
+      fD.Eval(f1_dir, *Trans.Elem1, eip); // Get discontinuous flux at face
+
+      face_f = 0.0; face_f1 = 0.0; 
+      for (int i = 0; i < dim; i++)
+      {
+          for (int j = 0; j < var_dim; j++)
+          {
+              face_f1(j) += f1_dir(i*var_dim + j)*nor(i);
+              face_f (j) += f_dir (i*var_dim + j)*nor(i);
+          }
+      }
+
+      w = ip.weight * alpha; 
+
+      subtract(face_f, face_f1, face_f1); //f_comm - f1
+      for (int j = 0; j < var_dim; j++)
+      {
+          for (int i = 0; i < ndof; i++)
+          {
+              elvect(j*ndof + i)              += face_f1(j)*w*shape(i); 
+          }
+      }
+
+   }// for ir loop
+
+}
 
 
 
@@ -254,6 +492,7 @@ CNS::CNS()
    delete fes_temp;
    /////////////////////////////////////////////////////////////////////////
 
+
    pmesh = new ParMesh(MPI_COMM_WORLD, *mesh);
    delete mesh;
 
@@ -278,11 +517,12 @@ CNS::CNS()
    else
        doRestart(restart_cycle, *pmesh, *u_sol, r_t, r_ti);
 
+
    fes_vec = new ParFiniteElementSpace(pmesh, &fec, dim*var_dim);
        
    f_inv = new ParGridFunction(fes_vec);
    getInvFlux(dim, *u_sol, *f_inv);
-   
+
    f_vis = new ParGridFunction(fes_vec);
 
    ParFiniteElementSpace fes_aux(pmesh, &fec, aux_dim);
@@ -310,15 +550,15 @@ CNS::CNS()
        z_dir = temp_z_dir;
    }
 
-
    ParBilinearForm *m, *k_inv_x, *k_inv_y, *k_inv_z;
    ParBilinearForm     *k_vis_x, *k_vis_y, *k_vis_z;
 
    fes_op = new ParFiniteElementSpace(pmesh, &fec);
    
    IntegrationRules GLIntRules(0, Quadrature1D::GaussLobatto);
-   MassIntegrator *mass_integ = new MassIntegrator;
-   mass_integ->SetIntRule(&GLIntRules.Get(Geometry::CUBE, 2*np-3));
+
+   MInvIntegrator *minteg = new MInvIntegrator; 
+   minteg->SetIntRule(&GLIntRules.Get(Geometry::CUBE, 2*np-3));
 
    ConvectionIntegrator *cix = new ConvectionIntegrator(x_dir, -1.0); 
    cix->SetIntRule(&GLIntRules.Get(Geometry::CUBE, 2*np-3));
@@ -326,7 +566,7 @@ CNS::CNS()
    ciy->SetIntRule(&GLIntRules.Get(Geometry::CUBE, 2*np-3));
 
    m      = new ParBilinearForm(fes_op);
-   m->AddDomainIntegrator(mass_integ);
+   m->AddDomainIntegrator(minteg);
    k_inv_x = new ParBilinearForm(fes_op);
    k_inv_x->AddDomainIntegrator(cix);
    k_inv_y = new ParBilinearForm(fes_op);
@@ -339,7 +579,7 @@ CNS::CNS()
    k_inv_x->Finalize(skip_zeros);
    k_inv_y->Assemble(skip_zeros);
    k_inv_y->Finalize(skip_zeros);
-   
+
    if (dim == 3)
    {
        ConvectionIntegrator *ciz = new ConvectionIntegrator(z_dir, -1.0);
@@ -347,72 +587,13 @@ CNS::CNS()
 
        k_inv_z = new ParBilinearForm(fes_op);
        k_inv_z->AddDomainIntegrator(ciz);
-    
+
        k_inv_z->Assemble(skip_zeros);
        k_inv_z->Finalize(skip_zeros);
    }
 
-
-   /////////////////////////////////////////////////////////////
-
-   u_sol->ExchangeFaceNbrData(); //Exchange data across processors
-   f_inv->ExchangeFaceNbrData();
-
-   VectorGridFunctionCoefficient u_vec(u_sol);
-   VectorGridFunctionCoefficient f_vec(f_inv);
-
-   ///////////////////////////////////////////////////
-   // Define boundary terms
-   // Each boundary should have its own marker since they are passed by ref
-   Array<int> dir_bdr_char(pmesh->bdr_attributes.Max()); 
-   dir_bdr_char = 0; dir_bdr_char[0] = 1; 
-   Array<int> dir_bdr_wall(pmesh->bdr_attributes.Max());
-   dir_bdr_wall    = 0; // Deactivate all boundaries
-   dir_bdr_wall[1] = 1; // Activate lid boundary 
-
-   VectorFunctionCoefficient u_wall_bnd(aux_dim, wall_bnd_cnd); // Defines wall boundary condition
-   VectorFunctionCoefficient u_char_bnd(var_dim, char_bnd_cnd); // Defines characterstic boundary condition
-   
-   DGEulerIntegrator *dgeuler = new DGEulerIntegrator(R_gas, gamm, u_vec, f_vec, var_dim, -1.0);
-   dgeuler->SetIntRule(&GLIntRules.Get(Geometry::SQUARE, 2*np-3));
-
-   DG_Euler_NoSlip_Isotherm_Integrator *dg_ns = new DG_Euler_NoSlip_Isotherm_Integrator(
-              R_gas, gamm, u_vec, f_vec, u_wall_bnd, -1.0); 
-   dg_ns->SetIntRule(&GLIntRules.Get(Geometry::SQUARE, 2*np-3));
-
-   DG_Euler_Characteristic_Integrator *dg_char = new DG_Euler_Characteristic_Integrator(
-              R_gas, gamm, u_vec, f_vec, u_char_bnd, -1.0); 
-   dg_char->SetIntRule(&GLIntRules.Get(Geometry::SQUARE, 2*np-3));
-
-   // Linear form representing the Euler boundary non-linear term
-   b = new ParLinearForm(fes);
-   
-   b->AddBdrFaceIntegrator(dg_ns,   dir_bdr_wall); 
-   b->AddBdrFaceIntegrator(dg_char, dir_bdr_char); 
-
-   b->Assemble();
-
-   getAuxVar(dim, *u_sol, *aux_sol);
-   VectorGridFunctionCoefficient aux_vec(aux_sol);
-
-   DG_CNS_Aux_Integrator *dg_aux_x =  new DG_CNS_Aux_Integrator(
-              x_dir, aux_vec, u_wall_bnd,  1.0);
-   DG_CNS_Aux_Integrator *dg_aux_y =  new DG_CNS_Aux_Integrator(
-              y_dir, aux_vec, u_wall_bnd,  1.0);
-
-   dg_aux_x->SetIntRule(&GLIntRules.Get(Geometry::SQUARE, 2*np-3));
-   dg_aux_y->SetIntRule(&GLIntRules.Get(Geometry::SQUARE, 2*np-3));
-
-   b_aux_x = new ParLinearForm(&fes_aux);
-   b_aux_y = new ParLinearForm(&fes_aux);
-   b_aux_z = new ParLinearForm(&fes_aux);
-   b_aux_x->AddBdrFaceIntegrator(dg_aux_x, dir_bdr_wall);
-   b_aux_x->Assemble();
-
-   b_aux_y->AddBdrFaceIntegrator(dg_aux_y, dir_bdr_wall);
-   b_aux_y->Assemble();
-
    ///////////////////////////////////////////////////////////
+   // Setup bilinear form for viscous terms 
    ConvectionIntegrator *cvix = new ConvectionIntegrator(x_dir, 1.0); 
    cvix->SetIntRule(&GLIntRules.Get(Geometry::CUBE, 2*np-3));
    ConvectionIntegrator *cviy = new ConvectionIntegrator(y_dir, 1.0);
@@ -426,45 +607,38 @@ CNS::CNS()
    k_vis_x = new ParBilinearForm(fes_op);
    k_vis_x->AddDomainIntegrator(cvix);
    k_vis_x->AddInteriorFaceIntegrator(
-      new TransposeIntegrator(tix));// Beta 0 means central flux
+      new TransposeIntegrator(tix) );// Beta 0 means central flux
 
    k_vis_y = new ParBilinearForm(fes_op);
    k_vis_y->AddDomainIntegrator(cviy);
    k_vis_y->AddInteriorFaceIntegrator(
-      new TransposeIntegrator(tiy));// Beta 0 means central flux
+      new TransposeIntegrator(tiy) );// Beta 0 means central flux
 
    k_vis_x->Assemble(skip_zeros);
    k_vis_x->Finalize(skip_zeros);
    k_vis_y->Assemble(skip_zeros);
    k_vis_y->Finalize(skip_zeros);
 
-
    if (dim == 3)
    {
-       ConvectionIntegrator *cviz = new ConvectionIntegrator(z_dir, 1.0); 
+       ConvectionIntegrator *cviz = new ConvectionIntegrator(z_dir, 1.0);
        cviz->SetIntRule(&GLIntRules.Get(Geometry::CUBE, 2*np-3));
-       DGTraceIntegrator *tiz = new DGTraceIntegrator(z_dir, -1.0, 0.0);
+
+       DGTraceIntegrator *tiz = new DGTraceIntegrator(z_dir, -1.0, 0.0); 
        tiz->SetIntRule(&GLIntRules.Get(Geometry::SQUARE, 2*np-3));
+
 
        k_vis_z = new ParBilinearForm(fes_op);
        k_vis_z->AddDomainIntegrator(cviz);
        k_vis_z->AddInteriorFaceIntegrator(
-          new TransposeIntegrator(tiz));// Beta 0 means central flux
+          new TransposeIntegrator(tiz) );// Beta 0 means central flux
     
-       DG_CNS_Aux_Integrator *dg_aux_z =  new DG_CNS_Aux_Integrator(
-              z_dir, aux_vec, u_wall_bnd,  1.0);
-
-       dg_aux_z->SetIntRule(&GLIntRules.Get(Geometry::SQUARE, 2*np-3));
-
-       b_aux_z->AddBdrFaceIntegrator(dg_aux_z, dir_bdr_wall);
-       b_aux_z->Assemble();
-
        k_vis_z->Assemble(skip_zeros);
        k_vis_z->Finalize(skip_zeros);
-       
-
    }
 
+   /////////////////////////////////////////////////////////////
+   //Setup Hypre matrices
    HypreParMatrix *M       = m->ParallelAssemble();
    HypreParMatrix *K_inv_x = k_inv_x->ParallelAssemble();
    HypreParMatrix *K_inv_y = k_inv_y->ParallelAssemble();
@@ -475,43 +649,105 @@ CNS::CNS()
    HypreParMatrix *K_inv_z;
    HypreParMatrix *K_vis_z;
 
-   ///////////////////////////////////////////////////////////////
-   //Setup time stepping objects and do initial post-processing
    if (dim == 3)
    {
        K_inv_z = k_inv_z->ParallelAssemble();
        K_vis_z = k_vis_z->ParallelAssemble();
+   }
 
-       adv  = new FE_Evolution(*M, *K_inv_x, *K_inv_y, *K_inv_z,
-                            *K_vis_x, *K_vis_y, *K_vis_z, 
-                            *u_sol, *aux_sol, *aux_grad, *f_inv, *f_vis,
-                            *b_aux_x, *b_aux_y, *b_aux_z, 
-                            *b);
-   }
-   else if (dim == 2)
-   {
-       adv  = new FE_Evolution(*M, *K_inv_x, *K_inv_y, *K_inv_z,
-                            *K_vis_x, *K_vis_y, *K_vis_z, 
-                            *u_sol, *aux_sol, *aux_grad, *f_inv, *f_vis,
-                            *b_aux_x, *b_aux_y, *b_aux_z, 
-                            *b);
-   }
    delete m, k_inv_x, k_inv_y, k_inv_z;
    delete    k_vis_x, k_vis_y, k_vis_z;
 
+   /////////////////////////////////////////////////////////////
+   // Define grid function coefficients
+
+   VectorGridFunctionCoefficient u_vec(u_sol);
+   VectorGridFunctionCoefficient f_vec(f_inv);
+
+   u_sol->ExchangeFaceNbrData(); //Exchange data across processors
+   f_inv->ExchangeFaceNbrData();
+
+   getAuxVar(dim, *u_sol, *aux_sol);
+   VectorGridFunctionCoefficient aux_vec(aux_sol);
 
    getVisFlux(dim, *u_sol, *aux_grad, *f_vis);
 
    VectorGridFunctionCoefficient vis_vec(f_vis);
    VectorGridFunctionCoefficient aux_grad_vec(aux_grad);
 
+   ///////////////////////////////////////////////////
+   // Define face integration terms 
+   b = new ParLinearForm(fes);
+   (*b) *= 0.0; // Initialize to 0
+
+   ///////////////////////////////////////////////////
+   // Define boundary terms
+   // Each boundary should have its own marker since they are passed by ref
+   Array<int> dir_bdr_char(pmesh->bdr_attributes.Max()); 
+   dir_bdr_char = 0; dir_bdr_char[0] = 1; 
+   Array<int> dir_bdr_wall(pmesh->bdr_attributes.Max());
+   dir_bdr_wall    = 0; // Deactivate all boundaries
+   dir_bdr_wall[1] = 1; // Activate lid boundary 
+
+   VectorFunctionCoefficient u_wall_bnd(aux_dim, wall_bnd_cnd); // Defines wall boundary condition
+   VectorFunctionCoefficient u_char_bnd(var_dim, char_bnd_cnd); // Defines characterstic boundary condition
+
+   Bnd_Inv_NoSlip_Isotherm_Integrator *dg_ns = new Bnd_Inv_NoSlip_Isotherm_Integrator(
+              R_gas, gamm, u_vec, f_vec, u_wall_bnd, -1.0); 
+   dg_ns->SetIntRule(&GLIntRules.Get(Geometry::SQUARE, 2*np-3));
+   
+   DG_Euler_Characteristic_Integrator *dg_char = new DG_Euler_Characteristic_Integrator(
+              R_gas, gamm, u_vec, f_vec, u_char_bnd, -1.0); 
+   dg_char->SetIntRule(&GLIntRules.Get(Geometry::SQUARE, 2*np-3));
+
    DG_CNS_Vis_Isotherm_Integrator *dg_vis_iso = new DG_CNS_Vis_Isotherm_Integrator(
                R_gas, gamm, u_vec, vis_vec, aux_grad_vec, u_wall_bnd, mu, Pr, 1.0);
    dg_vis_iso->SetIntRule(&GLIntRules.Get(Geometry::SQUARE, 2*np-3));
 
+   b->AddBdrFaceIntegrator(dg_ns,   dir_bdr_wall); 
+   b->AddBdrFaceIntegrator(dg_char, dir_bdr_char); 
+   
    b->AddBdrFaceIntegrator(dg_vis_iso, dir_bdr_wall);
-
+   
    b->Assemble();
+   ///////////////////////////////////////////////////
+
+   b_aux_x     = new ParLinearForm(&fes_aux);
+   b_aux_y     = new ParLinearForm(&fes_aux);
+   b_aux_z     = new ParLinearForm(&fes_aux);
+
+   (*b_aux_x) *= 0.0; // Initialize to 0
+   (*b_aux_y) *= 0.0;
+   (*b_aux_z) *= 0.0;
+
+   DG_CNS_Aux_Integrator *dg_aux_x =  new DG_CNS_Aux_Integrator(
+              x_dir, aux_vec, u_wall_bnd,  1.0);
+   DG_CNS_Aux_Integrator *dg_aux_y =  new DG_CNS_Aux_Integrator(
+              y_dir, aux_vec, u_wall_bnd,  1.0);
+
+   dg_aux_x->SetIntRule(&GLIntRules.Get(Geometry::SQUARE, 2*np-3));
+   dg_aux_y->SetIntRule(&GLIntRules.Get(Geometry::SQUARE, 2*np-3));
+
+   if (dim == 3)
+   {
+       DG_CNS_Aux_Integrator *dg_aux_z =  new DG_CNS_Aux_Integrator(
+              z_dir, aux_vec, u_wall_bnd,  1.0);
+
+       dg_aux_z->SetIntRule(&GLIntRules.Get(Geometry::SQUARE, 2*np-3));
+
+       b_aux_z->AddBdrFaceIntegrator(dg_aux_z, dir_bdr_wall);
+       b_aux_z->Assemble();
+   }
+
+   ///////////////////////////////////////////////////
+   adv  = new FE_Evolution(*M, *K_inv_x, *K_inv_y, *K_inv_z,
+                        *K_vis_x, *K_vis_y, *K_vis_z, 
+                        *u_sol, *aux_sol, *aux_grad, *f_inv, *f_vis,
+                        *b_aux_x, *b_aux_y, *b_aux_z, 
+                        *b);
+
+   ///////////////////////////////////////////////////
+   
 
    int ti_in; double t_in;
    if (restart == true)
@@ -523,7 +759,7 @@ CNS::CNS()
    {
        ti_in = 0; t_in = 0;
    }
-
+   
    {// Post process initially
        ti = ti_in; t = t_in;
        postProcess(*pmesh, order, gamm, R_gas, 
@@ -548,10 +784,6 @@ CNS::CNS()
     
    MPI_Comm comm = pmesh->GetComm();
 
-   StopWatch chrono;
-   chrono.Clear();
-   chrono.Start();
-
    vector<double> p_wall(x_uni.size()), tau_wall(x_uni.size()); 
    vector<int   > x_coun(x_uni.size()); 
    vector<double> glob_p_wall(x_uni.size()), glob_tau_wall(x_uni.size()); 
@@ -563,7 +795,12 @@ CNS::CNS()
    force_file.open ("forces.dat");
    force_file << "Iteration \t dt \t time \t F_x \t F_y \n";
 
+   StopWatch chrono;
+   chrono.Clear();
+   chrono.Start();
+
    bool done = false;
+
    for (ti = ti_in; !done; )
    {
       Step(); // Step in time
@@ -578,18 +815,18 @@ CNS::CNS()
           chrono.Clear();
           chrono.Start();
       }
-    
+  
       if (done || ti % vis_steps == 0) // Visualize
       {
           getAuxGrad(dim, *K_vis_x, *K_vis_y, *K_vis_z, 
-          adv->GetMSolver(), *u_sol,
+          *M, *u_sol,
           *b_aux_x, *b_aux_y, *b_aux_z, 
           *aux_grad);
 
           postProcess(*pmesh, order, gamm, R_gas, 
                    *u_sol, *aux_grad, ti, t);
       }
-      
+    
       if (done || ti % restart_freq == 0) // Write restart file 
       {
           writeRestart(*pmesh, *u_sol, ti, t);
@@ -626,12 +863,14 @@ CNS::CNS()
       }
 
    }
-   force_file.close();
 
+   force_file.close();
+   
    delete adv;
    delete K_inv_x, K_vis_x;
    delete K_inv_y, K_vis_y;
    delete K_inv_z, K_vis_z;
+
 }
 
 
@@ -648,10 +887,12 @@ CNS::~CNS()
     MPI_Finalize();
 }
 
+
+
 void CNS::Step()
 {
     dt_real = min(dt, t_final - t);
-    
+
     // Euler or RK3SSP
     ////////////////////
     *u_t = *u_sol;
@@ -713,10 +954,19 @@ void CNS::Step()
     MPI_Allreduce(&loc_rho_min, &glob_rho_min, 1, MPI_DOUBLE, MPI_MIN, comm); 
     MPI_Allreduce(&loc_p_min,   &glob_p_min,   1, MPI_DOUBLE, MPI_MIN, comm); 
 
-    if (myid == 0)
+      
+    if ((ti % 5 == 0) && (myid == 0)) // Check time
     {
         cout << setprecision(6) << "time step: " << ti << ", dt: " << dt_real << ", time: " << 
-            t << ", max_speed " << glob_u_max << ", rho_min "<< glob_rho_min << ", p_min "<< glob_p_min << ", fes_size " << fes->GlobalTrueVSize() << endl;
+            t << ", max_u " << glob_u_max << ", rho_min "<< glob_rho_min << ", p_min "<< glob_p_min << ", fes_size " << fes->GlobalTrueVSize() << endl;
+    }
+
+    MPI_Comm_rank(comm, &myid);
+
+    if(myid == 0)
+    {
+        if ( (glob_p_min < 0) || (glob_rho_min < 0) || (isnan( glob_p_min ) ) || ( isnan(glob_rho_min) ) )
+            mfem_error("Invalid values encountered");
     }
 
     if (time_adapt == false)
@@ -732,6 +982,8 @@ void CNS::Step()
 
 
 
+
+
 // Implementation of class FE_Evolution
 FE_Evolution::FE_Evolution(HypreParMatrix &_M, HypreParMatrix &_K_inv_x, HypreParMatrix &_K_inv_y, HypreParMatrix &_K_inv_z, 
                             HypreParMatrix &_K_vis_x, HypreParMatrix &_K_vis_y, HypreParMatrix &_K_vis_z,
@@ -744,15 +996,6 @@ FE_Evolution::FE_Evolution(HypreParMatrix &_M, HypreParMatrix &_K_inv_x, HyprePa
                             u(u_), u_aux(u_aux_), u_grad(u_grad_), f_I(f_I_), f_V(f_V_), 
                             b_aux_x(_b_aux_x), b_aux_y(_b_aux_y), b_aux_z(_b_aux_z), b(_b)
 {
-   M_solver.SetPreconditioner(M_prec);
-   M_solver.SetOperator(M);
-
-   M_solver.iterative_mode = false;
-   M_solver.SetRelTol(1e-9);
-   M_solver.SetAbsTol(0.0);
-   M_solver.SetMaxIter(10);
-   M_solver.SetPrintLevel(0);
-   
    AssembleSharedFaceMatrices(u);
 }
 
@@ -765,10 +1008,9 @@ void FE_Evolution::Mult(const ParGridFunction &x, ParGridFunction &y) const
 
     u = x;
     getInvFlux(dim, u, f_I); // To update f_vec
-    u.ExchangeFaceNbrData();
+    u.  ExchangeFaceNbrData();
     
     getAuxVar(dim, x, u_aux);
-    u_aux.ExchangeFaceNbrData();
     
     b_aux_x.Assemble();
     b_aux_y.Assemble();
@@ -777,7 +1019,7 @@ void FE_Evolution::Mult(const ParGridFunction &x, ParGridFunction &y) const
         b_aux_z.Assemble();
     }
 
-    getAuxGrad(dim, K_vis_x, K_vis_y, K_vis_z, M_solver, x, 
+    getAuxGrad(dim, K_vis_x, K_vis_y, K_vis_z, M, x, 
             b_aux_x, b_aux_y, b_aux_z,
             u_grad);
     getVisFlux(dim, x, u_grad, f_V);
@@ -809,18 +1051,22 @@ void FE_Evolution::Mult(const ParGridFunction &x, ParGridFunction &y) const
         }
     }
 
+    Vector f_dx(var_dim*offset);
+
     Vector f_sol(offset), f_x(offset), f_x_m(offset);
     Vector b_sub(offset);
     y = 0.0;
     
-    Vector f_dx(var_dim*offset);
-    
     if (split == true)
     {
         if ( splitform == "MO" ) 
-            getMorinishiDx(dim, K_inv_x, K_inv_y, K_inv_z, x, f_dx);
+            getMorinishiSplitDx(dim, K_inv_x, K_inv_y, K_inv_z, x, f_dx);
         else if ( splitform == "KG" ) 
             getKGSplitDx(dim, K_inv_x, K_inv_y, K_inv_z, x, f_dx);
+        else if ( splitform == "ModMO" ) 
+            getModMorinishiSplitDx(dim, K_inv_x, K_inv_y, K_inv_z, x, f_dx);
+        else if ( splitform == "SF1" )
+            getSF1SplitDx(dim, K_inv_x, K_inv_y, K_inv_z, x, f_dx);
         else
             mfem_error("Split form does not exist");
 
@@ -866,6 +1112,7 @@ void FE_Evolution::Mult(const ParGridFunction &x, ParGridFunction &y) const
         }
     }
 
+
     //////////////////////////////////////////////
     //Get viscous contribution
     for(int i = 0; i < var_dim; i++)
@@ -898,14 +1145,15 @@ void FE_Evolution::Mult(const ParGridFunction &x, ParGridFunction &y) const
     for(int i = 0; i < var_dim; i++)
     {
         y.GetSubVector(offsets[i], f_x);
-        M_solver.Mult(f_x, f_x_m);
+        M.Mult(f_x, f_x_m);
         y.SetSubVector(offsets[i], f_x_m);
     }
 
     if (addSource == true)
         Source(x, y);  // Add source to y
-
 }
+
+
 
 /*
  * Any source terms that need to be added to the RHS
@@ -968,6 +1216,7 @@ void FE_Evolution::Source(const ParGridFunction &x, ParGridFunction &y) const
 }
 
 
+
 // Generate matrices for projecting data to faces
 // This should in theory speed up calculations
 //void FE_Evolution::AssembleSharedFaceMatrices(const int glob_nFacePts, ParFiniteElementSpace &fes) 
@@ -1026,13 +1275,9 @@ void FE_Evolution::AssembleSharedFaceMatrices(const ParGridFunction &x)
 
            const IntegrationRule *ir ;
 
-           int order = 2*std::max(el1->GetOrder(), el2->GetOrder());
-       
-//           ir = &IntRules.Get(T->FaceGeom, order);
-       
            IntegrationRules GLIntRules(0, Quadrature1D::GaussLobatto);
            ir = &GLIntRules.Get(Geometry::SQUARE, 2*np-3);
-
+       
            facePts[i]   = ir->GetNPoints();
        } // If loop
    }
@@ -1049,10 +1294,6 @@ void FE_Evolution::AssembleSharedFaceMatrices(const ParGridFunction &x)
 
        const IntegrationRule *ir ;
 
-       int order = 2*std::max(el1->GetOrder(), el2->GetOrder());
-       
-//       ir = &IntRules.Get(T->FaceGeom, order);
- 
        IntegrationRules GLIntRules(0, Quadrature1D::GaussLobatto);
        ir = &GLIntRules.Get(Geometry::SQUARE, 2*np-3);
       
@@ -1094,13 +1335,9 @@ void FE_Evolution::AssembleSharedFaceMatrices(const ParGridFunction &x)
 
            const IntegrationRule *ir ;
 
-           int order = 2*std::max(el1->GetOrder(), el2->GetOrder());
-       
-//           ir = &IntRules.Get(T->FaceGeom, order);
-           
            IntegrationRules GLIntRules(0, Quadrature1D::GaussLobatto);
            ir = &GLIntRules.Get(Geometry::SQUARE, 2*np-3);
-
+           
            for (int p = 0; p < ir->GetNPoints(); p++)
            {
               const IntegrationPoint &ip = ir->IntPoint(p);
@@ -1173,13 +1410,9 @@ void FE_Evolution::AssembleSharedFaceMatrices(const ParGridFunction &x)
 
        const IntegrationRule *ir ;
 
-       int order = 2*std::max(el1->GetOrder(), el2->GetOrder());
-       
-//       ir = &IntRules.Get(T->FaceGeom, order);
- 
        IntegrationRules GLIntRules(0, Quadrature1D::GaussLobatto);
        ir = &GLIntRules.Get(Geometry::SQUARE, 2*np-3);
-      
+ 
        for (int p = 0; p < ir->GetNPoints(); p++)
        {
           const IntegrationPoint &ip = ir->IntPoint(p);
@@ -1239,7 +1472,6 @@ void FE_Evolution::AssembleSharedFaceMatrices(const ParGridFunction &x)
 
    //Now generate the Hypre matrices
 
-
    // handle the case when 'a' contains offdiagonal
    int lvsize = fes.GetVSize();
    const HYPRE_Int *face_nbr_glob_ldof = fes.GetFaceNbrGlobalDofMap();
@@ -1290,7 +1522,6 @@ void FE_Evolution::AssembleSharedFaceMatrices(const ParGridFunction &x)
                             face_proj_r.GetData(), dof_off,
                             fes.GetDofOffsets());
 }
-
 
 
 
@@ -1351,6 +1582,8 @@ void FE_Evolution::getParEulerDGTranspose(const ParGridFunction &u_sol, const Pa
        getVectorLFFlux(R_gas, gamm, dim, u_l, u_r, nor_face, f_com);
    else if (riemann == "Roe")
        getVectorRoeFlux(R_gas, gamm, dim, u_l, u_r, nor_face, f_com);
+   else if (riemann == "LMRoe")
+       getVectorLMRoeFlux(R_gas, gamm, dim, u_l, u_r, nor_face, f_com);
    else if (riemann == "KEP")
        getVectorKEPFlux(R_gas, gamm, dim, u_l, u_r, nor_face, f_com);
    else
@@ -1384,10 +1617,6 @@ void FE_Evolution::getParEulerDGTranspose(const ParGridFunction &u_sol, const Pa
 
 
 
-CGSolver &FE_Evolution::GetMSolver() 
-{
-    return M_solver;
-}
 
 
 // Get max signal speed 
@@ -1405,7 +1634,7 @@ double getUMax(int dim, const Vector &u)
     {
         rho = u[j];
     
-        for(int i = 0; i < dim; i++) vel[i] = u[(1 + i)*offset + j]/rho;
+        for(int i = 0; i < dim; i++) vel[i] = u[i*offset + j]/rho;
 
         double v_sq =  0;
         for(int i = 0; i < dim; i++)
@@ -1426,7 +1655,6 @@ double getUMax(int dim, const Vector &u)
     return u_max;
 }
 
-// Get max signal speed 
 void getPRhoMin(int dim, const Vector &u, double &rho_min, double &p_min)
 {
     int var_dim = dim + 2; 
@@ -1463,8 +1691,6 @@ void getPRhoMin(int dim, const Vector &u, double &rho_min, double &p_min)
     }
 
 }
-
-
 
 
 // Inviscid flux 
@@ -1521,7 +1747,7 @@ void getInvFlux(int dim, const Vector &u, Vector &f)
 
 // Get gradient of auxilliary variable 
 void getAuxGrad(int dim, const HypreParMatrix &K_x, const HypreParMatrix &K_y, const HypreParMatrix &K_z, 
-        const CGSolver &M_solver, const Vector &u, 
+        const HypreParMatrix &M, const Vector &u, 
         const Vector &b_aux_x, const Vector &b_aux_y, const Vector &b_aux_z,        
         Vector &aux_grad)
 {
@@ -1556,13 +1782,13 @@ void getAuxGrad(int dim, const HypreParMatrix &K_x, const HypreParMatrix &K_y, c
         K_x.Mult(aux_var, aux_x);
         b_aux_x.GetSubVector(offsets[i], b_sub);
         add(b_sub, aux_x, aux_x);
-        M_solver.Mult(aux_x, aux_x);
+        M.Mult(aux_x, aux_x);
         aux_grad.SetSubVector(offsets[0*aux_dim + i], aux_x);
 
         K_y.Mult(aux_var, aux_x);
         b_aux_y.GetSubVector(offsets[i], b_sub);
         add(b_sub, aux_x, aux_x);
-        M_solver.Mult(aux_x, aux_x);
+        M.Mult(aux_x, aux_x);
         aux_grad.SetSubVector(offsets[1*aux_dim + i], aux_x);
     
         if (dim == 3)
@@ -1570,7 +1796,7 @@ void getAuxGrad(int dim, const HypreParMatrix &K_x, const HypreParMatrix &K_y, c
             K_z.Mult(aux_var, aux_x);
             b_aux_z.GetSubVector(offsets[i], b_sub);
             add(b_sub, aux_x, aux_x);
-            M_solver.Mult(aux_x, aux_x);
+            M.Mult(aux_x, aux_x);
             aux_grad.SetSubVector(offsets[2*aux_dim + i], aux_x);
         }
     }
@@ -1698,26 +1924,137 @@ void getVisFlux(int dim, const Vector &u, const Vector &aux_grad, Vector &f)
     }
 }
 
-SparseMatrix getSparseMat(const Vector &x)
+
+
+
+//  Initialize variables coefficient
+void init_function(const Vector &x, Vector &v)
 {
-    int size = x.Size();
+   //Space dimensions 
+   int dim = x.Size();
 
-    SparseMatrix a(size, size);
+   if (dim == 3)
+   {
+       double rho, u1, u2, u3, p, a_inf;
 
-    for(int i = 0; i < size; i++)
-        a.Set(i, i, x(i));
+       p   = p_inf;
+       rho = rho_inf;
 
-    return a;
+       a_inf  = std::sqrt(gamm*p_inf/rho_inf);
+
+       u1     = M_inf*a_inf*cos(M_PI*aoa/180.); u2 = M_inf*a_inf*sin(M_PI*aoa/180.); u3 = 0.0;
+    
+       double v_sq = pow(u1, 2) + pow(u2, 2) + pow(u3, 2);
+    
+       v(0) = rho;                     //rho
+       v(1) = rho * u1;                //rho * u
+       v(2) = rho * u2;                //rho * v
+       v(3) = rho * u3;                //rho * v
+       v(4) = p/(gamm - 1) + 0.5*rho*v_sq;
+
+   }
+   else if (dim == 2)
+   {
+       double rho, u1, u2, u3, p, a_inf;
+
+       p   = p_inf;
+       rho = rho_inf;
+
+       a_inf  = std::sqrt(gamm*p_inf/rho_inf);
+
+       u1     = M_inf*a_inf*cos(M_PI*aoa/180.); u2 = M_inf*a_inf*sin(M_PI*aoa/180.); u3 = 0.0;
+
+       double v_sq = pow(u1, 2) + pow(u2, 2);
+    
+       v(0) = rho;                     //rho
+       v(1) = rho * u1;                //rho * u
+       v(2) = rho * u2;                //rho * v
+       v(3) = p/(gamm - 1) + 0.5*rho*v_sq;
+
+   }
 }
 
 
-void getMorinishiDx(int dim, 
-        const HypreParMatrix &K_x, const HypreParMatrix &K_y, const HypreParMatrix &K_z, 
-        const Vector &u, Vector &f_dx) 
+void wall_bnd_cnd(const Vector &x, Vector &v)
 {
-    int var_dim = dim + 2;
-    int offset  = u.Size()/var_dim;
+   //Space dimensions 
+   int dim = x.Size();
 
+   if (dim == 2)
+   {
+       double T_inf = p_inf/(R_gas*rho_inf);
+       v(0) = 0.0;  // x velocity   
+       v(1) = 0.0;  // y velocity 
+       v(2) = 1.001*T_inf;  // Temp 
+   }
+   else if (dim == 3)
+   {
+       double T_inf = p_inf/(R_gas*rho_inf);
+       v(0) = 0.0;  // x velocity   
+       v(1) = 0.0;  // y velocity 
+       v(2) = 0.0;  // z velocity 
+       v(3) = 1.001*T_inf;  // Temp 
+   }
+}
+
+void char_bnd_cnd(const Vector &x, Vector &v)
+{
+   //Space dimensions 
+   int dim = x.Size();
+
+   if (dim == 2)
+   {
+       double rho, u1, u2, u3, p, a_inf;
+
+       p   = p_inf;
+       rho = rho_inf;
+
+       a_inf  = std::sqrt(gamm*p_inf/rho_inf);
+
+       u1     = M_inf*a_inf*cos(M_PI*aoa/180.); u2 = M_inf*a_inf*sin(M_PI*aoa/180.); u3 = 0.0;
+ 
+       double v_sq = pow(u1, 2) + pow(u2, 2);
+    
+       v(0) = rho;                     //rho
+       v(1) = rho * u1;                //rho * u
+       v(2) = rho * u2;                //rho * v
+       v(3) = p/(gamm - 1) + 0.5*rho*v_sq;
+   }
+   else if (dim == 3)
+   {
+       double rho, u1, u2, u3, p, a_inf;
+
+       p   = p_inf;
+       rho = rho_inf;
+
+       a_inf  = std::sqrt(gamm*p_inf/rho_inf);
+
+       u1     = M_inf*a_inf*cos(M_PI*aoa/180.); u2 = M_inf*a_inf*sin(M_PI*aoa/180.); u3 = 0.0;
+
+       double v_sq = pow(u1, 2) + pow(u2, 2) + pow(u3, 2);
+    
+       v(0) = rho;                     //rho
+       v(1) = rho * u1;                //rho * u
+       v(2) = rho * u2;                //rho * v
+       v(3) = rho * u3;                //rho * w
+       v(4) = p/(gamm - 1) + 0.5*rho*v_sq;
+   }
+
+}
+
+
+
+
+void FE_Evolution::GetMomentum(const ParGridFunction &x, double &Fx) 
+{
+    int dim = x.Size()/K_inv_x.GetNumRows() - 2;
+    int var_dim = dim + 2;
+
+    Vector y_temp, y;
+    y_temp.SetSize(x.Size()); 
+    y.SetSize(x.Size()); 
+
+    int offset  = K_inv_x.GetNumRows();
     Array<int> offsets[dim*var_dim];
     for(int i = 0; i < dim*var_dim; i++)
     {
@@ -1731,139 +2068,741 @@ void getMorinishiDx(int dim,
             offsets[j][i] = j*offset + i ;
         }
     }
-    Vector rho, E;
-    u.GetSubVector(offsets[0],           rho   );
-    u.GetSubVector(offsets[var_dim - 1],      E);
 
-    Vector rho_vel[dim];
-    for(int i = 0; i < dim; i++) u.GetSubVector(offsets[1 + i], rho_vel[i]);
-
-    Vector vel[dim], rho_vel_sq[dim], rho_uv[dim];
-    for(int i = 0; i < dim; i++) 
+    Vector f_sol(offset), f_x(offset), f_x_m(offset);
+    Vector b_sub(offset);
+    y = 0.0;
+    for(int i = 0; i < var_dim; i++)
     {
-        vel[i].SetSize(offset); rho_vel_sq[i].SetSize(offset); rho_uv[i].SetSize(offset);
+        f_I.GetSubVector(offsets[i], f_sol);
+        K_inv_x.Mult(f_sol, f_x);
+        b.GetSubVector(offsets[i], b_sub);
+        f_x += b_sub; // Needs to be added only once
+        y_temp.SetSubVector(offsets[i], f_x);
     }
+    y += y_temp;
 
-    Vector rho_theta_pu[dim], pres(offset); // (rho*Cv*T + p)*u, p
-    for(int i = 0; i < dim; i++) 
+    for(int i = var_dim + 0; i < 2*var_dim; i++)
     {
-        rho_theta_pu[i].SetSize(offset);
+        f_I.GetSubVector(offsets[i], f_sol);
+        K_inv_y.Mult(f_sol, f_x);
+        y_temp.SetSubVector(offsets[i - var_dim], f_x);
     }
+    y += y_temp;
 
-    Vector fx(var_dim*offset);
 
-    for(int i = 0; i < offset; i++)
+    if (dim == 3)
     {
-        double vel_sq = 0.0;
-        for(int j = 0; j < dim; j++)
+        for(int i = 2*var_dim + 0; i < 3*var_dim; i++)
         {
-            vel[j][i]        = rho_vel[j](i)/rho(i);
-            vel_sq          += pow(vel[j][i], 2);
-
-            rho_vel_sq[j][i] = rho_vel[j](i)*vel[j](i);
+            f_I.GetSubVector(offsets[i], f_sol);
+            K_inv_z.Mult(f_sol, f_x);
+            y_temp.SetSubVector(offsets[i - 2*var_dim], f_x);
         }
-
-        pres(i)          = (E(i) - 0.5*rho(i)*vel_sq)*(gamm - 1);
-
-        for(int j = 0; j < dim; j++)
-            rho_theta_pu[j](i)  = ((E(i) - 0.5*rho(i)*vel_sq) + pres(i))*vel[j](i);
-
-        rho_uv[0](i)  = rho_vel[0](i)*vel[1](i); // rho*u*v
-        rho_uv[1](i)  = rho_vel[0](i)*vel[2](i); // rho*u*w
-        rho_uv[2](i)  = rho_vel[1](i)*vel[2](i); // rho*v*w
-    
+        y += y_temp;
     }
 
-    Vector rho_vel_dx[dim];
-    Vector vel_dx[dim], rho_vel_sq_dx(offset), rho_uv_dx[dim];
-    Vector pres_dx(offset); 
-    Vector rho_theta_dx(offset); 
-
-    K_x.Mult(pres, pres_dx);
-    K_x.Mult(rho_theta_pu[0],  rho_theta_dx);
-    K_x.Mult(rho_vel_sq[0],    rho_vel_sq_dx);
-    for(int j = 0; j < dim; j++) 
+    //////////////////////////////////////////////
+    //Get viscous contribution
+    for(int i = 0; i < var_dim; i++)
     {
-        rho_vel_dx[j].SetSize(offset); vel_dx[j].SetSize(offset); rho_uv_dx[j].SetSize(offset);
-    
-        K_x.Mult(rho_vel[j],    rho_vel_dx[j]);
-        K_x.Mult(vel[j],        vel_dx[j]);
-        K_x.Mult(rho_uv[j],     rho_uv_dx[j]);
+        f_V.GetSubVector(offsets[i], f_sol);
+        K_vis_x.Mult(f_sol, f_x);
+        y_temp.SetSubVector(offsets[i], f_x);
     }
+    y += y_temp;
 
-    fx = 0.0;
-
-    for(int i = 0; i < offset; i++)
+    for(int i = var_dim + 0; i < 2*var_dim; i++)
     {
-        fx(0*offset + i) += rho_vel_dx[0](i);
-
-        fx(1*offset + i) += 0.5*( rho_vel_sq_dx(i) + rho_vel[0](i)*vel_dx[0](i) + vel[0](i)*rho_vel_dx[0](i) ) + pres_dx(i); 
-        
-        fx(2*offset + i) += 0.5*( rho_uv_dx[0](i) + rho_vel[0](i)*vel_dx[1](i) + vel[1](i)*rho_vel_dx[0](i) ) ; 
-
-        fx(3*offset + i) += 0.5*( rho_uv_dx[1](i) + rho_vel[0](i)*vel_dx[2](i) + vel[2](i)*rho_vel_dx[0](i) ) ; 
-
-        fx(4*offset + i) += rho_theta_dx(i) + 0.5*( (rho_vel_sq[0](i)*vel_dx[0](i) + vel[0](i)*rho_vel_sq_dx(i) 
-                                + rho_uv[0](i)*vel_dx[1](i) + vel[1](i)*rho_uv_dx[0](i) 
-                                + rho_uv[1](i)*vel_dx[2](i) + vel[2](i)*rho_uv_dx[1](i) )  ); 
-    
+        f_V.GetSubVector(offsets[i], f_sol);
+        K_vis_y.Mult(f_sol, f_x);
+        y_temp.SetSubVector(offsets[i - var_dim], f_x);
     }
+    y += y_temp;
 
-    K_y.Mult(pres, pres_dx);
-    K_y.Mult(rho_theta_pu[1],  rho_theta_dx);
-    K_y.Mult(rho_vel_sq[1],    rho_vel_sq_dx);
-    for(int j = 0; j < dim; j++) 
+    if (dim == 3)
     {
-        K_y.Mult(rho_vel[j],    rho_vel_dx[j]);
-        K_y.Mult(vel[j],        vel_dx[j]);
-        K_y.Mult(rho_uv[j],     rho_uv_dx[j]);
+        for(int i = 2*var_dim + 0; i < 3*var_dim; i++)
+        {
+            f_V.GetSubVector(offsets[i], f_sol);
+            K_vis_z.Mult(f_sol, f_x);
+            y_temp.SetSubVector(offsets[i - 2*var_dim], f_x);
+        }
+        y += y_temp;
     }
 
-    for(int i = 0; i < offset; i++)
+    for(int i = 0; i < var_dim; i++)
     {
-        fx(0*offset + i) += rho_vel_dx[1](i);
-
-        fx(1*offset + i) += 0.5*( rho_uv_dx[0](i)  + rho_vel[1](i)*vel_dx[0](i) + vel[0](i)*rho_vel_dx[1](i) ) ; 
-
-        fx(2*offset + i) += 0.5*( rho_vel_sq_dx(i) + rho_vel[1](i)*vel_dx[1](i) + vel[1](i)*rho_vel_dx[1](i) ) + pres_dx(i); 
-
-        fx(3*offset + i) += 0.5*( rho_uv_dx[2](i)  + rho_vel[1](i)*vel_dx[2](i) + vel[2](i)*rho_vel_dx[1](i) ) ; 
-
-        fx(4*offset + i) += rho_theta_dx(i) + 0.5*( (rho_uv[0](i)*vel_dx[0](i) + vel[0](i)*rho_uv_dx[0](i) 
-                                + rho_vel_sq[1](i)*vel_dx[1](i) + vel[1](i)*rho_vel_sq_dx(i) 
-                                + rho_uv[2](i)*vel_dx[2](i) + vel[2](i)*rho_uv_dx[2](i) )  ); 
-    
+        y.GetSubVector(offsets[i], f_x);
+        M.Mult(f_x, f_x_m);
+        y.SetSubVector(offsets[i], f_x_m);
     }
 
-    K_z.Mult(pres, pres_dx);
-    K_z.Mult(rho_theta_pu[2],  rho_theta_dx);
-    K_z.Mult(rho_vel_sq[2],    rho_vel_sq_dx);
-    for(int j = 0; j < dim; j++) 
+    Vector s(offset);
+    for(int i = 0; i < var_dim; i++)
     {
-        K_z.Mult(rho_vel[j],    rho_vel_dx[j]);
-        K_z.Mult(vel[j],        vel_dx[j]);
-        K_z.Mult(rho_uv[j],     rho_uv_dx[j]);
+        s = 0.0;
+        if (i == 1)
+            s = fx; 
+        else if (i == var_dim - 1)
+            s = fx;
+        y_temp.SetSubVector(offsets[i], s);
     }
+    add(y_temp, y, y);
 
-    for(int i = 0; i < offset; i++)
+    const FiniteElementSpace *fes = x.FESpace();
+    Mesh *mesh                    = fes->GetMesh();
+
+    const FiniteElement *el;
+ 
+    Fx  = 0.0;
+    for (int i = 0; i < fes->GetNE(); i++)
     {
-        fx(0*offset + i) += rho_vel_dx[2](i);
-
-        fx(1*offset + i) += 0.5*( rho_uv_dx[1](i)  + rho_vel[2](i)*vel_dx[0](i) + vel[0](i)*rho_vel_dx[2](i) ) ; 
-
-        fx(2*offset + i) += 0.5*( rho_uv_dx[2](i) + rho_vel[2](i)*vel_dx[1](i) + vel[1](i)*rho_vel_dx[2](i) ) ; 
-
-        fx(3*offset + i) += 0.5*( rho_vel_sq_dx(i)  + rho_vel[2](i)*vel_dx[2](i) + vel[2](i)*rho_vel_dx[2](i) ) + pres_dx(i); 
-
-        fx(4*offset + i) += rho_theta_dx(i) + 0.5*( (rho_uv[1](i)*vel_dx[0](i) + vel[0](i)*rho_uv_dx[1](i) 
-                                + rho_uv[2](i)*vel_dx[1](i) + vel[1](i)*rho_uv_dx[2](i) 
-                                + rho_vel_sq[2](i)*vel_dx[2](i) + vel[2](i)*rho_vel_sq_dx(i) )  ); 
-    
+        ElementTransformation *T  = fes->GetElementTransformation(i);
+        el = fes->GetFE(i);
+ 
+        dim = el->GetDim();
+ 
+        int dof = el->GetDof();
+        Array<int> vdofs;
+        fes->GetElementVDofs(i, vdofs);
+ 
+        const IntegrationRule *ir ;
+        int   order;
+ 
+        order = 2*el->GetOrder() + 1;
+        ir    = &IntRules.Get(el->GetGeomType(), order);
+ 
+        for (int p = 0; p < ir->GetNPoints(); p++)
+        {
+            const IntegrationPoint &ip = ir->IntPoint(p);
+            T->SetIntPoint(&ip);
+ 
+            Fx  += ip.weight*T->Weight()*(y[vdofs[dof + p]]);
+        }
     }
-
-    f_dx = fx;
 
 }
+
+void writeUMean(const vector<double> u_mean, const vector<double> inst_u_mean, int ti, vector<double> y_uni)
+{
+    std::ostringstream oss;
+    oss << std::setw(7) << std::setfill('0') << ti;
+
+    std::string f_name = "u_mean_" + oss.str();
+
+    ofstream f_file;
+    f_file.open(f_name.c_str());
+
+    int vert_nodes = y_uni.size();
+    for(int i = 0; i < vert_nodes; i++)
+    {
+        f_file << y_uni.at(i) << "\t" << u_mean.at(i) << "\t" << inst_u_mean.at(i) << endl;    
+    }
+
+    f_file.close();
+
+}
+
+
+
+/*
+ * Get Interaction flux using the local Roe solver 
+ * solver, u1 is the left value and u2 the right value
+ * Copied from Dr. Katate Masatsuka (info[at]cfdbooks.com),
+ */
+void getVectorRoeFlux(const double R, const double gamm, const int dim, const Vector &u1, const Vector &u2, 
+                                const Vector &nor, Vector &f_com)
+{
+    int var_dim = dim + 2;
+    int num_pts = u1.Size()/var_dim;
+
+    double Cv   = R/(gamm - 1);
+
+    double rho_L, E_L, vel_sq_L, T_L, p_L, a_L, h_L, sqrtRho_L, vnl;
+    double rho_R, E_R, vel_sq_R, T_R, p_R, a_R, h_R, sqrtRho_R, vnr;
+    Vector vel_L(dim);
+    Vector vel_R(dim);
+
+    double sSqrtRho, vel_sq_rho, r_rho, rho_h, rho_a, vn_rho;
+    Vector velRho(dim);
+
+    double drho, dp, dvn, du, dv, dw;
+    Vector LdU(4), ws(4), dws(4);
+
+    DenseMatrix roeM(dim + 2, 4);
+    Vector diss(var_dim); // dissipation 
+
+    Vector nor_in(dim), nor_dim(dim);
+    double nor_l2;
+
+    Vector fl(dim*var_dim*num_pts), fr(dim*var_dim*num_pts);
+    getInvFlux(dim, u1, fl);
+    getInvFlux(dim, u2, fr);
+    add(0.5, fl, fr, f_com);
+
+    for(int p = 0; p < num_pts; p++)
+    {
+        rho_L = u1(p);
+        
+        for (int i = 0; i < dim; i++)
+        {
+            vel_L(i) = u1((1 + i)*num_pts + p)/rho_L;    
+        }
+        E_L   = u1((var_dim - 1)*num_pts + p);
+
+        vel_sq_L = 0.0;
+        for (int i = 0; i < dim; i++)
+        {
+            vel_sq_L += pow(vel_L(i), 2) ;
+        }
+        T_L        = (E_L - 0.5*rho_L*vel_sq_L)/(rho_L*Cv);
+        p_L        = rho_L*R*T_L;
+        a_L        = sqrt(gamm * R * T_L);
+        h_L        = (E_L + p_L)/rho_L;
+        sqrtRho_L  = std::sqrt(rho_L);
+
+        rho_R = u2(p);
+        for (int i = 0; i < dim; i++)
+        {
+            vel_R(i) = u2((1 + i)*num_pts + p)/rho_R;    
+        }
+        E_R   = u2((var_dim - 1)*num_pts + p);
+    
+        vel_sq_R = 0.0;
+        for (int i = 0; i < dim; i++)
+        {
+            vel_sq_R += pow(vel_R(i), 2) ;
+        }
+        T_R       = (E_R - 0.5*rho_R*vel_sq_R)/(rho_R*Cv);
+        p_R       = rho_R*R*T_R;
+        a_R       = sqrt(gamm * R * T_R);
+        h_R       = (E_R + p_R)/rho_R;
+        sqrtRho_R = std::sqrt(rho_R);
+
+        for (int i = 0; i < dim; i++)
+        {
+            nor_in(i) = nor(i*num_pts + p);
+        }
+        nor_l2 = nor_in.Norml2();
+        nor_dim.Set(1/nor_l2, nor_in);
+
+        vnl   = 0.0, vnr = 0.0;
+        for (int i = 0; i < dim; i++)
+        {
+            vnl += vel_L[i]*nor_dim(i); 
+            vnr += vel_R[i]*nor_dim(i); 
+        }
+
+        sSqrtRho = 1./(sqrtRho_L + sqrtRho_R); 
+        vel_sq_rho = 0.0;;
+        for (int i = 0; i < dim; i++)
+        {
+            velRho(i)   = (sqrtRho_L*vel_L(i) + sqrtRho_R*vel_R(i))*sSqrtRho;
+            vel_sq_rho += velRho(i)*velRho(i);
+        }
+        r_rho = (sqrtRho_L*rho_L + sqrtRho_R*rho_R)*sSqrtRho;
+        rho_h = (sqrtRho_L*h_L   + sqrtRho_R*h_R)*sSqrtRho;
+        rho_a = std::sqrt((gamm - 1)*(rho_h - 0.5*vel_sq_rho));
+
+        vn_rho   = 0.0;
+        for (int i = 0; i < dim; i++)
+        {
+            vn_rho += velRho[i]*nor_dim(i); 
+        }
+
+       //Wave Strengths
+
+        drho = rho_R - rho_L ;//Density difference
+        dp   = p_R - p_L     ;//Pressure difference
+        dvn  = vnr - vnl     ;//Normal velocity difference
+
+        LdU(0) = (dp - r_rho*rho_a*dvn )/(2.*rho_a*rho_a); //Left-moving acoustic wave strength
+        LdU(1) =  drho - dp/(rho_a*rho_a);                 //Entropy wave strength
+        LdU(2) = (dp + r_rho*rho_a*dvn )/(2.*rho_a*rho_a); //Right-moving acoustic wave strength
+        LdU(3) = r_rho;                                    //Shear wave strength 
+
+        // Absolute values of the wave Speeds
+        ws(0) = std::abs(vn_rho - rho_a) ;//Left-moving acoustic wave
+        ws(1) = std::abs(vn_rho);         //Entropy wave
+        ws(2) = std::abs(vn_rho + rho_a) ;//Right-moving acoustic wave
+        ws(3) = std::abs(vn_rho) ;        //Shear waves
+
+        //Harten's Entropy Fix JCP(1983), 49, pp357-393: only for the nonlinear fields.
+        //NOTE: It avoids vanishing wave speeds by making a parabolic fit near ws = 0.
+        
+        dws(0) = 0.2; 
+        if ( ws(0) < dws(0) ) 
+             ws(0) = 0.5 * ( ws(0)*ws(0)/dws(0)+dws(0) );
+        dws(2) = 0.2; 
+        if ( ws(2) < dws(2) ) 
+             ws(3) = 0.5 * ( ws(2)*ws(2)/dws(2)+dws(2) );
+        
+        //Right Eigenvectors
+        //Note: Two shear wave components are combined into one, so that tangent vectors
+        //      are not required. And that's why there are only 4 vectors here.
+        //      See "I do like CFD, VOL.1" about how tangent vectors are eliminated.
+        
+        //  Left-moving acoustic wave
+        
+        roeM(0,0) = 1.; 
+        roeM(1,0) = velRho(0) - rho_a*nor_dim(0);
+        roeM(2,0) = velRho(1) - rho_a*nor_dim(1);  
+        roeM(3,0) = velRho(2) - rho_a*nor_dim(2);
+        roeM(4,0) = rho_h - rho_a*vn_rho;
+        
+        // Entropy wave
+           
+        roeM(0,1) = 1.; 
+        roeM(1,1) = velRho(0);
+        roeM(2,1) = velRho(1);
+        roeM(3,1) = velRho(2); 
+        roeM(4,1) = 0.5*vel_sq_rho;
+        
+        // Right-moving acoustic wave
+        
+        roeM(0,2) = 1.; 
+        roeM(1,2) = velRho(0) + rho_a*nor_dim(0);
+        roeM(2,2) = velRho(1) + rho_a*nor_dim(1);  
+        roeM(3,2) = velRho(2) + rho_a*nor_dim(2);
+        roeM(4,2) = rho_h + rho_a*vn_rho;
+
+        // Two shear wave components combined into one (wave strength incorporated).
+          
+        du = vel_R(0) - vel_L(0);
+        dv = vel_R(1) - vel_L(1);
+        dw = vel_R(2) - vel_L(2);
+
+        roeM(0,3) = 0.; 
+        roeM(1,3) = du - dvn*nor_dim(0);
+        roeM(2,3) = dv - dvn*nor_dim(1);
+        roeM(3,3) = dw - dvn*nor_dim(2);
+        roeM(4,3) = velRho(0)*du + velRho(1)*dv + velRho(2)*dw - vn_rho*dvn;
+
+        // Dissipation Term: |An|(UR-UL) = R|Lambda|L*dU = sum_k of [ ws(k) * R(:,k) * L*dU(k) ]
+        
+        for(int j = 0; j < var_dim; j++)
+            diss(j) = ws(0)*LdU(0)*roeM(j,0) + ws(1)*LdU(1)*roeM(j,1) 
+             + ws(2)*LdU(2)*roeM(j,2) + ws(3)*LdU(3)*roeM(j,3);
+
+        for (int i = 0; i < dim; i++)
+        {
+            for (int j = 0; j < var_dim; j++)
+            {
+                f_com((i*var_dim + j)*num_pts + p) += 
+                    -0.5*nor_dim(i)*diss(j);
+            }
+        }
+
+    }
+}
+
+
+/*
+ * Get Interaction flux using the local Roe solver with Low Mach correction
+ * solver, u1 is the left value and u2 the right value
+ * Copied Roe solver from Dr. Katate Masatsuka (info[at]cfdbooks.com),
+ */
+void getVectorLMRoeFlux(const double R, const double gamm, const int dim, const Vector &u1, const Vector &u2, 
+                                const Vector &nor, Vector &f_com)
+{
+    int var_dim = dim + 2;
+    int num_pts = u1.Size()/var_dim;
+
+    double Cv   = R/(gamm - 1);
+
+    double rho_L, E_L, vel_sq_L, T_L, p_L, a_L, h_L, sqrtRho_L, vnl, mach_L;
+    double rho_R, E_R, vel_sq_R, T_R, p_R, a_R, h_R, sqrtRho_R, vnr, mach_R;
+    Vector vel_L(dim);
+    Vector vel_R(dim);
+
+    double sSqrtRho, vel_sq_rho, r_rho, rho_h, rho_a, vn_rho;
+    Vector velRho(dim);
+
+    double LM_z;
+    double dlambda1, dlambda3;
+
+    double drho, dp, dvn, du, dv, dw;
+    Vector LdU(4), ws(4), dws(4);
+
+    DenseMatrix roeM(dim + 2, 4);
+    Vector diss(var_dim); // dissipation 
+
+    Vector nor_in(dim), nor_dim(dim);
+    double nor_l2;
+
+    Vector fl(dim*var_dim*num_pts), fr(dim*var_dim*num_pts);
+    getInvFlux(dim, u1, fl);
+    getInvFlux(dim, u2, fr);
+    add(0.5, fl, fr, f_com);
+
+    for(int p = 0; p < num_pts; p++)
+    {
+        rho_L = u1(p);
+        
+        for (int i = 0; i < dim; i++)
+        {
+            vel_L(i) = u1((1 + i)*num_pts + p)/rho_L;    
+        }
+        E_L   = u1((var_dim - 1)*num_pts + p);
+
+        vel_sq_L = 0.0;
+        for (int i = 0; i < dim; i++)
+        {
+            vel_sq_L += pow(vel_L(i), 2) ;
+        }
+        T_L        = (E_L - 0.5*rho_L*vel_sq_L)/(rho_L*Cv);
+        p_L        = rho_L*R*T_L;
+        a_L        = sqrt(gamm * R * T_L);
+        h_L        = (E_L + p_L)/rho_L;
+        sqrtRho_L  = std::sqrt(rho_L);
+        mach_L     = std::sqrt(vel_sq_L)/a_L;
+
+        rho_R = u2(p);
+        for (int i = 0; i < dim; i++)
+        {
+            vel_R(i) = u2((1 + i)*num_pts + p)/rho_R;    
+        }
+        E_R   = u2((var_dim - 1)*num_pts + p);
+    
+        vel_sq_R = 0.0;
+        for (int i = 0; i < dim; i++)
+        {
+            vel_sq_R += pow(vel_R(i), 2) ;
+        }
+        T_R       = (E_R - 0.5*rho_R*vel_sq_R)/(rho_R*Cv);
+        p_R       = rho_R*R*T_R;
+        a_R       = sqrt(gamm * R * T_R);
+        h_R       = (E_R + p_R)/rho_R;
+        sqrtRho_R = std::sqrt(rho_R);
+        mach_R    = std::sqrt(vel_sq_R)/a_R;
+
+        for (int i = 0; i < dim; i++)
+        {
+            nor_in(i) = nor(i*num_pts + p);
+        }
+        nor_l2 = nor_in.Norml2();
+        nor_dim.Set(1/nor_l2, nor_in);
+
+        vnl   = 0.0, vnr = 0.0;
+        for (int i = 0; i < dim; i++)
+        {
+            vnl += vel_L[i]*nor_dim(i); 
+            vnr += vel_R[i]*nor_dim(i); 
+        }
+
+        sSqrtRho = 1./(sqrtRho_L + sqrtRho_R); 
+        vel_sq_rho = 0.0;;
+        for (int i = 0; i < dim; i++)
+        {
+            velRho(i)   = (sqrtRho_L*vel_L(i) + sqrtRho_R*vel_R(i))*sSqrtRho;
+            vel_sq_rho += velRho(i)*velRho(i);
+        }
+        r_rho = (sqrtRho_L*rho_L + sqrtRho_R*rho_R)*sSqrtRho;
+        rho_h = (sqrtRho_L*h_L   + sqrtRho_R*h_R)*sSqrtRho;
+        rho_a = std::sqrt((gamm - 1)*(rho_h - 0.5*vel_sq_rho));
+
+        vn_rho   = 0.0;
+        for (int i = 0; i < dim; i++)
+        {
+            vn_rho += velRho[i]*nor_dim(i); 
+        }
+
+       //Wave Strengths
+
+        drho = rho_R - rho_L ;//Density difference
+        dp   = p_R - p_L     ;//Pressure difference
+        dvn  = vnr - vnl     ;//Normal velocity difference
+
+        LM_z = std::min(1., std::max(mach_L, mach_R));
+        dlambda1 = (vnr - a_R) - (vnl - a_L);
+        dlambda3 = (vnr + a_R) - (vnl + a_L);
+
+        double beta     = 1./6.;
+
+
+        LdU(0) = (dp - r_rho*rho_a*LM_z*dvn )/(2.*rho_a*rho_a); //Left-moving acoustic wave strength
+        LdU(1) =  drho - dp/(rho_a*rho_a);                 //Entropy wave strength
+        LdU(2) = (dp + r_rho*rho_a*LM_z*dvn )/(2.*rho_a*rho_a); //Right-moving acoustic wave strength
+        LdU(3) = r_rho;                                    //Shear wave strength 
+
+        // Absolute values of the wave Speeds
+        ws(0) = std::abs(vn_rho - rho_a) + beta*std::abs(dlambda1); ;//Left-moving acoustic wave
+        ws(1) = std::abs(vn_rho);         //Entropy wave
+        ws(2) = std::abs(vn_rho + rho_a) + beta*std::abs(dlambda3); ;//Right-moving acoustic wave
+        ws(3) = std::abs(vn_rho) ;        //Shear waves
+
+        //Harten's Entropy Fix JCP(1983), 49, pp357-393: only for the nonlinear fields.
+        //NOTE: It avoids vanishing wave speeds by making a parabolic fit near ws = 0.
+        
+        dws(0) = 0.2; 
+        if ( ws(0) < dws(0) ) 
+             ws(0) = 0.5 * ( ws(0)*ws(0)/dws(0)+dws(0) );
+        dws(2) = 0.2; 
+        if ( ws(2) < dws(2) ) 
+             ws(3) = 0.5 * ( ws(2)*ws(2)/dws(2)+dws(2) );
+        
+        //Right Eigenvectors
+        //Note: Two shear wave components are combined into one, so that tangent vectors
+        //      are not required. And that's why there are only 4 vectors here.
+        //      See "I do like CFD, VOL.1" about how tangent vectors are eliminated.
+        
+        //  Left-moving acoustic wave
+        
+        roeM(0,0) = 1.; 
+        roeM(1,0) = velRho(0) - rho_a*nor_dim(0);
+        roeM(2,0) = velRho(1) - rho_a*nor_dim(1);  
+        roeM(3,0) = velRho(2) - rho_a*nor_dim(2);
+        roeM(4,0) = rho_h - rho_a*vn_rho;
+        
+        // Entropy wave
+           
+        roeM(0,1) = 1.; 
+        roeM(1,1) = velRho(0);
+        roeM(2,1) = velRho(1);
+        roeM(3,1) = velRho(2); 
+        roeM(4,1) = 0.5*vel_sq_rho;
+        
+        // Right-moving acoustic wave
+        
+        roeM(0,2) = 1.; 
+        roeM(1,2) = velRho(0) + rho_a*nor_dim(0);
+        roeM(2,2) = velRho(1) + rho_a*nor_dim(1);  
+        roeM(3,2) = velRho(2) + rho_a*nor_dim(2);
+        roeM(4,2) = rho_h + rho_a*vn_rho;
+
+        // Two shear wave components combined into one (wave strength incorporated).
+          
+        du = vel_R(0) - vel_L(0);
+        dv = vel_R(1) - vel_L(1);
+        dw = vel_R(2) - vel_L(2);
+
+        roeM(0,3) = 0.; 
+        roeM(1,3) = du - dvn*nor_dim(0);
+        roeM(2,3) = dv - dvn*nor_dim(1);
+        roeM(3,3) = dw - dvn*nor_dim(2);
+        roeM(4,3) = velRho(0)*du + velRho(1)*dv + velRho(2)*dw - vn_rho*dvn;
+
+        // Dissipation Term: |An|(UR-UL) = R|Lambda|L*dU = sum_k of [ ws(k) * R(:,k) * L*dU(k) ]
+        
+        for(int j = 0; j < var_dim; j++)
+            diss(j) = ws(0)*LdU(0)*roeM(j,0) + ws(1)*LdU(1)*roeM(j,1) 
+             + ws(2)*LdU(2)*roeM(j,2) + ws(3)*LdU(3)*roeM(j,3);
+
+        for (int i = 0; i < dim; i++)
+        {
+            for (int j = 0; j < var_dim; j++)
+            {
+                f_com((i*var_dim + j)*num_pts + p) += 
+                    -0.5*nor_dim(i)*diss(j);
+            }
+        }
+
+    }
+}
+
+
+/*
+ * Get Interaction flux using the local Lax Friedrichs Riemann  
+ * solver, u1 is the left value and u2 the right value
+ */
+void getVectorLFFlux(const double R, const double gamm, const int dim, 
+        const Vector &u1, const Vector &u2, const Vector &nor, Vector &f_com)
+{
+    int var_dim = dim + 2; 
+    double Cv   = R/(gamm - 1);
+
+    int num_pts = u1.Size()/var_dim;
+
+    Vector fl(dim*var_dim*num_pts), fr(dim*var_dim*num_pts);
+    getInvFlux(dim, u1, fl);
+    getInvFlux(dim, u2, fr);
+    add(0.5, fl, fr, f_com);
+
+    double rho_L, E_L, vel_sq_L, T_L, a_L;
+    double rho_R, E_R, vel_sq_R, T_R, a_R;
+    Vector vel_L(dim);
+    Vector vel_R(dim);
+
+    Vector nor_in(dim), nor_dim(dim);
+    double nor_l2;
+
+    double vsl, vsr;
+    double u_max;
+    for(int p = 0; p < num_pts; p++)
+    {
+        rho_L = u1(p);
+        
+        for (int i = 0; i < dim; i++)
+        {
+            vel_L(i) = u1((1 + i)*num_pts + p)/rho_L;    
+        }
+        E_L   = u1((var_dim - 1)*num_pts + p);
+
+        vel_sq_L = 0.0;
+        for (int i = 0; i < dim; i++)
+        {
+            vel_sq_L += pow(vel_L(i), 2) ;
+        }
+
+        T_L   = (E_L - 0.5*rho_L*vel_sq_L)/(rho_L*Cv);
+        a_L   = sqrt(gamm * R * T_L);
+
+        rho_R = u2(p);
+        for (int i = 0; i < dim; i++)
+        {
+            vel_R(i) = u2((1 + i)*num_pts + p)/rho_R;    
+        }
+        E_R   = u2((var_dim - 1)*num_pts + p);
+    
+        vel_sq_R = 0.0;
+        for (int i = 0; i < dim; i++)
+        {
+            vel_sq_R += pow(vel_R(i), 2) ;
+        }
+        T_R   = (E_R - 0.5*rho_R*vel_sq_R)/(rho_R*Cv);
+        a_R   = sqrt(gamm * R * T_R);
+
+        for (int i = 0; i < dim; i++)
+        {
+            nor_in(i) = nor(i*num_pts + p);
+        }
+        nor_l2 = nor_in.Norml2();
+        nor_dim.Set(1/nor_l2, nor_in);
+        
+        double vnl   = 0.0, vnr = 0.0;
+        for (int i = 0; i < dim; i++)
+        {
+            vnl += vel_L[i]*nor_dim(i); 
+            vnr += vel_R[i]*nor_dim(i); 
+        }
+
+        vsl   = sqrt(vel_sq_L); vsr = sqrt(vel_sq_R);
+
+        u_max = std::max(a_L + std::abs(vnl), a_R + std::abs(vnr));
+
+        for (int i = 0; i < dim; i++)
+        {
+            for (int j = 0; j < var_dim; j++)
+            {
+                f_com((i*var_dim + j)*num_pts + p) += 
+                    -0.5*u_max*nor_dim(i)*(u2(j*num_pts + p) - u1(j*num_pts + p)); 
+            }
+        }
+    }
+}
+
+
+/*
+ * Get Interaction flux using the local KEP solver 
+ */
+void getVectorKEPFlux(const double R, const double gamm, const int dim, const Vector &u1, const Vector &u2, 
+                                const Vector &nor, Vector &f_com)
+{
+    int var_dim = dim + 2;
+    int num_pts = u1.Size()/var_dim;
+
+    double Cv   = R/(gamm - 1);
+
+    double rho_L, E_L, vel_sq_L, T_L, p_L, a_L, h_L, sqrtRho_L, vnl;
+    double rho_R, E_R, vel_sq_R, T_R, p_R, a_R, h_R, sqrtRho_R, vnr;
+    double vsl, vsr, u_max;
+    Vector vel_L(dim);
+    Vector vel_R(dim);
+
+    Vector nor_in(dim), nor_dim(dim);
+    double nor_l2;
+
+    for(int p = 0; p < num_pts; p++)
+    {
+        rho_L = u1(p);
+        
+        for (int i = 0; i < dim; i++)
+        {
+            vel_L(i) = u1((1 + i)*num_pts + p)/rho_L;    
+        }
+        E_L   = u1((var_dim - 1)*num_pts + p);
+
+        vel_sq_L = 0.0;
+        for (int i = 0; i < dim; i++)
+        {
+            vel_sq_L += pow(vel_L(i), 2) ;
+        }
+        T_L        = (E_L - 0.5*rho_L*vel_sq_L)/(rho_L*Cv);
+        p_L        = rho_L*R*T_L;
+        a_L        = sqrt(gamm * R * T_L);
+        h_L        = (E_L + p_L)/rho_L;
+        sqrtRho_L  = std::sqrt(rho_L);
+
+        rho_R = u2(p);
+        for (int i = 0; i < dim; i++)
+        {
+            vel_R(i) = u2((1 + i)*num_pts + p)/rho_R;    
+        }
+        E_R   = u2((var_dim - 1)*num_pts + p);
+    
+        vel_sq_R = 0.0;
+        for (int i = 0; i < dim; i++)
+        {
+            vel_sq_R += pow(vel_R(i), 2) ;
+        }
+        T_R       = (E_R - 0.5*rho_R*vel_sq_R)/(rho_R*Cv);
+        p_R       = rho_R*R*T_R;
+        a_R       = sqrt(gamm * R * T_R);
+        h_R       = (E_R + p_R)/rho_R;
+        sqrtRho_R = std::sqrt(rho_R);
+        
+        for (int i = 0; i < dim; i++)
+        {
+            double f_mass                                = 0.25*(rho_L + rho_R)*(vel_L(i) + vel_R(i));
+            f_com((i*var_dim + 0)*num_pts + p)           = f_mass;
+            
+            for (int j = 0; j < dim; j++)
+                f_com((i*var_dim + 1 + j)*num_pts + p)   = 0.5*(vel_L(j) + vel_R(j))*f_mass;
+            
+            f_com((i*var_dim + 1 + i)*num_pts + p)      += 0.5*(p_L + p_R) ;
+           
+            f_com((i*var_dim + var_dim - 1)*num_pts + p) = 0.5*(h_L + h_R)*f_mass ;
+
+        }
+        
+        vsl   = sqrt(vel_sq_L); vsr = sqrt(vel_sq_R);
+
+        u_max = std::max(a_L + std::abs(vsl), a_R + std::abs(vsr));
+
+        for (int i = 0; i < dim; i++)
+        {
+            nor_in(i) = nor(i*num_pts + p);
+        }
+        nor_l2 = nor_in.Norml2();
+        nor_dim.Set(1/nor_l2, nor_in);
+
+        for (int i = 0; i < dim; i++)
+        {
+            for (int j = 0; j < var_dim; j++)
+            {
+                f_com((i*var_dim + j)*num_pts + p) += 
+                    -0.5*u_max*nor_dim(i)*(u2(j*num_pts + p) - u1(j*num_pts + p)); 
+            }
+        }
+
+
+    }
+}
+
+SparseMatrix getSparseMat(const Vector &x)
+{
+    int size = x.Size();
+
+    SparseMatrix a(size, size);
+
+    for(int i = 0; i < size; i++)
+        a.Set(i, i, x(i));
+
+    return a;
+}
+
+
 
 void getKGSplitDx(int dim, 
         const HypreParMatrix &K_x, const HypreParMatrix &K_y, const HypreParMatrix &K_z, 
@@ -2357,156 +3296,71 @@ void getKGSplitDx(int dim,
 }
 
 
-
-//  Initialize variables coefficient
-void init_function(const Vector &x, Vector &v)
+/*
+ * Get split form for derivative of a triple product
+ * d(a.b.c) = 0.25 [ d(abc) + a.d(bc) + bc.d(a) + b.d(ac) + ac.d(b) + c.d(ab) + ab.d(c)]
+ */
+void getABCSplitDx(int dim, 
+        const HypreParMatrix &K, 
+        Vector &a, Vector &b, const Vector &c,
+        Vector &f_dx) 
 {
-   //Space dimensions 
-   int dim = x.Size();
+    int offset  = a.Size();
 
-   if (dim == 3)
-   {
-       double rho, u1, u2, u3, p, a_inf;
-
-       p   = p_inf;
-       rho = rho_inf;
-
-       a_inf  = std::sqrt(gamm*p_inf/rho_inf);
-
-       u1     = M_inf*a_inf*cos(M_PI*aoa/180.); u2 = M_inf*a_inf*sin(M_PI*aoa/180.); u3 = 0.0;
+    Vector temp(offset);
+    temp = 0.;
     
-       double v_sq = pow(u1, 2) + pow(u2, 2) + pow(u3, 2);
+    Vector temp1(offset), temp2(offset);
+    Vector abc(offset), ab(offset), ac(offset), bc(offset);
+
+    getSparseMat(a    ).Mult( b,  ab);
+    getSparseMat(a    ).Mult( c,  ac);
+    getSparseMat(b    ).Mult( c,  bc);
+    getSparseMat(a    ).Mult(bc,  abc);
+  
+    K                  .Mult(abc, temp1);
+    temp += temp1;
+
+    K                  .Mult(bc,     temp1);
+    getSparseMat(a    ).Mult(temp1,  temp2);
+    temp += temp2;
+
+    K                  .Mult(a ,     temp1);
+    getSparseMat(bc   ).Mult(temp1,  temp2);
+    temp += temp2;
+
+    K                  .Mult(ac,     temp1);
+    getSparseMat(b    ).Mult(temp1,  temp2);
+    temp += temp2;
+
+    K                  .Mult(b ,     temp1);
+    getSparseMat(ac   ).Mult(temp1,  temp2);
+    temp += temp2;
+
+    K                  .Mult(ab,     temp1);
+    getSparseMat(c    ).Mult(temp1,  temp2);
+    temp += temp2;
     
-       v(0) = rho;                     //rho
-       v(1) = rho * u1;                //rho * u
-       v(2) = rho * u2;                //rho * v
-       v(3) = rho * u3;                //rho * v
-       v(4) = p/(gamm - 1) + 0.5*rho*v_sq;
+    K                  .Mult(c ,     temp1);
+    getSparseMat(ab   ).Mult(temp1,  temp2);
+    temp += temp2;
 
-   }
-   else if (dim == 2)
-   {
-       double rho, u1, u2, u3, p, a_inf;
-
-       p   = p_inf;
-       rho = rho_inf;
-
-       a_inf  = std::sqrt(gamm*p_inf/rho_inf);
-
-       u1     = M_inf*a_inf*cos(M_PI*aoa/180.); u2 = M_inf*a_inf*sin(M_PI*aoa/180.); u3 = 0.0;
-
-       double v_sq = pow(u1, 2) + pow(u2, 2);
+    temp *= 0.25;
     
-       v(0) = rho;                     //rho
-       v(1) = rho * u1;                //rho * u
-       v(2) = rho * u2;                //rho * v
-       v(3) = p/(gamm - 1) + 0.5*rho*v_sq;
-
-   }
-
-}
-
-
-void wall_bnd_cnd(const Vector &x, Vector &v)
-{
-   //Space dimensions 
-   int dim = x.Size();
-
-   if (dim == 2)
-   {
-       double T_inf = p_inf/(R_gas*rho_inf);
-       v(0) = 0.0;  // x velocity   
-       v(1) = 0.0;  // y velocity 
-       v(2) = 1.002*T_inf;  // Temp 
-   }
-   else if (dim == 3)
-   {
-       double T_inf = p_inf/(R_gas*rho_inf);
-       v(0) = 0.0;  // x velocity   
-       v(1) = 0.0;  // y velocity 
-       v(2) = 0.0;  // z velocity 
-       v(3) = 1.002*T_inf;  // Temp 
-   }
-}
-
-void char_bnd_cnd(const Vector &x, Vector &v)
-{
-   //Space dimensions 
-   int dim = x.Size();
-
-   if (dim == 2)
-   {
-       double rho, u1, u2, u3, p, a_inf;
-
-       p   = p_inf;
-       rho = rho_inf;
-
-       a_inf  = std::sqrt(gamm*p_inf/rho_inf);
-
-       u1     = M_inf*a_inf*cos(M_PI*aoa/180.); u2 = M_inf*a_inf*sin(M_PI*aoa/180.); u3 = 0.0;
+    f_dx = temp;
  
-       double v_sq = pow(u1, 2) + pow(u2, 2);
-    
-       v(0) = rho;                     //rho
-       v(1) = rho * u1;                //rho * u
-       v(2) = rho * u2;                //rho * v
-       v(3) = p/(gamm - 1) + 0.5*rho*v_sq;
-   }
-   else if (dim == 3)
-   {
-       double rho, u1, u2, u3, p, a_inf;
-
-       p   = p_inf;
-       rho = rho_inf;
-
-       a_inf  = std::sqrt(gamm*p_inf/rho_inf);
-
-       u1     = M_inf*a_inf*cos(M_PI*aoa/180.); u2 = M_inf*a_inf*sin(M_PI*aoa/180.); u3 = 0.0;
-
-       double v_sq = pow(u1, 2) + pow(u2, 2) + pow(u3, 2);
-    
-       v(0) = rho;                     //rho
-       v(1) = rho * u1;                //rho * u
-       v(2) = rho * u2;                //rho * v
-       v(3) = rho * u3;                //rho * w
-       v(4) = p/(gamm - 1) + 0.5*rho*v_sq;
-   }
-
-}
-
-void wall_adi_bnd_cnd(const Vector &x, Vector &v)
-{
-   //Space dimensions 
-   int dim = x.Size();
-
-   if (dim == 2)
-   {
-       v(0) = 0.0;  // x velocity   
-       v(1) = 0.0;  // y velocity 
-   }
-   if (dim == 3)
-   {
-       v(0) = 0.0;  // x velocity   
-       v(1) = 0.0;  // y velocity 
-       v(2) = 0.0;  // y velocity 
-   }
-
 }
 
 
 
 
-
-void FE_Evolution::GetMomentum(const ParGridFunction &x, double &Fx) 
+void getSF1SplitDx(int dim, 
+        const HypreParMatrix &K_x, const HypreParMatrix &K_y, const HypreParMatrix &K_z, 
+        const Vector &u, Vector &f_dx) 
 {
-    int dim = x.Size()/K_inv_x.GetNumRows() - 2;
     int var_dim = dim + 2;
+    int offset  = u.Size()/var_dim;
 
-    Vector y_temp, y;
-    y_temp.SetSize(x.Size()); 
-    y.SetSize(x.Size()); 
-
-    int offset  = K_inv_x.GetNumRows();
     Array<int> offsets[dim*var_dim];
     for(int i = 0; i < dim*var_dim; i++)
     {
@@ -2520,483 +3374,829 @@ void FE_Evolution::GetMomentum(const ParGridFunction &x, double &Fx)
             offsets[j][i] = j*offset + i ;
         }
     }
+    Vector rho, E;
+    u.GetSubVector(offsets[0],           rho   );
+    u.GetSubVector(offsets[var_dim - 1],      E);
 
-    Vector f_sol(offset), f_x(offset), f_x_m(offset);
-    Vector b_sub(offset);
-    y = 0.0;
-    for(int i = 0; i < var_dim; i++)
+    Vector rho_vel[dim];
+    for(int i = 0; i < dim; i++) u.GetSubVector(offsets[1 + i], rho_vel[i]);
+
+    Vector vel[dim], rho_vel_sq[dim], rho_uv[dim], uv[dim], v_sq[dim];
+    for(int i = 0; i < dim; i++) 
     {
-        f_I.GetSubVector(offsets[i], f_sol);
-        K_inv_x.Mult(f_sol, f_x);
-        b.GetSubVector(offsets[i], b_sub);
-        f_x += b_sub; // Needs to be added only once
-        y_temp.SetSubVector(offsets[i], f_x);
+        vel[i].SetSize(offset); rho_vel_sq[i].SetSize(offset); rho_uv[i].SetSize(offset);
+        uv[i].SetSize(offset);
+        v_sq[i].SetSize(offset);
     }
-    y += y_temp;
 
-    for(int i = var_dim + 0; i < 2*var_dim; i++)
+    Vector vel_sq_V(offset); 
+    Vector T(offset), pres(offset); // (rho*Cv*T + p)*u, p
+    Vector pu[dim]; 
+    Vector e(offset), eu[dim], rho_eu[dim]; 
+    for(int i = 0; i < dim; i++) 
     {
-        f_I.GetSubVector(offsets[i], f_sol);
-        K_inv_y.Mult(f_sol, f_x);
-        y_temp.SetSubVector(offsets[i - var_dim], f_x);
+        eu[i]    .SetSize(offset);
+        rho_eu[i].SetSize(offset);
+        pu[i]    .SetSize(offset);
     }
-    y += y_temp;
 
-
-    if (dim == 3)
+    for(int i = 0; i < offset; i++)
     {
-        for(int i = 2*var_dim + 0; i < 3*var_dim; i++)
+        double vel_sq = 0.0;
+        for(int j = 0; j < dim; j++)
         {
-            f_I.GetSubVector(offsets[i], f_sol);
-            K_inv_z.Mult(f_sol, f_x);
-            y_temp.SetSubVector(offsets[i - 2*var_dim], f_x);
+            vel[j][i]        = rho_vel[j](i)/rho(i);
+            vel_sq          += pow(vel[j][i], 2);
+
+            rho_vel_sq[j][i] = rho_vel[j](i)*vel[j](i);
+            v_sq[j][i]       = vel[j](i)*vel[j](i);
         }
-        y += y_temp;
-    }
-
-    //////////////////////////////////////////////
-    //Get viscous contribution
-    for(int i = 0; i < var_dim; i++)
-    {
-        f_V.GetSubVector(offsets[i], f_sol);
-        K_vis_x.Mult(f_sol, f_x);
-        y_temp.SetSubVector(offsets[i], f_x);
-    }
-    y += y_temp;
-
-    for(int i = var_dim + 0; i < 2*var_dim; i++)
-    {
-        f_V.GetSubVector(offsets[i], f_sol);
-        K_vis_y.Mult(f_sol, f_x);
-        y_temp.SetSubVector(offsets[i - var_dim], f_x);
-    }
-    y += y_temp;
-
-    if (dim == 3)
-    {
-        for(int i = 2*var_dim + 0; i < 3*var_dim; i++)
-        {
-            f_V.GetSubVector(offsets[i], f_sol);
-            K_vis_z.Mult(f_sol, f_x);
-            y_temp.SetSubVector(offsets[i - 2*var_dim], f_x);
-        }
-        y += y_temp;
-    }
-
-    for(int i = 0; i < var_dim; i++)
-    {
-        y.GetSubVector(offsets[i], f_x);
-        M_solver.Mult(f_x, f_x_m);
-        y.SetSubVector(offsets[i], f_x_m);
-    }
-
-    const FiniteElementSpace *fes = x.FESpace();
-    Mesh *mesh                    = fes->GetMesh();
-
-    const FiniteElement *el;
- 
-    Fx  = 0.0;
-    for (int i = 0; i < fes->GetNE(); i++)
-    {
-        ElementTransformation *T  = fes->GetElementTransformation(i);
-        el = fes->GetFE(i);
- 
-        dim = el->GetDim();
- 
-        int dof = el->GetDof();
-        Array<int> vdofs;
-        fes->GetElementVDofs(i, vdofs);
- 
-        const IntegrationRule *ir ;
-        int   order;
- 
-        order = 2*el->GetOrder() + 1;
-        ir    = &IntRules.Get(el->GetGeomType(), order);
- 
-        for (int p = 0; p < ir->GetNPoints(); p++)
-        {
-            const IntegrationPoint &ip = ir->IntPoint(p);
-            T->SetIntPoint(&ip);
- 
-            Fx  += ip.weight*T->Weight()*(y[vdofs[dof + p]]);
-        }
-    }
-
-}
-
-
-/*
- * Get Interaction flux using the local Lax Friedrichs Riemann  
- * solver, u1 is the left value and u2 the right value
- */
-void getVectorLFFlux(const double R, const double gamm, const int dim, 
-        const Vector &u1, const Vector &u2, const Vector &nor, Vector &f_com)
-{
-    int var_dim = dim + 2; 
-    double Cv   = R/(gamm - 1);
-
-    int num_pts = u1.Size()/var_dim;
-
-    Vector fl(dim*var_dim*num_pts), fr(dim*var_dim*num_pts);
-    getInvFlux(dim, u1, fl);
-    getInvFlux(dim, u2, fr);
-    add(0.5, fl, fr, f_com);
-
-    double rho_L, E_L, vel_sq_L, T_L, a_L;
-    double rho_R, E_R, vel_sq_R, T_R, a_R;
-    Vector vel_L(dim);
-    Vector vel_R(dim);
-
-    Vector nor_in(dim), nor_dim(dim);
-    double nor_l2;
-
-    double vsl, vsr;
-    double u_max;
-    for(int p = 0; p < num_pts; p++)
-    {
-        rho_L = u1(p);
         
-        for (int i = 0; i < dim; i++)
-        {
-            vel_L(i) = u1((1 + i)*num_pts + p)/rho_L;    
-        }
-        E_L   = u1((var_dim - 1)*num_pts + p);
+        vel_sq_V(i)      = vel_sq;
 
-        vel_sq_L = 0.0;
-        for (int i = 0; i < dim; i++)
+        pres(i)          = (E(i) - 0.5*rho(i)*vel_sq)*(gamm - 1);
+        T(i)             = pres(i)/(rho(i)*R_gas);
+        e(i)             =  E(i)/rho(i);
+
+        for(int j = 0; j < dim; j++)
         {
-            vel_sq_L += pow(vel_L(i), 2) ;
+            eu[j](i)            = e(i)*vel[j](i);
+            rho_eu[j](i)        = E(i)*vel[j](i);
+            
+            pu[j](i)            = pres(i)*vel[j](i);
         }
 
-        T_L   = (E_L - 0.5*rho_L*vel_sq_L)/(rho_L*Cv);
-        a_L   = sqrt(gamm * R * T_L);
-
-        rho_R = u2(p);
-        for (int i = 0; i < dim; i++)
-        {
-            vel_R(i) = u2((1 + i)*num_pts + p)/rho_R;    
-        }
-        E_R   = u2((var_dim - 1)*num_pts + p);
+        rho_uv[0](i)  = rho_vel[0](i)*vel[1](i); // rho*u*v
+        rho_uv[1](i)  = rho_vel[0](i)*vel[2](i); // rho*u*w
+        rho_uv[2](i)  = rho_vel[1](i)*vel[2](i); // rho*v*w
     
-        vel_sq_R = 0.0;
-        for (int i = 0; i < dim; i++)
-        {
-            vel_sq_R += pow(vel_R(i), 2) ;
-        }
-        T_R   = (E_R - 0.5*rho_R*vel_sq_R)/(rho_R*Cv);
-        a_R   = sqrt(gamm * R * T_R);
+        uv[0](i)      = vel[0](i)*vel[1](i); // rho*u*v
+        uv[1](i)      = vel[0](i)*vel[2](i); // rho*u*w
+        uv[2](i)      = vel[1](i)*vel[2](i); // rho*v*w
 
-        for (int i = 0; i < dim; i++)
-        {
-            nor_in(i) = nor(i*num_pts + p);
-        }
-        nor_l2 = nor_in.Norml2();
-        nor_dim.Set(1/nor_l2, nor_in);
-
-        vsl   = sqrt(vel_sq_L); vsr = sqrt(vel_sq_R);
-
-        u_max = std::max(a_L + std::abs(vsl), a_R + std::abs(vsr));
-
-        for (int i = 0; i < dim; i++)
-        {
-            for (int j = 0; j < var_dim; j++)
-            {
-                f_com((i*var_dim + j)*num_pts + p) += 
-                    -0.5*u_max*nor_dim(i)*(u2(j*num_pts + p) - u1(j*num_pts + p)); 
-            }
-        }
     }
+
+    Vector rho_vel_dx[dim];
+    Vector vel_dx[dim], rho_vel_sq_dx(offset), rho_uv_dx[dim];
+    Vector vel_sq_dx(offset), uv_dx[dim];
+    Vector pres_dx(offset), rho_dx(offset); 
+    Vector rho_eu_dx(offset), eu_dx(offset), E_dx(offset), e_dx(offset); 
+    Vector pu_dx(offset); 
+
+    K_x.Mult(rho ,  rho_dx );
+    K_x.Mult(pres,  pres_dx);
+    K_x.Mult(pu[0], pu_dx);
+    K_x.Mult(rho_eu[0],        rho_eu_dx);
+    K_x.Mult(eu[0],            eu_dx);
+    K_x.Mult(e,                e_dx);
+    K_x.Mult(E,                E_dx);
+    K_x.Mult(rho_vel_sq[0],    rho_vel_sq_dx);
+    K_x.Mult(v_sq[0],          vel_sq_dx);
+    for(int j = 0; j < dim; j++) 
+    {
+        rho_vel_dx[j].SetSize(offset); vel_dx[j].SetSize(offset); rho_uv_dx[j].SetSize(offset);
+        uv_dx[j].SetSize(offset);
+
+        K_x.Mult(rho_vel[j],    rho_vel_dx[j]);
+        K_x.Mult(vel[j],        vel_dx[j]);
+        K_x.Mult(rho_uv[j],     rho_uv_dx[j]);
+        K_x.Mult(uv[j],         uv_dx[j]);
+    }
+
+    Vector fx(var_dim*offset);
+    fx = 0.0;
+
+    Vector temp(offset), temp1(offset), temp2(offset), temp3(offset);
+
+    SparseMatrix rho_mat    = getSparseMat(rho   );
+    {
+        // X - derivatives
+        
+        // rho
+        
+        temp1  = rho_vel_dx[0];
+        rho_mat.Mult(vel_dx[0], temp2);
+        temp1 += temp2;
+        getSparseMat(vel[0]).Mult(rho_dx,    temp3);
+        temp1 += temp3;
+        
+        temp1 *= 0.5;
+        
+        fx.SetSubVector(offsets[0], temp1);
+        
+        // rho_u
+        temp   = rho_vel_sq_dx;
+
+        rho_mat.              Mult(vel_sq_dx,     temp1);
+        getSparseMat(v_sq[0]).Mult(rho_dx,        temp2);
+
+        temp += temp1; temp += temp2;
+
+        getSparseMat(vel[0])    .Mult(rho_vel_dx[0], temp1);
+        getSparseMat(rho_vel[0]).Mult(vel_dx[0],     temp2);
+
+        temp1 += temp2;
+        temp1 *= 2.;
+
+        temp  += temp1;
+        temp  *= 0.25;
+        temp  += pres_dx;
+        
+        fx.SetSubVector(offsets[1], temp );
+        
+        // rho_v
+        temp   = rho_uv_dx[0]; 
+
+        rho_mat.            Mult(uv_dx[0],      temp1);
+        getSparseMat(uv[0]).Mult(rho_dx,        temp2);
+
+        temp += temp1; temp += temp2;
+
+        getSparseMat(vel[1])    .Mult(rho_vel_dx[0], temp1);
+        getSparseMat(rho_vel[0]).Mult(vel_dx[1],     temp2);
+
+        temp += temp1; temp += temp2;
+
+        getSparseMat(vel[0])    .Mult(rho_vel_dx[1], temp1);
+        getSparseMat(rho_vel[1]).Mult(vel_dx[0],     temp2);
+
+        temp += temp1; temp += temp2; // This is probably done
+
+        temp  *= 0.25;
+ 
+        fx.SetSubVector(offsets[2], temp);
+        
+        // rho_w
+        temp   = rho_uv_dx[1]; 
+
+        getSparseMat(rho_vel[0]).Mult(vel_dx[2],     temp1);
+        getSparseMat(    vel[2]).Mult(rho_vel_dx[0], temp2);
+
+        temp += temp1; temp += temp2;
+ 
+        getSparseMat(rho_vel[2]).Mult(vel_dx[0],     temp1);
+        getSparseMat(    vel[0]).Mult(rho_vel_dx[2], temp2);
+
+        temp += temp1; temp += temp2;
+
+        rho_mat            .Mult(uv_dx[1],  temp1);
+        getSparseMat(uv[1]).Mult(rho_dx,    temp2);
+
+        temp += temp1; temp += temp2;
+
+        temp *= 0.25;
+     
+        fx.SetSubVector(offsets[3], temp);
+    
+        // rho_e
+ 
+        getABCSplitDx(dim, K_x, rho, vel[0], T, temp);
+        temp  *= R_gas*gamm/(gamm - 1);
+        
+        getABCSplitDx(dim, K_x, rho, vel[0], vel_sq_V, temp1);
+        temp1 *= 0.5;
+
+        temp += temp1;
+       
+        fx.SetSubVector(offsets[4], temp);
+        
+    }
+
+    K_y.Mult(rho , rho_dx );
+    K_y.Mult(pres, pres_dx);
+    K_y.Mult(pu[1], pu_dx);
+    K_y.Mult(rho_eu[1],        rho_eu_dx);
+    K_y.Mult(eu[1],            eu_dx);
+    K_y.Mult(e,                e_dx);
+    K_y.Mult(E,                E_dx);
+    K_y.Mult(rho_vel_sq[1],    rho_vel_sq_dx);
+    K_y.Mult(v_sq[1],          vel_sq_dx);
+    for(int j = 0; j < dim; j++) 
+    {
+        K_y.Mult(rho_vel[j],    rho_vel_dx[j]);
+        K_y.Mult(vel[j],        vel_dx[j]);
+        K_y.Mult(rho_uv[j],     rho_uv_dx[j]);
+        K_y.Mult(uv[j],         uv_dx[j]);
+    }
+
+    {
+        // Y -deri
+
+        temp1  = rho_vel_dx[1];
+        getSparseMat(rho   ).Mult(vel_dx[1], temp2);
+        temp1 += temp2;
+        getSparseMat(vel[1]).Mult(rho_dx,    temp3);
+        temp1 += temp3;
+        
+        temp1 *= 0.5;
+        
+        fx.AddElementVector(offsets[0], temp1); // rho
+    
+        // rho_u
+        temp   = rho_uv_dx[0];
+
+        rho_mat.            Mult(uv_dx[0],     temp1);
+        getSparseMat(uv[0]).Mult(rho_dx,       temp2);
+
+        temp += temp1; temp += temp2;
+
+        getSparseMat(vel[0])    .Mult(rho_vel_dx[1], temp1);
+        getSparseMat(rho_vel[1]).Mult(vel_dx[0],     temp2);
+
+        temp += temp1; temp += temp2;
+
+        getSparseMat(vel[1])    .Mult(rho_vel_dx[0], temp1);
+        getSparseMat(rho_vel[0]).Mult(vel_dx[1],     temp2);
+        
+        temp += temp1; temp += temp2;
+
+        temp  *= 0.25;
+        
+        fx.AddElementVector(offsets[1], temp );
+        
+        // rho_v
+        temp   = rho_vel_sq_dx; 
+
+        rho_mat.              Mult(vel_sq_dx,     temp1);
+        getSparseMat(v_sq[1]).Mult(rho_dx,        temp2);
+
+        temp += temp1; temp += temp2;
+
+        getSparseMat(vel[1])    .Mult(rho_vel_dx[1], temp1);
+        getSparseMat(rho_vel[1]).Mult(vel_dx[1],     temp2);
+
+        temp1 += temp2;
+        temp1 *= 2.0;
+
+        temp += temp1;
+
+        temp  *= 0.25;
+
+        temp  += pres_dx;
+        
+        fx.AddElementVector(offsets[2], temp);
+        
+        // rho_w
+        temp   = rho_uv_dx[2]; 
+
+        getSparseMat(rho_vel[1]).Mult(vel_dx[2],     temp1);
+        getSparseMat(    vel[2]).Mult(rho_vel_dx[1], temp2);
+
+        temp += temp1; temp += temp2;
+ 
+        getSparseMat(rho_vel[2]).Mult(vel_dx[1],     temp1);
+        getSparseMat(    vel[1]).Mult(rho_vel_dx[2], temp2);
+
+        temp += temp1; temp += temp2;
+
+        rho_mat            .Mult(uv_dx[2],  temp1);
+        getSparseMat(uv[2]).Mult(rho_dx,    temp2);
+
+        temp += temp1; temp += temp2;
+
+        temp *= 0.25;
+ 
+        fx.AddElementVector(offsets[3], temp);
+        
+        // rho_e
+ 
+        getABCSplitDx(dim, K_y, rho, vel[1], T, temp);
+        temp  *= R_gas*gamm/(gamm - 1);
+        
+        getABCSplitDx(dim, K_y, rho, vel[1], vel_sq_V, temp1);
+        temp1 *= 0.5;
+
+        temp += temp1;
+
+        fx.AddElementVector(offsets[4], temp);
+    }
+
+
+    K_z.Mult(rho , rho_dx );
+    K_z.Mult(pres, pres_dx);
+    K_z.Mult(pu[2], pu_dx);
+    K_z.Mult(rho_eu[2],        rho_eu_dx);
+    K_z.Mult(eu[2],            eu_dx);
+    K_z.Mult(e,                e_dx);
+    K_z.Mult(E,                E_dx);
+    K_z.Mult(rho_vel_sq[2],    rho_vel_sq_dx);
+    K_z.Mult(v_sq[2],          vel_sq_dx);
+    for(int j = 0; j < dim; j++) 
+    {
+        K_z.Mult(rho_vel[j],    rho_vel_dx[j]);
+        K_z.Mult(vel[j],        vel_dx[j]);
+        K_z.Mult(rho_uv[j],     rho_uv_dx[j]);
+        K_z.Mult(uv[j],         uv_dx[j]);
+    }
+    
+    {
+        // Z -deri
+        temp1  = rho_vel_dx[2];
+        getSparseMat(rho   ).Mult(vel_dx[2], temp2);
+        temp1 += temp2;
+        getSparseMat(vel[2]).Mult(rho_dx,    temp3);
+        temp1 += temp3;
+        
+        temp1 *= 0.5;
+        
+        fx.AddElementVector(offsets[0], temp1); // rho
+        
+        // rho_u
+        temp   = rho_uv_dx[1];
+
+        rho_mat.            Mult(uv_dx[1],     temp1);
+        getSparseMat(uv[1]).Mult(rho_dx,       temp2);
+
+        temp += temp1; temp += temp2;
+
+        getSparseMat(vel[0])    .Mult(rho_vel_dx[2], temp1);
+        getSparseMat(rho_vel[2]).Mult(vel_dx[0],     temp2);
+
+        temp += temp1; temp += temp2;
+
+        getSparseMat(vel[2])    .Mult(rho_vel_dx[0], temp1);
+        getSparseMat(rho_vel[0]).Mult(vel_dx[2],     temp2);
+        
+        temp += temp1; temp += temp2;
+
+        temp  *= 0.25;
+        
+        fx.AddElementVector(offsets[1], temp);
+        
+        // rho_v
+        temp   = rho_uv_dx[2]; 
+
+        rho_mat.            Mult(uv_dx[2],      temp1);
+        getSparseMat(uv[2]).Mult(rho_dx,        temp2);
+
+        temp += temp1; temp += temp2;
+
+        getSparseMat(vel[2])    .Mult(rho_vel_dx[1], temp1);
+        getSparseMat(rho_vel[1]).Mult(vel_dx[2],     temp2);
+
+        temp += temp1; temp += temp2;
+
+        getSparseMat(vel[1])    .Mult(rho_vel_dx[2], temp1);
+        getSparseMat(rho_vel[2]).Mult(vel_dx[1],     temp2);
+
+        temp += temp1; temp += temp2; // This is probably done
+
+        temp  *= 0.25;
+ 
+        fx.AddElementVector(offsets[2], temp);
+        
+        // rho_w
+        temp   = rho_vel_sq_dx; 
+
+        getSparseMat(rho_vel[2]).Mult(vel_dx[2],     temp1);
+        getSparseMat(    vel[2]).Mult(rho_vel_dx[2], temp2);
+
+        temp1 += temp2;
+        temp1 *= 2.;
+        temp  += temp1;
+
+        rho_mat              .Mult(vel_sq_dx, temp1);
+        getSparseMat(v_sq[2]).Mult(rho_dx,    temp2);
+
+        temp  += temp1; temp += temp2;
+
+        temp  *= 0.25;
+ 
+        temp  += pres_dx;
+        
+        fx.AddElementVector(offsets[3], temp);
+        
+        // rho_e
+     
+        getABCSplitDx(dim, K_z, rho, vel[2], T, temp);
+        temp  *= R_gas*gamm/(gamm - 1);
+        
+        getABCSplitDx(dim, K_z, rho, vel[2], vel_sq_V, temp1);
+        temp1 *= 0.5;
+
+        temp += temp1;
+
+        fx.AddElementVector(offsets[4], temp);
+    }
+
+    f_dx = fx;
+
 }
 
-/*
- * Get Interaction flux using the local Roe solver 
- * solver, u1 is the left value and u2 the right value
- * Copied from Dr. Katate Masatsuka (info[at]cfdbooks.com),
- */
-void getVectorRoeFlux(const double R, const double gamm, const int dim, const Vector &u1, const Vector &u2, 
-                                const Vector &nor, Vector &f_com)
+
+
+
+
+
+
+
+
+void getModMorinishiSplitDx(int dim, 
+        const HypreParMatrix &K_x, const HypreParMatrix &K_y, const HypreParMatrix &K_z, 
+        const Vector &u, Vector &f_dx) 
 {
     int var_dim = dim + 2;
-    int num_pts = u1.Size()/var_dim;
+    int offset  = u.Size()/var_dim;
 
-    double Cv   = R/(gamm - 1);
-
-    double rho_L, E_L, vel_sq_L, T_L, p_L, a_L, h_L, sqrtRho_L, vnl;
-    double rho_R, E_R, vel_sq_R, T_R, p_R, a_R, h_R, sqrtRho_R, vnr;
-    Vector vel_L(dim);
-    Vector vel_R(dim);
-
-    double sSqrtRho, vel_sq_rho, r_rho, rho_h, rho_a, vn_rho;
-    Vector velRho(dim);
-
-    double drho, dp, dvn, du, dv, dw;
-    Vector LdU(4), ws(4), dws(4);
-
-    DenseMatrix roeM(dim + 2, 4);
-    Vector diss(var_dim); // dissipation 
-
-    Vector nor_in(dim), nor_dim(dim);
-    double nor_l2;
-
-    Vector fl(dim*var_dim*num_pts), fr(dim*var_dim*num_pts);
-    getInvFlux(dim, u1, fl);
-    getInvFlux(dim, u2, fr);
-    add(0.5, fl, fr, f_com);
-
-    for(int p = 0; p < num_pts; p++)
+    Array<int> offsets[dim*var_dim];
+    for(int i = 0; i < dim*var_dim; i++)
     {
-        rho_L = u1(p);
-        
-        for (int i = 0; i < dim; i++)
-        {
-            vel_L(i) = u1((1 + i)*num_pts + p)/rho_L;    
-        }
-        E_L   = u1((var_dim - 1)*num_pts + p);
-
-        vel_sq_L = 0.0;
-        for (int i = 0; i < dim; i++)
-        {
-            vel_sq_L += pow(vel_L(i), 2) ;
-        }
-        T_L        = (E_L - 0.5*rho_L*vel_sq_L)/(rho_L*Cv);
-        p_L        = rho_L*R*T_L;
-        a_L        = sqrt(gamm * R * T_L);
-        h_L        = (E_L + p_L)/rho_L;
-        sqrtRho_L  = std::sqrt(rho_L);
-
-        rho_R = u2(p);
-        for (int i = 0; i < dim; i++)
-        {
-            vel_R(i) = u2((1 + i)*num_pts + p)/rho_R;    
-        }
-        E_R   = u2((var_dim - 1)*num_pts + p);
-    
-        vel_sq_R = 0.0;
-        for (int i = 0; i < dim; i++)
-        {
-            vel_sq_R += pow(vel_R(i), 2) ;
-        }
-        T_R       = (E_R - 0.5*rho_R*vel_sq_R)/(rho_R*Cv);
-        p_R       = rho_R*R*T_R;
-        a_R       = sqrt(gamm * R * T_R);
-        h_R       = (E_R + p_R)/rho_R;
-        sqrtRho_R = std::sqrt(rho_R);
-
-        for (int i = 0; i < dim; i++)
-        {
-            nor_in(i) = nor(i*num_pts + p);
-        }
-        nor_l2 = nor_in.Norml2();
-        nor_dim.Set(1/nor_l2, nor_in);
-
-        vnl   = 0.0, vnr = 0.0;
-        for (int i = 0; i < dim; i++)
-        {
-            vnl += vel_L[i]*nor_dim(i); 
-            vnr += vel_R[i]*nor_dim(i); 
-        }
-
-        sSqrtRho = 1./(sqrtRho_L + sqrtRho_R); 
-        vel_sq_rho = 0.0;;
-        for (int i = 0; i < dim; i++)
-        {
-            velRho(i)   = (sqrtRho_L*vel_L(i) + sqrtRho_R*vel_R(i))*sSqrtRho;
-            vel_sq_rho += velRho(i)*velRho(i);
-        }
-        r_rho = (sqrtRho_L*rho_L + sqrtRho_R*rho_R)*sSqrtRho;
-        rho_h = (sqrtRho_L*h_L   + sqrtRho_R*h_R)*sSqrtRho;
-        rho_a = std::sqrt((gamm - 1)*(rho_h - 0.5*vel_sq_rho));
-
-        vn_rho   = 0.0;
-        for (int i = 0; i < dim; i++)
-        {
-            vn_rho += velRho[i]*nor_dim(i); 
-        }
-
-       //Wave Strengths
-
-        drho = rho_R - rho_L ;//Density difference
-        dp   = p_R - p_L     ;//Pressure difference
-        dvn  = vnr - vnl     ;//Normal velocity difference
-
-        LdU(0) = (dp - r_rho*rho_a*dvn )/(2.*rho_a*rho_a); //Left-moving acoustic wave strength
-        LdU(1) =  drho - dp/(rho_a*rho_a);                 //Entropy wave strength
-        LdU(2) = (dp + r_rho*rho_a*dvn )/(2.*rho_a*rho_a); //Right-moving acoustic wave strength
-        LdU(3) = r_rho;                                    //Shear wave strength 
-
-        // Absolute values of the wave Speeds
-        ws(0) = std::abs(vn_rho - rho_a) ;//Left-moving acoustic wave
-        ws(1) = std::abs(vn_rho);         //Entropy wave
-        ws(2) = std::abs(vn_rho + rho_a) ;//Right-moving acoustic wave
-        ws(3) = std::abs(vn_rho) ;        //Shear waves
-
-        //Harten's Entropy Fix JCP(1983), 49, pp357-393: only for the nonlinear fields.
-        //NOTE: It avoids vanishing wave speeds by making a parabolic fit near ws = 0.
-        
-        dws(0) = 0.2; 
-        if ( ws(0) < dws(0) ) 
-             ws(0) = 0.5 * ( ws(0)*ws(0)/dws(0)+dws(0) );
-        dws(2) = 0.2; 
-        if ( ws(2) < dws(2) ) 
-             ws(3) = 0.5 * ( ws(2)*ws(2)/dws(2)+dws(2) );
-        
-        //Right Eigenvectors
-        //Note: Two shear wave components are combined into one, so that tangent vectors
-        //      are not required. And that's why there are only 4 vectors here.
-        //      See "I do like CFD, VOL.1" about how tangent vectors are eliminated.
-        
-        //  Left-moving acoustic wave
-        
-        roeM(0,0) = 1.; 
-        roeM(1,0) = velRho(0) - rho_a*nor_dim(0);
-        roeM(2,0) = velRho(1) - rho_a*nor_dim(1);  
-        roeM(3,0) = velRho(2) - rho_a*nor_dim(2);
-        roeM(4,0) = rho_h - rho_a*vn_rho;
-        
-        // Entropy wave
-           
-        roeM(0,1) = 1.; 
-        roeM(1,1) = velRho(0);
-        roeM(2,1) = velRho(1);
-        roeM(3,1) = velRho(2); 
-        roeM(4,1) = 0.5*vel_sq_rho;
-        
-        // Right-moving acoustic wave
-        
-        roeM(0,2) = 1.; 
-        roeM(1,2) = velRho(0) + rho_a*nor_dim(0);
-        roeM(2,2) = velRho(1) + rho_a*nor_dim(1);  
-        roeM(3,2) = velRho(2) + rho_a*nor_dim(2);
-        roeM(4,2) = rho_h + rho_a*vn_rho;
-
-        // Two shear wave components combined into one (wave strength incorporated).
-          
-        du = vel_R(0) - vel_L(0);
-        dv = vel_R(1) - vel_L(1);
-        dw = vel_R(2) - vel_L(2);
-
-        roeM(0,3) = 0.; 
-        roeM(1,3) = du - dvn*nor_dim(0);
-        roeM(2,3) = dv - dvn*nor_dim(1);
-        roeM(3,3) = dw - dvn*nor_dim(2);
-        roeM(4,3) = velRho(0)*du + velRho(1)*dv + velRho(2)*dw - vn_rho*dvn;
-
-        // Dissipation Term: |An|(UR-UL) = R|Lambda|L*dU = sum_k of [ ws(k) * R(:,k) * L*dU(k) ]
-        
-        for(int j = 0; j < var_dim; j++)
-            diss(j) = ws(0)*LdU(0)*roeM(j,0) + ws(1)*LdU(1)*roeM(j,1) 
-             + ws(2)*LdU(2)*roeM(j,2) + ws(3)*LdU(3)*roeM(j,3);
-
-        for (int i = 0; i < dim; i++)
-        {
-            for (int j = 0; j < var_dim; j++)
-            {
-                f_com((i*var_dim + j)*num_pts + p) += 
-                    -0.5*nor_dim(i)*diss(j);
-            }
-        }
-
+        offsets[i].SetSize(offset);
     }
+
+    for(int j = 0; j < dim*var_dim; j++)
+    {
+        for(int i = 0; i < offset; i++)
+        {
+            offsets[j][i] = j*offset + i ;
+        }
+    }
+    Vector rho, E;
+    u.GetSubVector(offsets[0],           rho   );
+    u.GetSubVector(offsets[var_dim - 1],      E);
+
+    Vector rho_vel[dim];
+    for(int i = 0; i < dim; i++) u.GetSubVector(offsets[1 + i], rho_vel[i]);
+
+    Vector vel[dim], rho_vel_sq[dim], rho_uv(offset);
+    for(int i = 0; i < dim; i++) 
+    {
+        vel[i].SetSize(offset); rho_vel_sq[i].SetSize(offset); 
+    }
+
+    Vector rho_theta_pu[dim], pres(offset); // (rho*Cv*T + p)*u, p
+    for(int i = 0; i < dim; i++) 
+    {
+        rho_theta_pu[i].SetSize(offset);
+    }
+
+    Vector fx(var_dim*offset);
+
+    for(int i = 0; i < offset; i++)
+    {
+        double vel_sq = 0.0;
+        for(int j = 0; j < dim; j++)
+        {
+            vel[j][i]        = rho_vel[j](i)/rho(i);
+            vel_sq          += pow(vel[j][i], 2);
+
+            rho_vel_sq[j][i] = rho_vel[j](i)*vel[j](i);
+        }
+
+        pres(i)          = (E(i) - 0.5*rho(i)*vel_sq)*(gamm - 1);
+
+        for(int j = 0; j < dim; j++)
+            rho_theta_pu[j](i)  = ((E(i) - 0.5*rho(i)*vel_sq) + pres(i))*vel[j](i);
+
+        rho_uv(i)  = rho_vel[0](i)*vel[1](i); // rho*u*v
+    }
+
+    Vector rho_dx(offset);
+    Vector rho_vel_dx[dim];
+    Vector vel_dx[dim], rho_vel_sq_dx(offset), rho_uv_dx(offset);
+    Vector pres_dx(offset); 
+    Vector rho_theta_dx(offset); 
+
+    K_x.Mult(rho ,  rho_dx );
+    K_x.Mult(pres, pres_dx);
+    K_x.Mult(rho_theta_pu[0],  rho_theta_dx);
+    K_x.Mult(rho_vel_sq[0],    rho_vel_sq_dx);
+    K_x.Mult(rho_uv,     rho_uv_dx);
+    for(int j = 0; j < dim; j++) 
+    {
+        rho_vel_dx[j].SetSize(offset); vel_dx[j].SetSize(offset); 
+    
+        K_x.Mult(rho_vel[j],    rho_vel_dx[j]);
+        K_x.Mult(vel[j],        vel_dx[j]);
+    }
+
+    fx = 0.0;
+
+    Vector temp(offset), temp1(offset), temp2(offset), temp3(offset);
+
+    SparseMatrix rho_mat    = getSparseMat(rho   );
+ 
+    {
+        // X - derivatives
+
+        temp1  = rho_vel_dx[0];
+        rho_mat.Mult(vel_dx[0], temp2);
+        temp1 += temp2;
+        getSparseMat(vel[0]).Mult(rho_dx,    temp3);
+        temp1 += temp3;
+        
+        temp1 *= 0.5;
+        
+        fx.SetSubVector(offsets[0], temp1);
+    
+        // rho_u
+
+        temp1  = rho_vel_sq_dx;
+        getSparseMat(rho_vel[0]).Mult(vel_dx[0],     temp2);
+        temp1 += temp2;
+        getSparseMat(    vel[0]).Mult(rho_vel_dx[0], temp3);
+        temp1 += temp3;
+        
+        temp1 *= 0.5;
+        temp1 += pres_dx;
+        
+        fx.SetSubVector(offsets[1], temp1);
+        
+        // rho_v
+
+        temp1  = rho_uv_dx; 
+        getSparseMat(rho_vel[0]).Mult(vel_dx[1],     temp2);
+        temp1 += temp2;
+        getSparseMat(    vel[1]).Mult(rho_vel_dx[0], temp3);
+        temp1 += temp3;
+        temp1 *= 0.5;
+        
+        fx.SetSubVector(offsets[2], temp1);
+        
+        // rho_e
+        
+        getSparseMat(rho_vel_sq[0]).Mult(vel_dx[0],     temp1);
+        getSparseMat(    vel[0]).Mult(rho_vel_sq_dx,    temp2);
+    
+        temp  = 0.;
+        temp += temp1; temp += temp2;
+    
+        getSparseMat(rho_uv    ).Mult(vel_dx[1],     temp1);
+        getSparseMat(    vel[1]).Mult(rho_uv_dx   ,  temp2);
+        
+        temp += temp1; temp += temp2;
+     
+        temp *= 0.5;
+        temp += rho_theta_dx;
+      
+        fx.SetSubVector(offsets[3], temp);
+        
+    }
+
+    K_y.Mult(rho ,  rho_dx );
+    K_y.Mult(pres, pres_dx);
+    K_y.Mult(rho_theta_pu[1],  rho_theta_dx);
+    K_y.Mult(rho_vel_sq[1],    rho_vel_sq_dx);
+    K_y.Mult(rho_uv   ,     rho_uv_dx   );
+    for(int j = 0; j < dim; j++) 
+    {
+        K_y.Mult(rho_vel[j],    rho_vel_dx[j]);
+        K_y.Mult(vel[j],        vel_dx[j]);
+    }
+
+    {
+        // Y -deri
+        
+        temp1  = rho_vel_dx[1];
+        getSparseMat(rho   ).Mult(vel_dx[1], temp2);
+        temp1 += temp2;
+        getSparseMat(vel[1]).Mult(rho_dx,    temp3);
+        temp1 += temp3;
+        
+        temp1 *= 0.5;
+        
+        fx.AddElementVector(offsets[0], temp1); // rho
+
+        // rho_u
+
+        temp1  = rho_uv_dx;
+        getSparseMat(rho_vel[1]).Mult(vel_dx[0],     temp2);
+        temp1 += temp2;
+        getSparseMat(    vel[0]).Mult(rho_vel_dx[1], temp3);
+        temp1 += temp3;
+        
+        temp1 *= 0.5;
+        
+        fx.AddElementVector(offsets[1], temp1);
+        
+        // rho_v
+
+        temp1  = rho_vel_sq_dx; 
+        getSparseMat(rho_vel[1]).Mult(vel_dx[1],     temp2);
+        temp1 += temp2;
+        getSparseMat(    vel[1]).Mult(rho_vel_dx[1], temp3);
+        temp1 += temp3;
+
+        temp1 *= 0.5;
+        temp1 += pres_dx;
+        
+        fx.AddElementVector(offsets[2], temp1);
+        
+        // rho_e
+        
+        getSparseMat(rho_uv    ).Mult(vel_dx[0],    temp1);
+        getSparseMat(    vel[0]).Mult(rho_uv_dx   ,    temp2);
+    
+        temp  = 0.;
+        temp += temp1; temp += temp2;
+    
+        getSparseMat(rho_vel_sq[1]).Mult(vel_dx[1],      temp1);
+        getSparseMat(    vel[1]   ).Mult(rho_vel_sq_dx,  temp2);
+        
+        temp *= 0.5;
+        temp += rho_theta_dx;
+      
+        fx.AddElementVector(offsets[3], temp);
+    }
+
+    f_dx = fx;
+
 }
 
 
-/*
- * Get Interaction flux using the local KEP solver 
- */
-void getVectorKEPFlux(const double R, const double gamm, const int dim, const Vector &u1, const Vector &u2, 
-                                const Vector &nor, Vector &f_com)
+
+
+
+void getMorinishiSplitDx(int dim, 
+        const HypreParMatrix &K_x, const HypreParMatrix &K_y, const HypreParMatrix &K_z, 
+        const Vector &u, Vector &f_dx) 
 {
     int var_dim = dim + 2;
-    int num_pts = u1.Size()/var_dim;
+    int offset  = u.Size()/var_dim;
 
-    double Cv   = R/(gamm - 1);
-
-    double rho_L, E_L, vel_sq_L, T_L, p_L, a_L, h_L, sqrtRho_L, vnl;
-    double rho_R, E_R, vel_sq_R, T_R, p_R, a_R, h_R, sqrtRho_R, vnr;
-    double vsl, vsr, u_max;
-    Vector vel_L(dim);
-    Vector vel_R(dim);
-
-    Vector nor_in(dim), nor_dim(dim);
-    double nor_l2;
-
-    for(int p = 0; p < num_pts; p++)
+    Array<int> offsets[dim*var_dim];
+    for(int i = 0; i < dim*var_dim; i++)
     {
-        rho_L = u1(p);
-        
-        for (int i = 0; i < dim; i++)
-        {
-            vel_L(i) = u1((1 + i)*num_pts + p)/rho_L;    
-        }
-        E_L   = u1((var_dim - 1)*num_pts + p);
-
-        vel_sq_L = 0.0;
-        for (int i = 0; i < dim; i++)
-        {
-            vel_sq_L += pow(vel_L(i), 2) ;
-        }
-        T_L        = (E_L - 0.5*rho_L*vel_sq_L)/(rho_L*Cv);
-        p_L        = rho_L*R*T_L;
-        a_L        = sqrt(gamm * R * T_L);
-        h_L        = (E_L + p_L)/rho_L;
-        sqrtRho_L  = std::sqrt(rho_L);
-
-        rho_R = u2(p);
-        for (int i = 0; i < dim; i++)
-        {
-            vel_R(i) = u2((1 + i)*num_pts + p)/rho_R;    
-        }
-        E_R   = u2((var_dim - 1)*num_pts + p);
-    
-        vel_sq_R = 0.0;
-        for (int i = 0; i < dim; i++)
-        {
-            vel_sq_R += pow(vel_R(i), 2) ;
-        }
-        T_R       = (E_R - 0.5*rho_R*vel_sq_R)/(rho_R*Cv);
-        p_R       = rho_R*R*T_R;
-        a_R       = sqrt(gamm * R * T_R);
-        h_R       = (E_R + p_R)/rho_R;
-        sqrtRho_R = std::sqrt(rho_R);
-        
-        for (int i = 0; i < dim; i++)
-        {
-            double f_mass                                = 0.25*(rho_L + rho_R)*(vel_L(i) + vel_R(i));
-            f_com((i*var_dim + 0)*num_pts + p)           = f_mass;
-            
-            for (int j = 0; j < dim; j++)
-                f_com((i*var_dim + 1 + j)*num_pts + p)   = 0.5*(vel_L(j) + vel_R(j))*f_mass;
-            
-            f_com((i*var_dim + 1 + i)*num_pts + p)      += 0.5*(p_L + p_R) ;
-           
-            f_com((i*var_dim + var_dim - 1)*num_pts + p) = 0.5*(h_L + h_R)*f_mass ;
-
-        }
-        
-        vsl   = sqrt(vel_sq_L); vsr = sqrt(vel_sq_R);
-
-        u_max = std::max(a_L + std::abs(vsl), a_R + std::abs(vsr));
-
-        for (int i = 0; i < dim; i++)
-        {
-            nor_in(i) = nor(i*num_pts + p);
-        }
-        nor_l2 = nor_in.Norml2();
-        nor_dim.Set(1/nor_l2, nor_in);
-
-        for (int i = 0; i < dim; i++)
-        {
-            for (int j = 0; j < var_dim; j++)
-            {
-                f_com((i*var_dim + j)*num_pts + p) += 
-                    -0.5*u_max*nor_dim(i)*(u2(j*num_pts + p) - u1(j*num_pts + p)); 
-            }
-        }
-
-
+        offsets[i].SetSize(offset);
     }
-}
 
+    for(int j = 0; j < dim*var_dim; j++)
+    {
+        for(int i = 0; i < offset; i++)
+        {
+            offsets[j][i] = j*offset + i ;
+        }
+    }
+    Vector rho, E;
+    u.GetSubVector(offsets[0],           rho   );
+    u.GetSubVector(offsets[var_dim - 1],      E);
+
+    Vector rho_vel[dim];
+    for(int i = 0; i < dim; i++) u.GetSubVector(offsets[1 + i], rho_vel[i]);
+
+    Vector vel[dim], rho_vel_sq[dim], rho_uv(offset);
+    for(int i = 0; i < dim; i++) 
+    {
+        vel[i].SetSize(offset); rho_vel_sq[i].SetSize(offset); 
+    }
+
+    Vector rho_theta_pu[dim], pres(offset); // (rho*Cv*T + p)*u, p
+    for(int i = 0; i < dim; i++) 
+    {
+        rho_theta_pu[i].SetSize(offset);
+    }
+
+    Vector fx(var_dim*offset);
+
+    for(int i = 0; i < offset; i++)
+    {
+        double vel_sq = 0.0;
+        for(int j = 0; j < dim; j++)
+        {
+            vel[j][i]        = rho_vel[j](i)/rho(i);
+            vel_sq          += pow(vel[j][i], 2);
+
+            rho_vel_sq[j][i] = rho_vel[j](i)*vel[j](i);
+        }
+
+        pres(i)          = (E(i) - 0.5*rho(i)*vel_sq)*(gamm - 1);
+
+        for(int j = 0; j < dim; j++)
+            rho_theta_pu[j](i)  = ((E(i) - 0.5*rho(i)*vel_sq) + pres(i))*vel[j](i);
+
+        rho_uv(i)  = rho_vel[0](i)*vel[1](i); // rho*u*v
+    }
+
+    Vector rho_vel_dx[dim];
+    Vector vel_dx[dim], rho_vel_sq_dx(offset), rho_uv_dx(offset);
+    Vector pres_dx(offset); 
+    Vector rho_theta_dx(offset); 
+
+    K_x.Mult(pres, pres_dx);
+    K_x.Mult(rho_theta_pu[0],  rho_theta_dx);
+    K_x.Mult(rho_vel_sq[0],    rho_vel_sq_dx);
+    K_x.Mult(rho_uv,     rho_uv_dx);
+    for(int j = 0; j < dim; j++) 
+    {
+        rho_vel_dx[j].SetSize(offset); vel_dx[j].SetSize(offset); 
+    
+        K_x.Mult(rho_vel[j],    rho_vel_dx[j]);
+        K_x.Mult(vel[j],        vel_dx[j]);
+    }
+
+    fx = 0.0;
+
+    Vector temp(offset), temp1(offset), temp2(offset), temp3(offset);
+
+    {
+        // X - derivatives
+        
+        fx.SetSubVector(offsets[0], rho_vel_dx[0]); // rho
+    
+        // rho_u
+
+        temp1  = rho_vel_sq_dx;
+        getSparseMat(rho_vel[0]).Mult(vel_dx[0],     temp2);
+        temp1 += temp2;
+        getSparseMat(    vel[0]).Mult(rho_vel_dx[0], temp3);
+        temp1 += temp3;
+        
+        temp1 *= 0.5;
+        temp1 += pres_dx;
+        
+        fx.SetSubVector(offsets[1], temp1);
+        
+        // rho_v
+
+        temp1  = rho_uv_dx; 
+        getSparseMat(rho_vel[0]).Mult(vel_dx[1],     temp2);
+        temp1 += temp2;
+        getSparseMat(    vel[1]).Mult(rho_vel_dx[0], temp3);
+        temp1 += temp3;
+        temp1 *= 0.5;
+        
+        fx.SetSubVector(offsets[2], temp1);
+        
+        // rho_e
+        
+        getSparseMat(rho_vel_sq[0]).Mult(vel_dx[0],     temp1);
+        getSparseMat(    vel[0]).Mult(rho_vel_sq_dx,    temp2);
+    
+        temp  = 0.;
+        temp += temp1; temp += temp2;
+    
+        getSparseMat(rho_uv    ).Mult(vel_dx[1],     temp1);
+        getSparseMat(    vel[1]).Mult(rho_uv_dx   ,  temp2);
+        
+        temp += temp1; temp += temp2;
+     
+        temp *= 0.5;
+        temp += rho_theta_dx;
+      
+        fx.SetSubVector(offsets[3], temp);
+        
+    }
+
+    K_y.Mult(pres, pres_dx);
+    K_y.Mult(rho_theta_pu[1],  rho_theta_dx);
+    K_y.Mult(rho_vel_sq[1],    rho_vel_sq_dx);
+    K_y.Mult(rho_uv   ,     rho_uv_dx   );
+    for(int j = 0; j < dim; j++) 
+    {
+        K_y.Mult(rho_vel[j],    rho_vel_dx[j]);
+        K_y.Mult(vel[j],        vel_dx[j]);
+    }
+
+    {
+        // Y -deri
+
+        fx.AddElementVector(offsets[0], rho_vel_dx[1]); // rho
+    
+        // rho_u
+
+        temp1  = rho_uv_dx;
+        getSparseMat(rho_vel[1]).Mult(vel_dx[0],     temp2);
+        temp1 += temp2;
+        getSparseMat(    vel[0]).Mult(rho_vel_dx[1], temp3);
+        temp1 += temp3;
+        
+        temp1 *= 0.5;
+        
+        fx.AddElementVector(offsets[1], temp1);
+        
+        // rho_v
+
+        temp1  = rho_vel_sq_dx; 
+        getSparseMat(rho_vel[1]).Mult(vel_dx[1],     temp2);
+        temp1 += temp2;
+        getSparseMat(    vel[1]).Mult(rho_vel_dx[1], temp3);
+        temp1 += temp3;
+
+        temp1 *= 0.5;
+        temp1 += pres_dx;
+        
+        fx.AddElementVector(offsets[2], temp1);
+        
+        // rho_e
+        
+        getSparseMat(rho_uv    ).Mult(vel_dx[0],    temp1);
+        getSparseMat(    vel[0]).Mult(rho_uv_dx   ,    temp2);
+    
+        temp  = 0.;
+        temp += temp1; temp += temp2;
+    
+        getSparseMat(rho_vel_sq[1]).Mult(vel_dx[1],      temp1);
+        getSparseMat(    vel[1]   ).Mult(rho_vel_sq_dx,  temp2);
+        
+        temp *= 0.5;
+        temp += rho_theta_dx;
+      
+        fx.AddElementVector(offsets[3], temp);
+    }
+
+    f_dx = fx;
+
+}
 
 
 
@@ -3018,7 +4218,9 @@ void getFaceDotNorm(int dim, const Vector &f, const Vector &nor_face, Vector &fa
             }
         }
     }
+
 }
+
 
 void ComputeLift(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, GridFunction &f_vis_D, 
                     const Array<int> &bdr, const double gamm, Vector &force)
@@ -3113,81 +4315,6 @@ void ComputeLift(Mesh &mesh, FiniteElementSpace &fes, GridFunction &uD, GridFunc
           }
        } // p loop
    } // NBE loop
-}
-
-
-
-/*
- * We'll assume a structured grid in terms of shape for now to make it easier
- * This is for the Periodic hill
- * the spanwise directions
- * The algorithm is sensitive to Tolerance levels
- * We simply get all unique x values 
- */
-void GetUniqueX(const FiniteElementSpace &fes, const int bdr,
-               vector<double> &x_uni, vector<double> &y_uni)
-{
-   double eps = 5E-05;
-
-   const FiniteElement *el;
-   FaceElementTransformations *T;
-
-   Mesh *mesh = fes.GetMesh();
-   int   dim  = mesh->Dimension();
-   int meshNE = mesh->GetNE();
-
-   Vector loc(dim);
-   std::vector<double> x, y, z;
-
-   for (int i = 0; i < fes.GetNBE(); i++)
-   {
-       T = mesh->GetBdrFaceTransformations(i);
-
-       el = fes.GetFE(T -> Elem1No);
-   
-       const IntegrationRule *ir ;
-       int order;
-       
-       order = 2*el->GetOrder();
-       
-       ir = &IntRules.Get(T->FaceGeom, order);
-
-       for (int p = 0; p < ir->GetNPoints(); p++)
-       {
-          const IntegrationPoint &ip = ir->IntPoint(p);
-          IntegrationPoint eip;
-          T->Loc1.Transform(ip, eip);
-    
-          T->Face->SetIntPoint(&ip);
-          T->Elem1->SetIntPoint(&eip);
-           
-          T->Elem1->Transform(eip, loc);
-
-          if (mesh->GetBdrAttribute(i) == bdr)
-          {
-              x.push_back(loc(0));
-              y.push_back(loc(1));
-              z.push_back(loc(2));
-          }
-       }
-   }
-
-   double zMin = *(std::min_element(z.begin(), z.end()));
-
-   std::vector<double> x_unique, y_unique;
-
-   int xCoun = 0; //Count the number of co-ordinates in y direction on which we'll average
-   for(int i = 0; i < x.size(); i++)
-   {
-       if (abs(z.at(i) - zMin) < eps)
-       {
-           x_unique.push_back(x[i]);
-           y_unique.push_back(y[i]);
-       }
-   }
-
-   x_uni = x_unique;
-   y_uni = y_unique;
 }
 
 
@@ -3287,6 +4414,83 @@ void Compute_Wall_Quant(FiniteElementSpace &fes, GridFunction &uD, GridFunction 
    } // NBE loop
 
 }
+
+
+
+/*
+ * We'll assume a structured grid in terms of shape for now to make it easier
+ * This is for the Periodic hill
+ * the spanwise directions
+ * The algorithm is sensitive to Tolerance levels
+ * We simply get all unique x values 
+ */
+void GetUniqueX(const FiniteElementSpace &fes, const int bdr,
+               vector<double> &x_uni, vector<double> &y_uni)
+{
+   double eps = 5E-05;
+
+   const FiniteElement *el;
+   FaceElementTransformations *T;
+
+   Mesh *mesh = fes.GetMesh();
+   int   dim  = mesh->Dimension();
+   int meshNE = mesh->GetNE();
+
+   Vector loc(dim);
+   std::vector<double> x, y, z;
+
+   for (int i = 0; i < fes.GetNBE(); i++)
+   {
+       T = mesh->GetBdrFaceTransformations(i);
+
+       el = fes.GetFE(T -> Elem1No);
+   
+       const IntegrationRule *ir ;
+       int order;
+       
+       order = 2*el->GetOrder();
+       
+       ir = &IntRules.Get(T->FaceGeom, order);
+
+       for (int p = 0; p < ir->GetNPoints(); p++)
+       {
+          const IntegrationPoint &ip = ir->IntPoint(p);
+          IntegrationPoint eip;
+          T->Loc1.Transform(ip, eip);
+    
+          T->Face->SetIntPoint(&ip);
+          T->Elem1->SetIntPoint(&eip);
+           
+          T->Elem1->Transform(eip, loc);
+
+          if (mesh->GetBdrAttribute(i) == bdr)
+          {
+              x.push_back(loc(0));
+              y.push_back(loc(1));
+              z.push_back(loc(2));
+          }
+       }
+   }
+
+   double zMin = *(std::min_element(z.begin(), z.end()));
+
+   std::vector<double> x_unique, y_unique;
+
+   int xCoun = 0; //Count the number of co-ordinates in y direction on which we'll average
+   for(int i = 0; i < x.size(); i++)
+   {
+       if (abs(z.at(i) - zMin) < eps)
+       {
+           x_unique.push_back(x[i]);
+           y_unique.push_back(y[i]);
+       }
+   }
+
+   x_uni = x_unique;
+   y_uni = y_unique;
+}
+
+
 
 // Global sum across MPI processes
 void Compute_Global_Average(MPI_Comm &comm, const vector<double> &local_quant, const vector<int> &local_count, 
