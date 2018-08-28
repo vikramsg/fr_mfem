@@ -837,16 +837,16 @@ CNS::CNS()
           writeRestart(*pmesh, *u_sol, ti, t);
       }
       
-//      ComputeWallForces_GL(*fes, *u_sol, *f_vis, dir_bdr_wall, gamm, forces);
-//      double fx = forces(0), fy = forces(1);
-//      double glob_fx, glob_fy;
-//      MPI_Allreduce(&fx, &glob_fx, 1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
-//      MPI_Allreduce(&fy, &glob_fy, 1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
-//
-//      if (myid == 0)
-//      {
-//          force_file << ti << "\t" <<  dt_real << "\t" << t << "\t" << glob_fx << "\t" << glob_fy <<  endl;
-//      }
+      ComputeWallForces_GL(*fes, *u_sol, *f_vis, dir_bdr_wall, gamm, forces);
+      double fx = forces(0), fy = forces(1);
+      double glob_fx, glob_fy;
+      MPI_Allreduce(&fx, &glob_fx, 1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
+      MPI_Allreduce(&fy, &glob_fy, 1, MPI_DOUBLE, MPI_SUM, comm); // Get global across processors
+
+      if (myid == 0)
+      {
+          force_file << ti << "\t" <<  dt_real << "\t" << t << "\t" << glob_fx << "\t" << glob_fy <<  endl;
+      }
       
    }
 
