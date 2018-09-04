@@ -14,13 +14,13 @@ const double R_gas = 287.;
 const double   Pr  = 0.71;
 
 //Run parameters
-const char *mesh_file        =  "cyl_c3.msh";
-const int    order           =  3; int np = order + 1;
+const char *mesh_file        =  "3d_cyl_c1.mesh";
+const int    order           =  2; int np = order + 1;
 const double t_final         = 22.00000;
 const int    ref_levels      =  0;
 
 const bool   time_adapt      =  true ;
-const double cfl             =  1.1  ;
+const double cfl             =  0.7  ;
 const double dt_const        =  0.0003 ;
 const int    ode_solver_type =  3; // 1. Forward Euler 2. TVD SSP 3 Stage
 
