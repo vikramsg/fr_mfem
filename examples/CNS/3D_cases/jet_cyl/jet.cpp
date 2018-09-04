@@ -3073,6 +3073,9 @@ void getKGSplitDx(int dim,
     Vector rho_vel[dim];
     for(int i = 0; i < dim; i++) u.GetSubVector(offsets[1 + i], rho_vel[i]);
 
+    Vector fx(var_dim*offset);
+    fx = 0.0;
+
     if (dim == 2)
     {
         Vector vel[dim], rho_vel_sq[dim], rho_uv[dim], uv[dim], v_sq[dim];
@@ -3148,9 +3151,6 @@ void getKGSplitDx(int dim,
             K_x.Mult(rho_uv[j],     rho_uv_dx[j]);
             K_x.Mult(uv[j],         uv_dx[j]);
         }
-    
-        Vector fx(var_dim*offset);
-        fx = 0.0;
     
         Vector temp(offset), temp1(offset), temp2(offset), temp3(offset);
     
@@ -3437,9 +3437,6 @@ void getKGSplitDx(int dim,
             K_x.Mult(rho_uv[j],     rho_uv_dx[j]);
             K_x.Mult(uv[j],         uv_dx[j]);
         }
-    
-        Vector fx(var_dim*offset);
-        fx = 0.0;
     
         Vector temp(offset), temp1(offset), temp2(offset), temp3(offset);
     
@@ -3913,6 +3910,9 @@ void getSF1SplitDx(int dim,
     Vector rho_vel[dim];
     for(int i = 0; i < dim; i++) u.GetSubVector(offsets[1 + i], rho_vel[i]);
 
+    Vector fx(var_dim*offset);
+    fx = 0.0;
+
     if (dim == 2)
     {
         Vector vel[dim], rho_vel_sq[dim], rho_uv(offset), uv(offset), v_sq[dim];
@@ -3997,9 +3997,6 @@ void getSF1SplitDx(int dim,
             K_x.Mult(rho_vel[j],    rho_vel_dx[j]);
             K_x.Mult(vel[j],        vel_dx[j]);
         }
-    
-        Vector fx(var_dim*offset);
-        fx = 0.0;
     
         Vector temp(offset), temp1(offset), temp2(offset), temp3(offset);
     
@@ -4244,9 +4241,6 @@ void getSF1SplitDx(int dim,
             K_x.Mult(rho_uv[j],     rho_uv_dx[j]);
             K_x.Mult(uv[j],         uv_dx[j]);
         }
-    
-        Vector fx(var_dim*offset);
-        fx = 0.0;
     
         Vector temp(offset), temp1(offset), temp2(offset), temp3(offset);
     
@@ -4614,6 +4608,7 @@ void getModMorinishiSplitDx(int dim,
     }
 
     Vector fx(var_dim*offset);
+    fx = 0.0;
 
     for(int i = 0; i < offset; i++)
     {
@@ -4652,8 +4647,6 @@ void getModMorinishiSplitDx(int dim,
         K_x.Mult(rho_vel[j],    rho_vel_dx[j]);
         K_x.Mult(vel[j],        vel_dx[j]);
     }
-
-    fx = 0.0;
 
     Vector temp(offset), temp1(offset), temp2(offset), temp3(offset);
 
@@ -4817,6 +4810,8 @@ void getMorinishiSplitDx(int dim,
     Vector rho_vel[dim];
     for(int i = 0; i < dim; i++) u.GetSubVector(offsets[1 + i], rho_vel[i]);
 
+    Vector fx(var_dim*offset);
+    fx = 0.0;
     if (dim == 2)
     {
 
@@ -4831,8 +4826,6 @@ void getMorinishiSplitDx(int dim,
         {
             rho_theta_pu[i].SetSize(offset);
         }
-    
-        Vector fx(var_dim*offset);
     
         for(int i = 0; i < offset; i++)
         {
@@ -4869,8 +4862,6 @@ void getMorinishiSplitDx(int dim,
             K_x.Mult(rho_vel[j],    rho_vel_dx[j]);
             K_x.Mult(vel[j],        vel_dx[j]);
         }
-    
-        fx = 0.0;
     
         Vector temp(offset), temp1(offset), temp2(offset), temp3(offset);
     
@@ -4994,8 +4985,6 @@ void getMorinishiSplitDx(int dim,
             rho_theta_pu[i].SetSize(offset);
         }
     
-        Vector fx(var_dim*offset);
-    
         for(int i = 0; i < offset; i++)
         {
             double vel_sq = 0.0;
@@ -5033,8 +5022,6 @@ void getMorinishiSplitDx(int dim,
             K_x.Mult(rho_vel[j],    rho_vel_dx[j]);
             K_x.Mult(vel[j],        vel_dx[j]);
         }
-    
-        fx = 0.0;
     
         Vector temp(offset), temp1(offset), temp2(offset), temp3(offset);
     
