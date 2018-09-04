@@ -847,13 +847,13 @@ CNS::CNS()
    dir_bdr_slip = 0; dir_bdr_slip[1] = 1; 
    Array<int> dir_bdr_inlet(pmesh->bdr_attributes.Max()); 
    dir_bdr_inlet = 0; dir_bdr_inlet[2] = 1; 
-   Array<int> dir_bdr_outlet(pmesh->bdr_attributes.Max()); 
-   dir_bdr_outlet = 0; dir_bdr_outlet[3] = 1; 
+   Array<int> dir_bdr_char(pmesh->bdr_attributes.Max()); 
+   dir_bdr_char = 0; dir_bdr_char[3] = 1; 
 
    VectorFunctionCoefficient u_wall_bnd(aux_dim, wall_bnd_cnd); // Defines wall boundary condition
    VectorFunctionCoefficient u_slip_bnd(aux_dim, wall_bnd_cnd); // Defines wall boundary condition
    VectorFunctionCoefficient u_inlet_bnd(var_dim, inlet_bnd_cnd); // Defines characterstic boundary condition
-   VectorFunctionCoefficient u_outlet_bnd(var_dim, outlet_bnd_cnd); // Defines characterstic boundary condition
+   VectorFunctionCoefficient u_char_bnd(var_dim, char_bnd_cnd); // Defines characterstic boundary condition
 
    Bnd_Inv_NoSlip_Isotherm_Integrator *dg_ns = new Bnd_Inv_NoSlip_Isotherm_Integrator(
               R_gas, gamm, u_vec, f_vec, u_wall_bnd, -1.0); 
