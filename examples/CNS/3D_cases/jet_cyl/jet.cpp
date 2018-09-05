@@ -20,7 +20,7 @@ const double t_final         = 22.00000;
 const int    ref_levels      =  0;
 
 const bool   time_adapt      =  true ;
-const double cfl             =  0.7  ;
+const double cfl             =  0.675;
 const double dt_const        =  0.0003 ;
 const int    ode_solver_type =  3; // 1. Forward Euler 2. TVD SSP 3 Stage
 
@@ -368,6 +368,10 @@ void Bnd_Inv_Slip_Isotherm_Integrator::AssembleRHSElementVect(
       ir = &IntRules.Get(Trans.FaceGeom, order);
    }
 
+   // This condition is problematic
+   // When we try to impose slip with iso-thermal it blows up
+   // When we impose only slip, isothermal does not work 
+
    for (int p = 0; p < ir->GetNPoints(); p++)
    {
       const IntegrationPoint &ip = ir->IntPoint(p);
@@ -403,11 +407,12 @@ void Bnd_Inv_Slip_Isotherm_Integrator::AssembleRHSElementVect(
 //      }
 //      double E_R   = E_L;
 
-      double p_R = p_L*1.0001; // Extrapolate pressure
+      double p_R = p_L; // Extrapolate pressure
       v_sq  = 0.0;
       for (int j = 0; j < dim; j++)
       {
-          vel_R(j) = 2*u2_bnd(j) - vel_L(j); 
+//          vel_R(j) = 2*u2_bnd(j) - vel_L(j); 
+          vel_R(j) = 0.0; 
       }
       double T_R   = u2_bnd(aux_dim - 1);
       double rho_R = p_R/(R*T_R);
@@ -420,7 +425,7 @@ void Bnd_Inv_Slip_Isotherm_Integrator::AssembleRHSElementVect(
       }
       u2_dir(var_dim - 1) = E_R;
 
-      getLFFlux(R, gamm, u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using local Lax Friedrichs
+      getRoeFlux(R, gamm, u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using local Lax Friedrichs
 
       fD.Eval(f1_dir, *Trans.Elem1, eip); // Get discontinuous flux at face
 
@@ -566,7 +571,7 @@ void Bnd_Inv_NoSlip_Isotherm_Integrator::AssembleRHSElementVect(
 //      }
 //      double E_R   = E_L;
 
-      double p_R = p_L*1.0001; // Extrapolate pressure
+      double p_R = p_L; // Extrapolate pressure
       v_sq  = 0.0;
       for (int j = 0; j < dim; j++)
       {
@@ -583,8 +588,7 @@ void Bnd_Inv_NoSlip_Isotherm_Integrator::AssembleRHSElementVect(
       }
       u2_dir(var_dim - 1) = E_R;
 
-      getLFFlux(R, gamm, u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using local Lax Friedrichs
-//      getConvectiveFlux(R, gamm, u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using central convective flux 
+      getRoeFlux(R, gamm, u1_dir, u2_dir, nor, f_dir); // Get interaction flux at face using local Lax Friedrichs
 
       fD.Eval(f1_dir, *Trans.Elem1, eip); // Get discontinuous flux at face
 
