@@ -34,6 +34,10 @@ void init_function(const Vector &x, Vector &v);
 void getInvFlux(int dim, const Vector &u, Vector &f);
 void getEulerJacobian(const int dim, const Vector &u, DenseMatrix &J);
 
+void AssembleSharedFaceMatrices(const ParGridFunction &x);
+
+
+void getTestInvFlux(int dim, const Vector &u, Vector &f);
 
 class CNS 
 {
@@ -223,8 +227,8 @@ void DeriJacobianIntegrator::AssembleElementMatrix(
    // Multiply derivative matrix with Euler Jacobian
    Mult(dmat, jmat, elmat);
 
-//   jmat.Print();
 }
+
 
 
 
@@ -300,12 +304,14 @@ CNS::CNS()
    KJx->Assemble(1); 
    KJx->Finalize(1); 
 
+   AssembleSharedFaceMatrices(*u_sol);
+   
    Vector f_test(f_inv->Size());
 
 //   fJ->SpMat().Print();
 //   fJ->SpMat().Mult(*u_sol, f_test);
 
-//   Kx->SpMat().Print();
+//   KJx->SpMat().Print();
 //   KJx->SpMat().Mult(*u_sol, f_test);
 
    delete fJ;
@@ -507,19 +513,218 @@ void getEulerJacobian(const int dim, const Vector &u, DenseMatrix &J)
 
 
 
+// Generate matrices for projecting data to faces
+// This should in theory speed up calculations
+void AssembleSharedFaceMatrices(const ParGridFunction &x) 
+{
+   ParFiniteElementSpace *fes = x.ParFESpace();
+   ParMesh *pmesh             = fes->GetParMesh();
+   MPI_Comm comm              = fes->GetComm();
+
+   int dim     = pmesh->SpaceDimension();
+   int var_dim = dim + 2;
+
+   const FiniteElement *el1, *el2;
+   FaceElementTransformations *T;
+
+   int ndof1, ndof2;
+   int order;
+
+   double w; // weight
+   double alpha =  -1.0;
+
+   Vector shape1, shape2;
+
+   Array<int> vdofs, vdofs2;
+
+   int dofs       = fes->GetVSize();
+
+   Vector nor(dim);
+   DenseMatrix jmat;
+
+   double eps = 1E-15; 
+
+   // Instead, lets do using face by face assembly
+   // Eventually shape should be in a matrix and we should just
+   // extract it from this matrix rather than eval everytime to save cost
+
+   int nfaces = pmesh->GetNumFaces();
+//   for (int i = 0; i < nfaces; i++)
+   for (int i = 0; i < 1; i++)
+   {
+       T = pmesh->GetInteriorFaceTransformations(i);
+
+       if(T != NULL)
+       {
+           fes->GetElementVDofs (T -> Elem1No, vdofs);
+           fes->GetElementVDofs (T -> Elem2No, vdofs2);
+
+           el1 = fes->GetFE(T -> Elem1No);
+           el2 = fes->GetFE(T -> Elem2No);
+
+           const IntegrationRule *ir ;
+
+           int order = 2*std::max(el1->GetOrder(), el2->GetOrder());
+       
+           ir = &IntRules.Get(T->FaceGeom, order);
+
+           int numFacePts = ir->GetNPoints();
+
+           DenseMatrix P_L(numFacePts*var_dim, vdofs.Size()  );
+           DenseMatrix P_R(numFacePts*var_dim, vdofs2.Size() );
+
+           DenseMatrix J_L(numFacePts*var_dim, numFacePts*var_dim);
+           DenseMatrix J_R(numFacePts*var_dim, numFacePts*var_dim);
+
+           P_L = 0.; P_R = 0.;
+           J_L = 0.; J_R = 0.;
+
+           for (int p = 0; p < ir->GetNPoints(); p++)
+           {
+              const IntegrationPoint &ip = ir->IntPoint(p);
+              IntegrationPoint eip1, eip2;
+              T->Loc1.Transform(ip, eip1);
+              T->Loc2.Transform(ip, eip2);
+    
+              T->Face->SetIntPoint(&ip);
+              T->Elem1->SetIntPoint(&eip1);
+              T->Elem2->SetIntPoint(&eip2);
+ 
+              ndof1   = el1->GetDof();
+              ndof2   = el2->GetDof();
+
+              shape1.SetSize(ndof1);
+              shape2.SetSize(ndof2);
+   
+              el1->CalcShape(eip1, shape1);
+              el2->CalcShape(eip2, shape2);
+
+              for(int j=0; j < shape1.Size(); j++)
+              {
+                  if (std::abs(shape1(j)) < eps )
+                      shape1(j) = 0.0;
+              }
+              for(int j=0; j < shape2.Size(); j++)
+              {
+                  if (std::abs(shape2(j)) < eps )
+                      shape2(j) = 0.0;
+              }
+             
+              int offset;
+              for(int j=0; j < var_dim; j++)
+              {
+                  offset = vdofs.Size()/var_dim;
+              
+                  for(int k=0; k < offset; k++)
+                  {
+                      P_L(j*numFacePts + p, j*offset + k) = shape1[k];                  
+                  }
+                  
+                  offset = vdofs2.Size()/var_dim;
+              
+                  for(int k=0; k < offset; k++)
+                  {
+                      P_R(j*numFacePts + p, j*offset + k) = shape2[k];                  
+                  }
+
+              }
+
+              Vector u_l, u_r;      
+              x.GetVectorValue(T->Elem1No, eip1, u_l);
+              x.GetVectorValue(T->Elem2No, eip2, u_r);
+      
+              getEulerJacobian(dim, u_l, jmat);
+              
+              offset = vdofs.Size()/var_dim;
+              for(int j=0; j < var_dim; j++)
+                  for(int k=0; k < var_dim; k++)
+                  {
+                      J_L.Elem(p + j*numFacePts, p + k*numFacePts) = jmat.Elem(j, k);
+                  }
+
+
+//              cout << p << "\t" << dofs << "\t" << vdofs.Size() << endl;
+//              u_l.Print();
+
+              CalcOrtho(T->Face->Jacobian(), nor);
+
+              // First check that we get u_L by Eval as well as projection
+              // Then make it var_dim*dofs to get the same u_L
+              // Then multiply that by J
+
+
+         }// p loop 
+
+         Vector u1;
+         x.GetSubVector(vdofs, u1);
+         
+         Vector u_l(numFacePts*var_dim);
+         P_L.Mult(u1, u_l);
+
+         Vector f_l(u_l.Size());
+         J_L.Mult(u_l, f_l);
+         
+         Vector f_test(u_l.Size()*2);
+         getTestInvFlux(dim, u_l, f_test);
+
+       } // If loop
+
+   }
+
+}
 
 
 
+// Inviscid flux 
+// For testing purposes, this gets Inviscid flux for old arrangement of variables
+void getTestInvFlux(int dim, const Vector &u, Vector &f)
+{
+    int var_dim = dim + 2;
+    int offset  = u.Size()/var_dim;
 
+    Array<int> offsets[dim*var_dim];
+    for(int i = 0; i < dim*var_dim; i++)
+    {
+        offsets[i].SetSize(offset);
+    }
 
+    for(int j = 0; j < dim*var_dim; j++)
+    {
+        for(int i = 0; i < offset; i++)
+        {
+            offsets[j][i] = j*offset + i ;
+        }
+    }
+    Vector rho, E;
+    u.GetSubVector(offsets[0],           rho   );
+    u.GetSubVector(offsets[var_dim - 1],      E);
 
+    Vector rho_vel[dim];
+    for(int i = 0; i < dim; i++) u.GetSubVector(offsets[1 + i], rho_vel[i]);
 
+    for(int i = 0; i < offset; i++)
+    {
+        double vel[dim];        
+        for(int j = 0; j < dim; j++) vel[j]   = rho_vel[j](i)/rho(i);
 
+        double vel_sq = 0.0;
+        for(int j = 0; j < dim; j++) vel_sq += pow(vel[j], 2);
 
+        double pres    = (E(i) - 0.5*rho(i)*vel_sq)*(gamm - 1);
 
+        for(int j = 0; j < dim; j++) 
+        {
+            f(j*var_dim*offset + i)       = rho_vel[j][i]; //rho*u
 
+            for (int k = 0; k < dim ; k++)
+            {
+                f(j*var_dim*offset + (k + 1)*offset + i)     = rho_vel[j](i)*vel[k]; //rho*u*u + p    
+            }
+            f(j*var_dim*offset + (j + 1)*offset + i)        += pres; 
 
-
-
+            f(j*var_dim*offset + (var_dim - 1)*offset + i)   = (E(i) + pres)*vel[j] ;//(E+p)*u
+        }
+    }
+}
 
 
