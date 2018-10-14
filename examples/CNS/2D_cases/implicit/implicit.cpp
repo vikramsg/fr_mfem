@@ -230,6 +230,180 @@ void DeriJacobianIntegrator::AssembleElementMatrix(
 }
 
 
+// Get P^T.W.J.P where P is the projection matrix and J is Euler Jacobian
+class FaceJacobianIntegrator : public BilinearFormIntegrator
+{
+private:
+   Vector shape1, shape2;
+   VectorCoefficient &Q;
+
+   GridFunction &uS;
+   const FiniteElementSpace &fes;
+
+   Vector nor;
+
+   DenseMatrix jmat;
+
+public:
+   FaceJacobianIntegrator(VectorCoefficient &q, GridFunction &u_sol, const FiniteElementSpace &fes_)
+      : Q(q), uS(u_sol), fes(fes_) { }
+   virtual void AssembleFaceMatrix(const FiniteElement &, const FiniteElement &,
+                                      FaceElementTransformations &,
+                                      DenseMatrix &);
+};
+
+
+void FaceJacobianIntegrator::AssembleFaceMatrix(
+        const FiniteElement &el1, const FiniteElement &el2,
+        FaceElementTransformations &Trans, DenseMatrix &elmat)
+{
+   int nd1     = el1.GetDof();
+   int nd2     = el2.GetDof();
+   int dim     = el1.GetDim();
+   int var_dim = dim + 2;
+
+   shape1.SetSize(nd1);
+   shape2.SetSize(nd2);
+
+   nor.SetSize(dim);
+
+   elmat.SetSize( (nd1 + nd2)*var_dim);
+   
+   const IntegrationRule *ir ;
+   int order = 2*std::max(el1.GetOrder(), el2.GetOrder());
+   ir = &IntRules.Get(Trans.FaceGeom, order);
+
+   int numFacePts = ir->GetNPoints() ;
+
+   DenseMatrix P_L(numFacePts*var_dim, nd1*var_dim  );
+   DenseMatrix P_R(numFacePts*var_dim, nd2*var_dim  );
+
+   DenseMatrix J_L(numFacePts*var_dim, numFacePts*var_dim);
+   DenseMatrix J_R(numFacePts*var_dim, numFacePts*var_dim);
+
+   DenseMatrix JP_L(numFacePts*var_dim, nd1*var_dim );
+   DenseMatrix JP_R(numFacePts*var_dim, nd2*var_dim );
+   
+   DenseMatrix wts(numFacePts*var_dim, numFacePts*var_dim);
+
+   DenseMatrix temp1(numFacePts*var_dim, nd1*var_dim );
+   DenseMatrix temp2(numFacePts*var_dim, nd2*var_dim );
+
+   DenseMatrix fu_L(nd1*var_dim, nd1*var_dim);
+   DenseMatrix fu_R(nd2*var_dim, nd2*var_dim);
+
+   for (int p = 0; p < ir->GetNPoints(); p++)
+   {
+        const IntegrationPoint &ip = ir->IntPoint(p);
+        IntegrationPoint eip1, eip2;
+        Trans.Loc1.Transform(ip, eip1);
+        Trans.Loc2.Transform(ip, eip2);
+   
+        Trans.Face->SetIntPoint(&ip);
+        Trans.Elem1->SetIntPoint(&eip1);
+        Trans.Elem2->SetIntPoint(&eip2);
+ 
+        el1.CalcShape(eip1, shape1);
+        el2.CalcShape(eip2, shape2);
+
+        int offset;
+        for(int j=0; j < var_dim; j++)
+        {
+            offset = nd1;
+        
+            for(int k=0; k < offset; k++)
+            {
+                P_L(j*numFacePts + p, j*offset + k) = shape1[k];                  
+            }
+            
+            offset = nd2;
+        
+            for(int k=0; k < offset; k++)
+            {
+                P_R(j*numFacePts + p, j*offset + k) = shape2[k];                  
+            }
+
+        }
+
+        Vector u_l, u_r;      
+        Q.Eval(u_l, *Trans.Elem1, eip1);
+        Q.Eval(u_r, *Trans.Elem2, eip2);
+   
+        getEulerJacobian(dim, u_l, jmat);
+        
+        for(int j=0; j < var_dim; j++)
+            for(int k=0; k < var_dim; k++)
+            {
+                J_L.Elem(p + j*numFacePts, p + k*numFacePts) = jmat.Elem(j, k);
+            }
+
+        getEulerJacobian(dim, u_r, jmat);
+        
+        for(int j=0; j < var_dim; j++)
+            for(int k=0; k < var_dim; k++)
+            {
+                J_R.Elem(p + j*numFacePts, p + k*numFacePts) = jmat.Elem(j, k);
+            }
+
+
+        for(int j=0; j < var_dim; j++)
+        {
+            wts(j*numFacePts + p, j*numFacePts + p) = ip.weight;
+        }
+
+        CalcOrtho(Trans.Face->Jacobian(), nor);
+
+
+   }// p loop 
+
+   Array<int> vdofs;
+   fes.GetElementVDofs (Trans.Elem1No, vdofs);
+
+   Vector u1;
+   uS.GetSubVector(vdofs, u1);
+
+   // J.P_L.u = f_L   
+   Mult(J_L, P_L, JP_L);
+//   Vector f_l(numFacePts*var_dim);
+//   JP_L.Mult(u1, f_l);
+//   f_l.Print();
+ 
+   Mult(J_R, P_R, JP_R);
+   Vector f_r(numFacePts*var_dim);
+   JP_L.Mult(u1, f_r);
+
+   Mult(wts, JP_L, temp1);
+   Mult(wts, JP_R, temp2);
+
+   P_L.Transpose();
+   P_R.Transpose();
+
+   Mult(P_L, temp1, fu_L);
+   Mult(P_R, temp2, fu_R);
+
+//   Vector f_c(u1.Size());
+//   fu_L.Mult(u1, f_c);
+
+//   f_c.Print();
+
+   elmat = 0.0;
+
+   for (int j = 0; j < nd1*var_dim; j++)
+    for (int k = 0; k < nd1*var_dim; k++)
+       {
+            elmat.Elem(j, k) = fu_L(j, k);        
+       }
+
+   for (int j = 0; j < nd2*var_dim; j++)
+    for (int k = 0; k < nd2*var_dim; k++)
+       {
+            elmat.Elem(nd1*var_dim + j, nd1*var_dim + k) = -fu_R(j, k);        
+       }
+
+
+}
+
+
 
 
 int main(int argc, char *argv[])
@@ -303,6 +477,20 @@ CNS::CNS()
    KJx->AddDomainIntegrator( new DeriJacobianIntegrator(u_vec) );
    KJx->Assemble(1); 
    KJx->Finalize(1); 
+
+   ParBilinearForm *FJx = new ParBilinearForm(fes);
+   FJx->AddInteriorFaceIntegrator( new FaceJacobianIntegrator(u_vec, *u_sol, *fes) );
+   FJx->Assemble(1); 
+   FJx->Finalize(1); 
+
+//   FJx->SpMat().Print();
+
+   Vector u_test(u_sol->Size());
+   FJx->SpMat().Mult(*u_sol, u_test);
+
+//   for (int i = 0; i < u_sol->Size()/var_dim; i++)
+//       cout <<243 + i << "\t" << (*u_sol)[var_dim*i + 3] << "\t" << u_test[var_dim*i + 3] << endl;
+
 
    AssembleSharedFaceMatrices(*u_sol);
    
@@ -540,7 +728,7 @@ void AssembleSharedFaceMatrices(const ParGridFunction &x)
    int dofs       = fes->GetVSize();
 
    Vector nor(dim);
-   DenseMatrix jmat;
+   DenseMatrix jmat, JP_L;
 
    double eps = 1E-15; 
 
@@ -575,6 +763,16 @@ void AssembleSharedFaceMatrices(const ParGridFunction &x)
 
            DenseMatrix J_L(numFacePts*var_dim, numFacePts*var_dim);
            DenseMatrix J_R(numFacePts*var_dim, numFacePts*var_dim);
+
+           DenseMatrix JP_L(numFacePts*var_dim, vdofs.Size());
+           DenseMatrix JP_R(numFacePts*var_dim, vdofs2.Size());
+           
+           DenseMatrix wts(numFacePts*var_dim, numFacePts*var_dim);
+
+           DenseMatrix temp(numFacePts*var_dim, vdofs.Size());
+
+           DenseMatrix fu_L(vdofs.Size() , vdofs.Size());
+           DenseMatrix fu_R(vdofs2.Size(), vdofs2.Size());
 
            P_L = 0.; P_R = 0.;
            J_L = 0.; J_R = 0.;
@@ -646,26 +844,36 @@ void AssembleSharedFaceMatrices(const ParGridFunction &x)
 //              cout << p << "\t" << dofs << "\t" << vdofs.Size() << endl;
 //              u_l.Print();
 
-              CalcOrtho(T->Face->Jacobian(), nor);
+              for(int j=0; j < var_dim; j++)
+              {
+                  offset = vdofs.Size()/var_dim;
+                  wts(j*numFacePts + p, j*numFacePts + p) = ip.weight;
+              }
 
-              // First check that we get u_L by Eval as well as projection
-              // Then make it var_dim*dofs to get the same u_L
-              // Then multiply that by J
+              CalcOrtho(T->Face->Jacobian(), nor);
 
 
          }// p loop 
 
          Vector u1;
          x.GetSubVector(vdofs, u1);
-         
-         Vector u_l(numFacePts*var_dim);
-         P_L.Mult(u1, u_l);
 
-         Vector f_l(u_l.Size());
-         J_L.Mult(u_l, f_l);
-         
-         Vector f_test(u_l.Size()*2);
-         getTestInvFlux(dim, u_l, f_test);
+         // J.P_L.u = f_L   
+         Mult(J_L, P_L, JP_L);
+
+         Vector f_l(numFacePts*var_dim);
+         JP_L.Mult(u1, f_l);
+//         f_l.Print();
+
+         Mult(wts, JP_L, temp);
+         P_L.Transpose();
+         Mult(P_L, temp, fu_L);
+
+         Vector f_c(u1.Size());
+         fu_L.Mult(u1, f_c);
+
+//         fu_L.Print();
+//         f_c.Print();
 
        } // If loop
 
