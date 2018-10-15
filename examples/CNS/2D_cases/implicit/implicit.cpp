@@ -32,7 +32,10 @@ const double rho_inf         =    1.0;
 void init_function(const Vector &x, Vector &v);
 
 void getInvFlux(int dim, const Vector &u, Vector &f);
+void getInvFlux2(int dim, const Vector &u, Vector &f);
+
 void getEulerJacobian(const int dim, const Vector &u, DenseMatrix &J);
+void getEulerJacobian(const int dim, const Vector &u, DenseMatrix &J1, DenseMatrix &J2);
 
 void AssembleSharedFaceMatrices(const ParGridFunction &x);
 
@@ -242,7 +245,7 @@ private:
 
    Vector nor;
 
-   DenseMatrix jmat;
+   DenseMatrix j1, j2;
 
 public:
    FaceJacobianIntegrator(VectorCoefficient &q, GridFunction &u_sol, const FiniteElementSpace &fes_)
@@ -324,25 +327,26 @@ void FaceJacobianIntegrator::AssembleFaceMatrix(
             }
 
         }
+        CalcOrtho(Trans.Face->Jacobian(), nor);
 
         Vector u_l, u_r;      
         Q.Eval(u_l, *Trans.Elem1, eip1);
         Q.Eval(u_r, *Trans.Elem2, eip2);
    
-        getEulerJacobian(dim, u_l, jmat);
+        getEulerJacobian(dim, u_l, j1, j2);
         
         for(int j=0; j < var_dim; j++)
             for(int k=0; k < var_dim; k++)
             {
-                J_L.Elem(p + j*numFacePts, p + k*numFacePts) = jmat.Elem(j, k);
+                J_L.Elem(p + j*numFacePts, p + k*numFacePts) = j1.Elem(j, k)*nor(0) + j2.Elem(j, k)*nor(1);
             }
 
-        getEulerJacobian(dim, u_r, jmat);
+        getEulerJacobian(dim, u_r, j1, j2);
         
         for(int j=0; j < var_dim; j++)
             for(int k=0; k < var_dim; k++)
             {
-                J_R.Elem(p + j*numFacePts, p + k*numFacePts) = jmat.Elem(j, k);
+                J_R.Elem(p + j*numFacePts, p + k*numFacePts) = j1.Elem(j, k)*nor(0) + j2.Elem(j, k)*nor(1);
             }
 
 
@@ -350,8 +354,6 @@ void FaceJacobianIntegrator::AssembleFaceMatrix(
         {
             wts(j*numFacePts + p, j*numFacePts + p) = ip.weight;
         }
-
-        CalcOrtho(Trans.Face->Jacobian(), nor);
 
 
    }// p loop 
@@ -369,17 +371,14 @@ void FaceJacobianIntegrator::AssembleFaceMatrix(
 //   f_l.Print();
  
    Mult(J_R, P_R, JP_R);
-   Vector f_r(numFacePts*var_dim);
-   JP_L.Mult(u1, f_r);
+//   Vector f_r(numFacePts*var_dim);
+//   JP_L.Mult(u1, f_r);
 
    Mult(wts, JP_L, temp1);
    Mult(wts, JP_R, temp2);
 
    P_L.Transpose();
    P_R.Transpose();
-
-   Mult(P_L, temp1, fu_L);
-   Mult(P_R, temp2, fu_R);
 
 //   Vector f_c(u1.Size());
 //   fu_L.Mult(u1, f_c);
@@ -388,10 +387,29 @@ void FaceJacobianIntegrator::AssembleFaceMatrix(
 
    elmat = 0.0;
 
+   // Here we assume the common flux is 0.5(f_L + f_R)
+   Mult(P_L, temp1, fu_L);
+   Mult(P_R, temp1, fu_R);
+
    for (int j = 0; j < nd1*var_dim; j++)
     for (int k = 0; k < nd1*var_dim; k++)
        {
             elmat.Elem(j, k) = fu_L(j, k);        
+       }
+
+   for (int j = 0; j < nd2*var_dim; j++)
+    for (int k = 0; k < nd1*var_dim; k++)
+       {
+            elmat.Elem(nd1*var_dim + j, k) = fu_R(j, k);        
+       }
+
+   Mult(P_L, temp2, fu_L);
+   Mult(P_R, temp2, fu_R);
+
+   for (int j = 0; j < nd1*var_dim; j++)
+    for (int k = 0; k < nd2*var_dim; k++)
+       {
+            elmat.Elem(j, nd1*var_dim + k) = -fu_L(j, k);        
        }
 
    for (int j = 0; j < nd2*var_dim; j++)
@@ -489,7 +507,7 @@ CNS::CNS()
    FJx->SpMat().Mult(*u_sol, u_test);
 
 //   for (int i = 0; i < u_sol->Size()/var_dim; i++)
-//       cout <<243 + i << "\t" << (*u_sol)[var_dim*i + 3] << "\t" << u_test[var_dim*i + 3] << endl;
+//       cout << 81 + i << "\t" << (*u_sol)[var_dim*i + 1] << "\t" << -0.5*u_test[var_dim*i + 1] << endl;
 
 
    AssembleSharedFaceMatrices(*u_sol);
@@ -503,6 +521,27 @@ CNS::CNS()
 //   KJx->SpMat().Mult(*u_sol, f_test);
 
    delete fJ;
+
+//   Vector u_sub(var_dim), f_sub(dim*var_dim);
+//   u_sub[0] = (*u_sol)[23];
+//   u_sub[1] = (*u_sol)[24];
+//   u_sub[2] = (*u_sol)[25];
+//   u_sub[3] = (*u_sol)[26];
+//
+//   DenseMatrix J1, J2;
+//   Vector f1(var_dim), f2(var_dim);
+//   getEulerJacobian(dim, u_sub, J1, J2);
+//
+//   J1.Mult(u_sub, f1);
+//   J2.Mult(u_sub, f2);
+//
+//   getInvFlux2(dim, u_sub, f_sub);
+//
+//   for(int i = 0; i < var_dim; i++)
+//   {
+//       cout << i << "\t" << u_sub[i] << "\t" << f_sub[i] << "\t" << f_sub[var_dim + i] << endl;
+//       cout << i << "\t" << u_sub[i] << "\t" << f1   [i] << "\t" << f2   [          i] << endl;
+//   }
 
    // Print all nodes in the finite element space 
    ParFiniteElementSpace fes_nodes(pmesh, &fec, dim);
@@ -598,6 +637,60 @@ void getInvFlux(int dim, const Vector &u, Vector &f)
 
 
 
+// Inviscid flux 
+void getInvFlux2(int dim, const Vector &u, Vector &f)
+{
+    int var_dim = dim + 2;
+    int offset  = u.Size()/var_dim;
+
+    Array<int> offsets[dim*var_dim];
+    for(int i = 0; i < dim*var_dim; i++)
+    {
+        offsets[i].SetSize(offset);
+    }
+
+    for(int j = 0; j < dim*var_dim; j++)
+    {
+        for(int i = 0; i < offset; i++)
+        {
+            offsets[j][i] = j*offset + i ;
+        }
+    }
+    Vector rho, E;
+    u.GetSubVector(offsets[0],           rho   );
+    u.GetSubVector(offsets[var_dim - 1],      E);
+
+    Vector rho_vel[dim];
+    for(int i = 0; i < dim; i++) u.GetSubVector(offsets[1 + i], rho_vel[i]);
+
+    for(int i = 0; i < offset; i++)
+    {
+        double vel[dim];        
+        for(int j = 0; j < dim; j++) vel[j]   = rho_vel[j](i)/rho(i);
+
+        double vel_sq = 0.0;
+        for(int j = 0; j < dim; j++) vel_sq += pow(vel[j], 2);
+
+        double pres    = (E(i) - 0.5*rho(i)*vel_sq)*(gamm - 1);
+
+        for(int j = 0; j < dim; j++) 
+        {
+            f(j*var_dim*offset + i)       = rho_vel[j][i]; //rho*u
+
+            for (int k = 0; k < dim ; k++)
+            {
+                f(j*var_dim*offset + (k + 1)*offset + i)     = rho_vel[j](i)*vel[k]; //rho*u*u + p    
+            }
+            f(j*var_dim*offset + (j + 1)*offset + i)        += pres; 
+
+            f(j*var_dim*offset + (var_dim - 1)*offset + i)   = (E(i) + pres)*vel[j] ;//(E+p)*u
+        }
+    }
+}
+
+
+
+
 
 
 //  Initialize variables coefficient
@@ -684,6 +777,95 @@ void getEulerJacobian(const int dim, const Vector &u, DenseMatrix &J)
         J.Elem(3, 2) = -(gamm - 1)*vel[0]*vel[1] ; 
         J.Elem(3, 3) =  gamm * vel[0]; 
       
+    }
+
+//    Vector f(var_dim);
+//    J.Mult(u, f);
+//
+//    Vector f_test(var_dim);
+//    getInvFlux(dim, u, f_test);
+//
+//    f.Print();
+//    f_test.Print();
+
+}
+
+
+/*
+ * Get the Jacobian of the Euler equations
+ */
+void getEulerJacobian(const int dim, const Vector &u, DenseMatrix &J1, DenseMatrix &J2)
+{
+    int var_dim = dim + 2;
+
+    double vel[dim];
+
+    double rho  = u[0];
+
+    double v_sq = 0;
+    for(int i = 0; i < dim; i++)
+    {
+        vel[i] = u[1 + i]/rho;
+
+        v_sq   = v_sq + vel[i]*vel[i];
+    }
+
+    double rho_e = u[dim + 1];
+        
+    double pres  = (rho_e - 0.5*rho*v_sq)*(gamm - 1);
+    double H     = (rho_e + pres)/rho;
+
+    J1.SetSize(var_dim);
+    J2.SetSize(var_dim);
+
+    J1 = 0.0; J2 = 0.0;
+
+    if (dim == 2)
+    {
+        // X
+        // Row 1
+        J1.Elem(0, 1) = 1.0;
+        
+        // Row 2
+        J1.Elem(1, 0) = -vel[0]*vel[0] + 0.5*(gamm - 1)*v_sq;
+        J1.Elem(1, 1) =  (3 - gamm)*vel[0];
+        J1.Elem(1, 2) = -(gamm - 1)*vel[1];
+        J1.Elem(1, 3) =  gamm - 1;
+ 
+        // Row 3
+        J1.Elem(2, 0) = -vel[0]*vel[1]; 
+        J1.Elem(2, 1) =  vel[1]; 
+        J1.Elem(2, 2) =  vel[0]; 
+        J1.Elem(2, 3) =  0; 
+ 
+        // Row 4
+        J1.Elem(3, 0) = (0.5*(gamm - 1)*v_sq - H)*vel[0]; 
+        J1.Elem(3, 1) =  H - (gamm - 1)*vel[0]*vel[0]; 
+        J1.Elem(3, 2) = -(gamm - 1)*vel[0]*vel[1] ; 
+        J1.Elem(3, 3) =  gamm * vel[0]; 
+
+        // Y
+        // Row 1
+        J2.Elem(0, 2) = 1.0;
+        
+        // Row 2
+        J2.Elem(1, 0) = -vel[0]*vel[1]; 
+        J2.Elem(1, 1) =  vel[1]; 
+        J2.Elem(1, 2) =  vel[0]; 
+        J2.Elem(1, 3) =  0.0;
+ 
+        // Row 3
+        J2.Elem(2, 0) = -vel[1]*vel[1] + 0.5*(gamm - 1)*v_sq;
+        J2.Elem(2, 1) = -(gamm - 1)*vel[0]; 
+        J2.Elem(2, 2) =  (3 - gamm)*vel[1]; 
+        J2.Elem(2, 3) =  (gamm - 1); 
+ 
+        // Row 4
+        J2.Elem(3, 0) =  (0.5*(gamm - 1)*v_sq - H)*vel[1]; 
+        J2.Elem(3, 1) = -(gamm - 1)*vel[0]*vel[1] ; 
+        J2.Elem(3, 2) =  H - (gamm - 1)*vel[1]*vel[1]; 
+        J2.Elem(3, 3) =  gamm * vel[1]; 
+     
     }
 
 //    Vector f(var_dim);
