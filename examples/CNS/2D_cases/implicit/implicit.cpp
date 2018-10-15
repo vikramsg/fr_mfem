@@ -50,6 +50,7 @@ private:
     ParMesh *pmesh ;
 
     ParFiniteElementSpace  *fes;
+    ParFiniteElementSpace  *fes_flux;
    
     ParGridFunction *u_sol, *f_inv;   
 
@@ -149,24 +150,27 @@ void DeriJacobianIntegrator::AssembleElementMatrix(
    int dim     = el.GetDim();
    int var_dim = dim + 2;
 
-   DenseMatrix dshape, adjJ, Q_ir, small_mat, dmat;
+   DenseMatrix dshape, adjJ, Q_ir, small1_mat, small2_mat, d1mat, d2mat;
    Vector shape, vec2, BdFidxT;
 
    // Derivative variables
-   small_mat.SetSize(nd);
+   small1_mat.SetSize(nd);
+   small2_mat.SetSize(nd);
    dshape.SetSize(nd,dim);
    adjJ.SetSize(dim);
    shape.SetSize(nd);
    vec2.SetSize(dim);
    BdFidxT.SetSize(nd);
    
-   dmat.SetSize(nd*var_dim);
+   d1mat.SetSize(nd*var_dim);
+   d2mat.SetSize(nd*var_dim);
   
    // Jacobian variables
    Vector u_ip;
-   DenseMatrix J, jmat;
+   DenseMatrix J1, J2, j1, j2;
 
-   jmat.SetSize(nd*var_dim);
+   j1.SetSize(nd*var_dim);
+   j2.SetSize(nd*var_dim);
 
    elmat.SetSize(nd*var_dim);
 
@@ -180,13 +184,11 @@ void DeriJacobianIntegrator::AssembleElementMatrix(
    }
 
    Q_ir.SetSize(dim, nd);
-   Q_ir = 0.0;
 
-   // X-direction
-   Q_ir.SetRow(0, 1.0);
-
-   small_mat = 0.0;
-   jmat      = 0.0;
+   small1_mat = 0.0;
+   small2_mat = 0.0;
+   j1      = 0.0;
+   j2      = 0.0;
    for (int i = 0; i < ir->GetNPoints(); i++)
    {
       const IntegrationPoint &ip = ir->IntPoint(i);
@@ -196,39 +198,63 @@ void DeriJacobianIntegrator::AssembleElementMatrix(
       // Get derivative
       Trans.SetIntPoint(&ip);
       CalcAdjugate(Trans.Jacobian(), adjJ);
+      
+      // X-direction
+      Q_ir = 0.0;
+
+      Q_ir.SetRow(0, 1.0);
+
       Q_ir.GetColumnReference(i, vec1);
       vec1 *= ip.weight;
 
       adjJ.Mult(vec1, vec2);
       dshape.Mult(vec2, BdFidxT);
 
-      AddMultVWt(shape, BdFidxT, small_mat);
-     
+      AddMultVWt(shape, BdFidxT, small1_mat);
+
+
+      // Y-direction
+      Q_ir = 0.0;
+
+      Q_ir.SetRow(1, 1.0);
+
+      Q_ir.GetColumnReference(i, vec1);
+      vec1 *= ip.weight;
+
+      adjJ.Mult(vec1, vec2);
+      dshape.Mult(vec2, BdFidxT);
+
+      AddMultVWt(shape, BdFidxT, small2_mat);
+
       // Get Jacobian
       Q.Eval(u_ip, Trans, ip);
-      getEulerJacobian(dim, u_ip, J);
+      getEulerJacobian(dim, u_ip, J1, J2);
    
       for (int j = 0; j < var_dim; j++)
       {
           for (int k = 0; k < var_dim; k++)
           {
-              jmat.Elem(i + j*nd, i + k*nd) = J.Elem(j, k);
+              j1.Elem(i + j*nd, i + k*nd) = J1.Elem(j, k);
+              j2.Elem(i + j*nd, i + k*nd) = J2.Elem(j, k);
           }
       }
 
    }
 
-   dmat     = 0.0;
+   d1mat     = 0.0;
+   d2mat     = 0.0;
    // Full element matrix is just a blockwise stacking of the small matrix
    for (int i = 0; i < var_dim; i++)
        for (int j = 0; j < nd; j++)
            for (int k = 0; k < nd; k++)
            {
-                dmat.Elem(i*nd + j, i*nd + k) = small_mat.Elem(j, k);        
+                d1mat.Elem(i*nd + j, i*nd + k) = small1_mat.Elem(j, k);        
+                d2mat.Elem(i*nd + j, i*nd + k) = small2_mat.Elem(j, k);        
            }
 
    // Multiply derivative matrix with Euler Jacobian
-   Mult(dmat, jmat, elmat);
+   Mult(d1mat, j1, elmat);
+   AddMult(d2mat, j2, elmat);
 
 }
 
@@ -465,6 +491,7 @@ CNS::CNS()
    pmesh->GetCharacteristics(h_min, h_max, kappa_min, kappa_max);
 
    fes = new ParFiniteElementSpace(pmesh, &fec, var_dim, Ordering::byVDIM);
+   fes_flux = new ParFiniteElementSpace(pmesh, &fec, dim*var_dim, Ordering::byVDIM);
 
    HYPRE_Int global_vSize = fes->GlobalTrueVSize();
    if (myid == 0)
@@ -475,7 +502,7 @@ CNS::CNS()
    VectorFunctionCoefficient u0(var_dim, init_function);
    
    u_sol = new ParGridFunction(fes);
-   f_inv = new ParGridFunction(fes); // We take only the x direction flux
+   f_inv = new ParGridFunction(fes_flux); 
 
    u_sol->ProjectCoefficient(u0);
    getInvFlux(dim, *u_sol, *f_inv);
@@ -518,7 +545,7 @@ CNS::CNS()
 //   fJ->SpMat().Mult(*u_sol, f_test);
 
 //   KJx->SpMat().Print();
-//   KJx->SpMat().Mult(*u_sol, f_test);
+   KJx->SpMat().Mult(*u_sol, f_test);
 
    delete fJ;
 
@@ -555,8 +582,11 @@ CNS::CNS()
        int offset = nodes.Size()/dim;
        int sub1  = i,  sub2 = offset + i, sub3 = 2*offset + i, sub4 = 3*offset + i;
        int vsub1 = var_dim*i + 0, vsub2 = var_dim*i + 1, vsub3 = var_dim*i + 2, vsub4 = var_dim*i + 3;
-//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << (*u_sol)[vsub2] << "\t" 
-//            << (*f_inv)[vsub3] << "\t" << f_test[vsub3] << endl;      
+       int fsub1 = dim*var_dim*i + 0, fsub2 = dim*var_dim*i + 1, fsub3 = dim*var_dim*i + 2, fsub4 = dim*var_dim*i + 3;
+       int fsub5 = dim*var_dim*i + 4, fsub6 = dim*var_dim*i + 5, fsub7 = dim*var_dim*i + 6;
+
+       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << (*u_sol)[vsub2] << "\t" 
+            << (*f_inv)[fsub7] << "\t" << f_test[vsub1] << endl;      
    }
 
 
@@ -601,8 +631,8 @@ void getInvFlux(int dim, const Vector &u, Vector &f)
     Vector rho_vel[dim];
     for(int i = 0; i < dim; i++) u.GetSubVector(offsets[1 + i], rho_vel[i]);
 
-    Vector temp_f[var_dim];
-    for(int i = 0; i < var_dim; i++)
+    Vector temp_f[dim*var_dim];
+    for(int i = 0; i < dim*var_dim; i++)
         temp_f[i].SetSize(offset);
     for(int i = 0; i < offset; i++)
     {
@@ -614,22 +644,40 @@ void getInvFlux(int dim, const Vector &u, Vector &f)
 
         double pres    = (rho_e(i) - 0.5*rho(i)*vel_sq)*(gamm - 1);
 
-        int j = 0;
-        temp_f[0][i]       = rho_vel[j][i]; //rho*u
-
-        for (int k = 0; k < dim ; k++)
+        for(int j = 0; j < dim; j++)
         {
-            temp_f[1 + k][i]     = rho_vel[j](i)*vel[k]; //rho*u*u + p    
+            temp_f[j*var_dim][i]       = rho_vel[j][i]; //rho*u
+    
+            for (int k = 0; k < dim ; k++)
+            {
+                temp_f[j*var_dim + 1 + k][i]     = rho_vel[j](i)*vel[k]; //rho*u*u + p    
+            }
+            temp_f[j*var_dim + 1 + j][i]        += pres; 
+    
+            temp_f[j*var_dim + var_dim - 1][i]   = (rho_e(i) + pres)*vel[j] ;//(E+p)*u
         }
-        temp_f[1 + j][i]        += pres; 
-
-        temp_f[var_dim - 1][i]   = (rho_e(i) + pres)*vel[j] ;//(E+p)*u
 
     }
 
-    for (int i = 0; i < var_dim; i++)    
-        f.SetSubVector(offsets[i], temp_f[i]  );
-    
+    Array<int> offsets_f[dim*var_dim];
+    for(int i = 0; i < dim*var_dim; i++)
+    {
+        offsets_f[i].SetSize(offset);
+    }
+
+    for(int j = 0; j < dim*var_dim; j++)
+    {
+        for(int i = 0; i < offset; i++)
+        {
+            offsets_f[j][i] = dim*var_dim*i + j ; // Redo offsets according to Ordering::ByVDIM
+        }
+    }
+
+    for (int i = 0; i < dim*var_dim; i++)    
+    {
+        f.SetSubVector(offsets_f[i], temp_f[i]  );
+    }
+
 //    for(int i = 0; i < offset; i++) 
 //        cout << u[var_dim*i + 3] << "\t" << temp_f[0][i] << "\t" << f[var_dim*i + 3]<< endl; 
 
