@@ -14,6 +14,8 @@ const double R_gas = 1.       ;
 const double   Pr  = 0.72;
 
 //Run parameters
+const int    problem         =  0;
+
 const char *mesh_file        =  "per_5.mesh";
 const int    order           =  2;
 const int    ref_levels      =  2;
@@ -22,8 +24,13 @@ const double t_final         = 15.00001 ;
 //Time marching parameters
 const bool   time_adapt      =  false;
 const double cfl             =  0.4  ;
-const double dt_const        =  0.3  ;
+const double dt_const        =  0.5  ;
 const int    ode_solver_type =  3; // 1. Forward Euler 2. TVD SSP 3 Stage
+
+//Implicit Time marching parameters
+const double rtol            = 1E-7 ; // Linear solver tolerance
+const int    max_newt_it     = 25   ; // Maximum Newton iterations
+const double newt_tol        = 1E-15; // Newton solver  tolerance 
 
 //Restart parameters
 const bool restart           =  false;
@@ -64,6 +71,9 @@ private:
     ParFiniteElementSpace  *fes_flux;
    
     ParGridFunction *u_sol, *f_inv;   
+    ParGridFunction *k_s          ;   
+
+    HypreParMatrix *M;
 
     int dim;
 
@@ -73,6 +83,8 @@ private:
 
 public:
    CNS();
+
+   void newton_solve(const double a21, const double a22, const Vector &e_rhs0, Vector &e_rhs) ;
 
    ~CNS(); 
 };
@@ -527,16 +539,30 @@ CNS::CNS()
        doRestart(restart_cycle, *pmesh, *u_sol, r_t, r_ti);
 
    getInvFlux(dim, *u_sol, *f_inv);
+ 
+   ParBilinearForm *m = new ParBilinearForm(fes);
+   m->AddDomainIntegrator( new DGMassIntegrator );
+   m->Assemble(1); 
+   m->Finalize(1); 
    
-   VectorGridFunctionCoefficient u_vec(u_sol);
+   M = m  ->ParallelAssemble();
 
-   ParGridFunction k_s(fes);
+   HypreSmoother M_prec;
+   CGSolver M_solver;
 
-   Vector temp1(u_sol->Size()); // Stage value for Newton iterations
-   Vector temp2(u_sol->Size()); // Stage value for Newton iterations
-   Vector   rhs(u_sol->Size()); // Stage value for Newton iterations
-   Vector    du(u_sol->Size()); // Stage value for Newton iterations
+   M_prec.SetType(HypreSmoother::Jacobi); 
+   M_solver.SetPreconditioner(M_prec);
+   M_solver.SetOperator(*M);
+   
+   M_solver.iterative_mode = false;
+   M_solver.SetRelTol(1e-9);
+   M_solver.SetAbsTol(0.0);
+   M_solver.SetMaxIter(10);
+   M_solver.SetPrintLevel(0);
 
+   delete m;
+
+  
    int ti_in; double t_in;
    if (restart == true)
    {
@@ -553,9 +579,15 @@ CNS::CNS()
        postProcess(gamm, R_gas, *u_sol, ti, t);
    }
 
+   Vector e_rhs0(u_sol->Size()); // Stage value for Newton iterations
+   Vector e_rhs1(u_sol->Size()); // Stage value for Newton iterations
+   Vector e_rhs (u_sol->Size()); // Stage value for Newton iterations
+   Vector m_rhs (u_sol->Size()); // Stage value for Newton iterations
 
    // Initialize parameters
-   k_s       = (*u_sol);
+   
+   k_s       = new ParGridFunction(fes);
+   *k_s      = *u_sol;
 
    if (time_adapt == false)
    {
@@ -567,84 +599,50 @@ CNS::CNS()
    {
        dt_real = min(dt, t_final - t);
 
-       // Newton iteration
-       for (int it = 0; it < 5; it++)
-       {
-           ParBilinearForm *m = new ParBilinearForm(fes);
-           m->AddDomainIntegrator( new DGMassIntegrator );
-           m->Assemble(1); 
-           m->Finalize(1); 
-           
-           HypreParMatrix *M = m  ->ParallelAssemble();
-    
-           ParBilinearForm *KJx = new ParBilinearForm(fes);
-           KJx->AddDomainIntegrator( new DeriJacobianIntegrator(u_vec) );
-           KJx->AddInteriorFaceIntegrator( new FaceJacobianIntegrator(u_vec, *u_sol, *fes) );
-           KJx->Assemble(1); 
-           KJx->Finalize(1); 
-    
-           HypreParMatrix *A = KJx->ParallelAssemble();
-           
-           delete KJx;
-           delete m  ;
-        
-           (*M) *= 1./dt;   // M = M/dt
-    
-           subtract(k_s, *u_sol, temp1);
-           M->Mult(temp1, temp2);
+       double a11      = 1.   -     (1./std::sqrt(2.)); 
+       double a21      =-1.   +     (   std::sqrt(2.)); 
+       double a22      = 1.   -     (1./std::sqrt(2.)); 
        
-           A->Mult(k_s, temp1);
-    
-           add(temp2, temp1, rhs); // Is it add or subtract
-    
-           rhs *= -1;
-    
-           HypreParMatrix *C = Add(1., *M,  1, *A);
-    
-           const double rtol = 1e-6;
-           HypreSmoother jac(*C, 0); // Jacobi smoother
-    
-           GMRESSolver gmres(C->GetComm());
-           gmres.SetKDim(50);
-           IterativeSolver &solver = gmres;
-           solver.SetRelTol(rtol);
-           solver.SetMaxIter(500);
-           solver.SetPrintLevel(0);
-           solver.SetOperator(*C);
-           solver.SetPreconditioner(jac);
-    
-           solver.Mult(rhs, du);
-    
-           add(k_s, du, temp1);
-    
-           k_s = temp1;
+       double b1       = 0.5; 
+       double b2       = 0.5; 
+
+       *k_s   = *u_sol;
+       e_rhs0 = 0.0;
+
+       newton_solve(  0, a11, e_rhs0, e_rhs1);       
+       e_rhs0 = e_rhs1;
+   
+       newton_solve(a21, a22, e_rhs0, e_rhs1);       
+
+       {
+           e_rhs0 *= -b1*dt_real;
+           e_rhs1 *= -b2*dt_real;
+
+           add(e_rhs0, e_rhs1, e_rhs);
            
-           cout << "Step " << it << " Min of du is "<< getAbsMin(du) << endl; 
-    
+           M_solver.Mult(e_rhs, m_rhs);
        }
+
+       add(*u_sol, m_rhs, *k_s);
+       *u_sol = *k_s;
+
+       cout << u_sol->Min() << "\t" << u_sol->Max() << "\t" << u_sol->Sum() << endl;
 
        t += dt_real;
        ti++;
 
        if (myid == 0)
        {
-//            cout << setprecision(6) << "time step: " << ti << ", dt: " << dt_real << ", time: " << 
-//            t << ", max_speed " << glob_u_max << ", rho_min "<< glob_rho_min << ", p_min "<< glob_p_min 
-//            << endl;
-            
             cout << setprecision(6) << "time step: " << ti << ", dt: " << dt_real << ", time: " << 
             t <<  endl;
 
        }
 
-       postProcess(gamm, R_gas, k_s, ti, t);
-
-       *u_sol = k_s;
+       postProcess(gamm, R_gas, *u_sol, ti, t);
 
        done = (t >= t_final - 1e-8*dt);
 
    }
-
 
 
 
@@ -669,6 +667,77 @@ CNS::CNS()
    }
 
 }
+
+
+
+void CNS::newton_solve(const double a21, const double a22, const Vector &e_rhs0, Vector &e_rhs) 
+{
+    VectorGridFunctionCoefficient u_vec(k_s);
+
+    Vector temp1(u_sol->Size()); // Stage value for Newton iterations
+    Vector temp2(u_sol->Size()); // Stage value for Newton iterations
+    Vector   rhs(u_sol->Size()); // Stage value for Newton iterations
+    Vector    du(u_sol->Size()); // Stage value for Newton iterations
+
+    int it;
+    double min_du = 1E15;
+    // Newton iteration
+    for (it = 0; it < max_newt_it; it++)
+    {
+        ParBilinearForm *KJx = new ParBilinearForm(fes);
+        KJx->AddDomainIntegrator( new DeriJacobianIntegrator(u_vec) );
+        KJx->AddInteriorFaceIntegrator( new FaceJacobianIntegrator(u_vec, *u_sol, *fes) );
+        KJx->Assemble(1); 
+        KJx->Finalize(1); 
+    
+        HypreParMatrix *A = KJx->ParallelAssemble();
+        
+        delete KJx;
+     
+        (*M) *= 1./(a22*dt);   // M = M/dt
+    
+        subtract(*k_s, *u_sol, temp1);
+        M->Mult(temp1, temp2);
+    
+        A->Mult(*k_s, temp1);
+        e_rhs = temp1;
+    
+        add(temp2, temp1, rhs); // (M/dt)*(u_n - u_0) + F(u) 
+        add(rhs, (a21/a22), e_rhs0, temp1); 
+        rhs = temp1;
+    
+        rhs *= -1;
+    
+        HypreParMatrix *C = Add(1., *M,  1, *A);
+    
+        HypreSmoother jac(*C, 0); // Jacobi smoother
+    
+        GMRESSolver gmres(C->GetComm());
+        gmres.SetKDim(50);
+        IterativeSolver &solver = gmres;
+        solver.SetRelTol(rtol);
+        solver.SetMaxIter(500);
+        solver.SetPrintLevel(0);
+        solver.SetOperator(*C);
+        solver.SetPreconditioner(jac);
+    
+        solver.Mult(rhs, du);
+    
+        add(*k_s, du, temp1);
+    
+        *k_s = temp1;
+        
+        (*M) *= a22*dt;   // Reset M 
+    
+        min_du = std::min(min_du, getAbsMin(du));
+        if (min_du < newt_tol)
+            break;
+        
+    }
+    cout << "Newton iterations: " << it << " Min of du: "<< getAbsMin(du) << endl; 
+
+}
+
 
 
 CNS::~CNS()
@@ -782,24 +851,35 @@ void init_function(const Vector &x, Vector &v)
    //Space dimensions 
    int dim = x.Size();
 
+   if (dim == 2)
    {
        double u1, u2, rho, p;
-       double beta, r, omega1, omega2; 
-       
-       beta = 5;
-       
-       r      = std::sqrt( (std::pow(x(0), 2) + std::pow(x(1), 2)) );
-       omega1 = std::exp(1 - r*r);
-       omega2 = std::exp( 0.5*(1 - r*r) );
-    
-       rho    = std::pow( ( 1 - std::pow(beta, 2)*(gamm - 1)*omega1/(8.*gamm*pow(M_PI, 2)) ), (1./(gamm - 1)) );
-       u1     = M_inf - beta*x(1)*omega2/(2.*M_PI);
-       u2     =         beta*x(0)*omega2/(2.*M_PI);
-    
-       p      = std::pow(rho, gamm);
-    
+       if (problem == 0) // Smooth periodic density. Exact solution to Euler 
+       {
+           rho =  1.0 + 0.2*sin(M_PI*(x(0) + x(1)));
+           p   =  1.0; 
+           u1  =  1.0;
+           u2  =  1.0;
+       }
+       else if (problem == 1)
+       {
+           double beta, r, omega1, omega2; 
+           
+           beta = 5;
+           
+           r      = std::sqrt( (std::pow(x(0), 2) + std::pow(x(1), 2)) );
+           omega1 = std::exp(1 - r*r);
+           omega2 = std::exp( 0.5*(1 - r*r) );
+        
+           rho    = std::pow( ( 1 - std::pow(beta, 2)*(gamm - 1)*omega1/(8.*gamm*pow(M_PI, 2)) ), (1./(gamm - 1)) );
+           u1     = M_inf - beta*x(1)*omega2/(2.*M_PI);
+           u2     =         beta*x(0)*omega2/(2.*M_PI);
+        
+           p      = std::pow(rho, gamm);
+       }
+        
        double v_sq = pow(u1, 2) + pow(u2, 2);
-
+    
        v(0) = rho;                     //rho
        v(1) = rho * u1;                //rho * u
        v(2) = rho * u2;                //rho * v
