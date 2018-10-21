@@ -18,7 +18,7 @@ MFEM_LIB_FILE = mfem_is_not_built
 -include $(CONFIG_MK)
 
 SEQ_EXAMPLES = 
-PAR_EXAMPLES = implicit 
+PAR_EXAMPLES = 1d_implicit 
 ifeq ($(MFEM_USE_MPI),NO)
    EXAMPLES = $(SEQ_EXAMPLES)
 else

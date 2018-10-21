@@ -14,17 +14,17 @@ const double R_gas = 1.       ;
 const double   Pr  = 0.72;
 
 //Run parameters
-const int    problem         =  0;
+const int    problem         =  1;
 
 const char *mesh_file        =  "per_5.mesh";
 const int    order           =  2;
-const int    ref_levels      =  2;
+const int    ref_levels      =  3;
 const double t_final         = 15.00001 ;
 
 //Time marching parameters
 const bool   time_adapt      =  false;
 const double cfl             =  0.4  ;
-const double dt_const        =  0.5  ;
+const double dt_const        =  0.025;
 const int    ode_solver_type =  3; // 1. Forward Euler 2. TVD SSP 3 Stage
 
 //Implicit Time marching parameters
@@ -277,7 +277,7 @@ void DeriJacobianIntegrator::AssembleElementMatrix(
            for (int k = 0; k < nd; k++)
            {
                 d1mat.Elem(i*nd + j, i*nd + k) = small1_mat.Elem(j, k);        
-                d2mat.Elem(i*nd + j, i*nd + k) = small2_mat.Elem(j, k);        
+                d2mat.Elem(i*nd + j, i*nd + k) = small2_mat.Elem(j, k); 
            }
 
    // Multiply derivative matrix with Euler Jacobian
@@ -388,13 +388,13 @@ void FaceJacobianIntegrator::AssembleFaceMatrix(
         Q.Eval(u_r, *Trans.Elem2, eip2);
    
         getEulerJacobian(dim, u_l, j1, j2);
-        
+
         for(int j=0; j < var_dim; j++)
             for(int k=0; k < var_dim; k++)
             {
                 J_L.Elem(p + j*numFacePts, p + k*numFacePts) = j1.Elem(j, k)*nor(0) + j2.Elem(j, k)*nor(1);
             }
-
+        
         getEulerJacobian(dim, u_r, j1, j2);
         
         for(int j=0; j < var_dim; j++)
@@ -402,7 +402,6 @@ void FaceJacobianIntegrator::AssembleFaceMatrix(
             {
                 J_R.Elem(p + j*numFacePts, p + k*numFacePts) = j1.Elem(j, k)*nor(0) + j2.Elem(j, k)*nor(1);
             }
-
 
         for(int j=0; j < var_dim; j++)
         {
@@ -412,11 +411,11 @@ void FaceJacobianIntegrator::AssembleFaceMatrix(
 
    }// p loop 
 
-   Array<int> vdofs;
-   fes.GetElementVDofs (Trans.Elem1No, vdofs);
-
-   Vector u1;
-   uS.GetSubVector(vdofs, u1);
+//   Array<int> vdofs;
+//   fes.GetElementVDofs (Trans.Elem1No, vdofs);
+//
+//   Vector u1;
+//   uS.GetSubVector(vdofs, u1);
 
    // J.P_L.u = f_L   
    Mult(J_L, P_L, JP_L);
@@ -644,6 +643,8 @@ CNS::CNS()
 
    }
 
+   delete M;
+
 
 
    // Print all nodes in the finite element space 
@@ -663,7 +664,8 @@ CNS::CNS()
 
 //       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << (*u_sol)[vsub2] << "\t" 
 //            << (*f_inv)[fsub7] << "\t" << f_test[vsub1] << endl;      
-//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << (*u_sol)[vsub2] << endl; 
+//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << (*u_sol)[vsub1] << endl; 
+//       cout << nodes(sub1) << '\t' << (*u_sol)[vsub1] << "\t" << (*k_s)[vsub1] << endl; 
    }
 
 }
@@ -729,10 +731,13 @@ void CNS::newton_solve(const double a21, const double a22, const Vector &e_rhs0,
         
         (*M) *= a22*dt;   // Reset M 
     
+        delete A;
+        C->~HypreParMatrix(); // This seems to be the only way to delete it
+
         min_du = std::min(min_du, getAbsMin(du));
         if (min_du < newt_tol)
             break;
-        
+
     }
     cout << "Newton iterations: " << it << " Min of du: "<< getAbsMin(du) << endl; 
 
