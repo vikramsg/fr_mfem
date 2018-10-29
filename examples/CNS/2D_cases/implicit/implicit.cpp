@@ -19,18 +19,18 @@ const int    problem         =  1;
 const char *mesh_file        =  "per_5.mesh";
 const int    order           =  2;
 const int    ref_levels      =  3;
-const double t_final         = 15.00001 ;
+const double t_final         = 30.00001 ;
 
 //Time marching parameters
 const bool   time_adapt      =  false;
 const double cfl             =  0.4  ;
-const double dt_const        =  0.025;
+const double dt_const        =  0.25 ;
 const int    ode_solver_type =  3; // 1. Forward Euler 2. TVD SSP 3 Stage
 
 //Implicit Time marching parameters
-const double rtol            = 1E-7 ; // Linear solver tolerance
+const double rtol            = 2E-8 ; // Linear solver tolerance
 const int    max_newt_it     = 25   ; // Maximum Newton iterations
-const double newt_tol        = 1E-15; // Newton solver  tolerance 
+const double newt_tol        = 4E-16; // Newton solver  tolerance 
 
 //Restart parameters
 const bool restart           =  false;
@@ -72,6 +72,8 @@ private:
    
     ParGridFunction *u_sol, *f_inv;   
     ParGridFunction *k_s          ;   
+    
+    ParGridFunction *k_t, *y_t, *u_t; 
 
     HypreParMatrix *M;
 
@@ -85,6 +87,8 @@ public:
    CNS();
 
    void newton_solve(const double a21, const double a22, const Vector &e_rhs0, Vector &e_rhs) ;
+
+   void solve(ParGridFunction &u_sol, Vector &rhs) ;
 
    ~CNS(); 
 };
@@ -319,10 +323,15 @@ void FaceJacobianIntegrator::AssembleFaceMatrix(
    int dim     = el1.GetDim();
    int var_dim = dim + 2;
 
+   Vector nor_dim;
+
    shape1.SetSize(nd1);
    shape2.SetSize(nd2);
 
    nor.SetSize(dim);
+   nor_dim.SetSize(dim);
+        
+   double nor_l2 ;
 
    elmat.SetSize( (nd1 + nd2)*var_dim);
    
@@ -337,17 +346,34 @@ void FaceJacobianIntegrator::AssembleFaceMatrix(
 
    DenseMatrix J_L(numFacePts*var_dim, numFacePts*var_dim);
    DenseMatrix J_R(numFacePts*var_dim, numFacePts*var_dim);
+   
+   DenseMatrix tempJ(numFacePts*var_dim, numFacePts*var_dim);
+
+   DenseMatrix diss_L(numFacePts*var_dim, numFacePts*var_dim);
+   DenseMatrix diss_R(numFacePts*var_dim, numFacePts*var_dim);
 
    DenseMatrix JP_L(numFacePts*var_dim, nd1*var_dim );
    DenseMatrix JP_R(numFacePts*var_dim, nd2*var_dim );
-   
+ 
+   DenseMatrix JD_L(numFacePts*var_dim, nd1*var_dim );
+   DenseMatrix JD_R(numFacePts*var_dim, nd2*var_dim );
+  
    DenseMatrix wts(numFacePts*var_dim, numFacePts*var_dim);
 
-   DenseMatrix temp1(numFacePts*var_dim, nd1*var_dim );
-   DenseMatrix temp2(numFacePts*var_dim, nd2*var_dim );
+   DenseMatrix temp11(numFacePts*var_dim, nd1*var_dim );
+   DenseMatrix temp12(numFacePts*var_dim, nd1*var_dim );
+   DenseMatrix temp21(numFacePts*var_dim, nd2*var_dim );
+   DenseMatrix temp22(numFacePts*var_dim, nd2*var_dim );
 
    DenseMatrix fu_L(nd1*var_dim, nd1*var_dim);
+   DenseMatrix l1(nd1*var_dim, nd1*var_dim);
+   DenseMatrix l2(nd1*var_dim, nd1*var_dim);
    DenseMatrix fu_R(nd2*var_dim, nd2*var_dim);
+   DenseMatrix r1(nd2*var_dim, nd2*var_dim);
+   DenseMatrix r2(nd2*var_dim, nd2*var_dim);
+
+   diss_L = 0.;
+   diss_R = 0.;
 
    for (int p = 0; p < ir->GetNPoints(); p++)
    {
@@ -382,6 +408,8 @@ void FaceJacobianIntegrator::AssembleFaceMatrix(
 
         }
         CalcOrtho(Trans.Face->Jacobian(), nor);
+        nor_l2 = nor.Norml2();
+        nor_dim.Set(1/nor_l2, nor);
 
         Vector u_l, u_r;      
         Q.Eval(u_l, *Trans.Elem1, eip1);
@@ -389,18 +417,30 @@ void FaceJacobianIntegrator::AssembleFaceMatrix(
    
         getEulerJacobian(dim, u_l, j1, j2);
 
+        double u_max = 2.4;
+
         for(int j=0; j < var_dim; j++)
             for(int k=0; k < var_dim; k++)
             {
                 J_L.Elem(p + j*numFacePts, p + k*numFacePts) = j1.Elem(j, k)*nor(0) + j2.Elem(j, k)*nor(1);
             }
-        
+ 
+        for(int j=0; j < var_dim; j++)
+            {
+                diss_L.Elem(p + j*numFacePts, p + j*numFacePts)+=   u_max*nor(0)*nor_dim(0) + u_max*nor(1)*nor_dim(1);
+            }
+
         getEulerJacobian(dim, u_r, j1, j2);
         
         for(int j=0; j < var_dim; j++)
             for(int k=0; k < var_dim; k++)
             {
                 J_R.Elem(p + j*numFacePts, p + k*numFacePts) = j1.Elem(j, k)*nor(0) + j2.Elem(j, k)*nor(1);
+            }
+
+        for(int j=0; j < var_dim; j++)
+            {
+                diss_R.Elem(p + j*numFacePts, p + j*numFacePts)+=    u_max*nor(0)*nor_dim(0) + u_max*nor(1)*nor_dim(1);
             }
 
         for(int j=0; j < var_dim; j++)
@@ -411,65 +451,77 @@ void FaceJacobianIntegrator::AssembleFaceMatrix(
 
    }// p loop 
 
-//   Array<int> vdofs;
-//   fes.GetElementVDofs (Trans.Elem1No, vdofs);
-//
-//   Vector u1;
-//   uS.GetSubVector(vdofs, u1);
+   /*
+    * Here we implement the Lax Friedrichs flux, we want to construct a matrix like this
+    * | l1 l2 |
+    * | r1 r2 |
+    * so that l1.u1 + l2.u2 gives the correct rhs for all left hand cells and
+    * r1.u1 + r2.u2 gives the correct rhs for all right hand cells
+    * To preserve this left hand, right hand cells we needed to multipl nor_dim for
+    * Rusanov dissipation since it is (f_L + f_R) -alpha(u_R - u_L)
+    * and left and right cells depend on direction of normal.
+    */
 
-   // J.P_L.u = f_L   
+   Add( 1.0, J_L, -1.0, diss_L, tempJ);
+   J_L = tempJ;
    Mult(J_L, P_L, JP_L);
-//   Vector f_l(numFacePts*var_dim);
-//   JP_L.Mult(u1, f_l);
-//   f_l.Print();
+   Mult(wts, JP_L, temp11);
+   Add(1.0, J_L,  2.0, diss_L, tempJ);
+   J_L = tempJ;
+   Mult(J_L, P_L, JP_L);
+   Mult(wts, JP_L, temp12);
  
+   Add(-1.0, J_R,   1.0, diss_R, tempJ);
+   J_R = tempJ;
    Mult(J_R, P_R, JP_R);
-//   Vector f_r(numFacePts*var_dim);
-//   JP_L.Mult(u1, f_r);
-
-   Mult(wts, JP_L, temp1);
-   Mult(wts, JP_R, temp2);
+   Mult(wts, JP_R, temp21);
+   Add(1.0, J_R,  -2.0, diss_R, tempJ);
+   J_R = tempJ;
+   Mult(J_R, P_R, JP_R);
+   Mult(wts, JP_R, temp22);
 
    P_L.Transpose();
    P_R.Transpose();
 
-//   Vector f_c(u1.Size());
-//   fu_L.Mult(u1, f_c);
-
-//   f_c.Print();
-
    elmat = 0.0;
 
    // Here we assume the common flux is 0.5(f_L + f_R)
-   Mult(P_L, temp1, fu_L);
-   Mult(P_R, temp1, fu_R);
+   Mult(P_L, temp11, fu_L);
+   Mult(P_R, temp12, fu_R);
+
+   Mult(P_L, temp11, l1  );
+   Mult(P_R, temp12, r1  );
+
+   Mult(P_L, temp21, l2  );
+   Mult(P_R, temp22, r2  );
 
    for (int j = 0; j < nd1*var_dim; j++)
     for (int k = 0; k < nd1*var_dim; k++)
        {
-            elmat.Elem(j, k) = fu_L(j, k);        
+            elmat.Elem(j, k) =   l1(j, k);        
        }
 
    for (int j = 0; j < nd2*var_dim; j++)
     for (int k = 0; k < nd1*var_dim; k++)
        {
-            elmat.Elem(nd1*var_dim + j, k) = fu_R(j, k);        
+            elmat.Elem(nd1*var_dim + j, k) =   r1(j, k);        
        }
 
-   Mult(P_L, temp2, fu_L);
-   Mult(P_R, temp2, fu_R);
+   Mult(P_L, temp21, fu_L);
+   Mult(P_R, temp22, fu_R);
 
    for (int j = 0; j < nd1*var_dim; j++)
     for (int k = 0; k < nd2*var_dim; k++)
        {
-            elmat.Elem(j, nd1*var_dim + k) = -fu_L(j, k);        
+            elmat.Elem(j, nd1*var_dim + k) =    l2(j, k);        
        }
-
+   
    for (int j = 0; j < nd2*var_dim; j++)
     for (int k = 0; k < nd2*var_dim; k++)
        {
-            elmat.Elem(nd1*var_dim + j, nd1*var_dim + k) = -fu_R(j, k);        
+            elmat.Elem(nd1*var_dim + j, nd1*var_dim + k) =    r2(j, k);        
        }
+
 
 
 }
@@ -587,7 +639,7 @@ CNS::CNS()
    
    k_s       = new ParGridFunction(fes);
    *k_s      = *u_sol;
-
+   
    if (time_adapt == false)
    {
        dt = dt_const; 
@@ -598,17 +650,21 @@ CNS::CNS()
    {
        dt_real = min(dt, t_final - t);
 
-       double a11      = 1.   -     (1./std::sqrt(2.)); 
-       double a21      =-1.   +     (   std::sqrt(2.)); 
-       double a22      = 1.   -     (1./std::sqrt(2.)); 
-       
+//       double a11      = 1.   -     (1./std::sqrt(2.)); 
+//       double a21      =-1.   +     (   std::sqrt(2.)); 
+//       double a22      = 1.   -     (1./std::sqrt(2.)); 
+ 
+       double a11      = 0.5  +     (.5/std::sqrt(3.)); 
+       double a21      =      -     (1./std::sqrt(3.)); 
+       double a22      = 0.5  +     (.5/std::sqrt(3.)); 
+      
        double b1       = 0.5; 
        double b2       = 0.5; 
 
        *k_s   = *u_sol;
        e_rhs0 = 0.0;
 
-       newton_solve(  0, a11, e_rhs0, e_rhs1);       
+       newton_solve(  0,   1, e_rhs0, e_rhs1);       
        e_rhs0 = e_rhs1;
    
        newton_solve(a21, a22, e_rhs0, e_rhs1);       
@@ -646,27 +702,34 @@ CNS::CNS()
    delete M;
 
 
+}
 
-   // Print all nodes in the finite element space 
-   ParFiniteElementSpace fes_nodes(pmesh, &fec, dim);
-   ParGridFunction nodes(&fes_nodes);
-   pmesh->GetNodes(nodes);
+/*
+ * Function for explicit stepping
+ */
+void CNS::solve(ParGridFunction &u_sol, Vector &rhs) 
+{
+    VectorGridFunctionCoefficient u_vec(&u_sol);
 
-   int offset = nodes.Size()/dim;
+    rhs.SetSize(u_sol.Size()); // Stage value for Newton iterations
 
-   for (int i = 0; i < nodes.Size()/dim; i++)
-   {
-       int offset = nodes.Size()/dim;
-       int sub1  = i,  sub2 = offset + i, sub3 = 2*offset + i, sub4 = 3*offset + i;
-       int vsub1 = var_dim*i + 0, vsub2 = var_dim*i + 1, vsub3 = var_dim*i + 2, vsub4 = var_dim*i + 3;
-       int fsub1 = dim*var_dim*i + 0, fsub2 = dim*var_dim*i + 1, fsub3 = dim*var_dim*i + 2, fsub4 = dim*var_dim*i + 3;
-       int fsub5 = dim*var_dim*i + 4, fsub6 = dim*var_dim*i + 5, fsub7 = dim*var_dim*i + 6;
+    {
+        ParBilinearForm *KJx = new ParBilinearForm(fes);
+        KJx->AddDomainIntegrator( new DeriJacobianIntegrator(u_vec) );
+        KJx->AddInteriorFaceIntegrator( new FaceJacobianIntegrator(u_vec, u_sol, *fes) );
+        KJx->Assemble(1); 
+        KJx->Finalize(1); 
+    
+        HypreParMatrix *A = KJx->ParallelAssemble();
+        
+        delete KJx;
+     
+        A->Mult(u_sol, rhs);
+        rhs *= -1;
+    
+        delete A;
 
-//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << (*u_sol)[vsub2] << "\t" 
-//            << (*f_inv)[fsub7] << "\t" << f_test[vsub1] << endl;      
-//       cout << nodes(sub1) << '\t' << nodes(sub2) << '\t' << (*u_sol)[vsub1] << endl; 
-//       cout << nodes(sub1) << '\t' << (*u_sol)[vsub1] << "\t" << (*k_s)[vsub1] << endl; 
-   }
+    }
 
 }
 
@@ -713,7 +776,7 @@ void CNS::newton_solve(const double a21, const double a22, const Vector &e_rhs0,
         HypreParMatrix *C = Add(1., *M,  1, *A);
     
         HypreSmoother jac(*C, 0); // Jacobi smoother
-    
+
         GMRESSolver gmres(C->GetComm());
         gmres.SetKDim(50);
         IterativeSolver &solver = gmres;
@@ -722,7 +785,7 @@ void CNS::newton_solve(const double a21, const double a22, const Vector &e_rhs0,
         solver.SetPrintLevel(0);
         solver.SetOperator(*C);
         solver.SetPreconditioner(jac);
-    
+
         solver.Mult(rhs, du);
     
         add(*k_s, du, temp1);
