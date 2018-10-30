@@ -18,19 +18,19 @@ const int    problem         =  1;
 
 const char *mesh_file        =  "per_5.mesh";
 const int    order           =  2;
-const int    ref_levels      =  3;
-const double t_final         = 30.00001 ;
+const int    ref_levels      =  4;
+const double t_final         = 50.00001 ;
 
 //Time marching parameters
 const bool   time_adapt      =  false;
 const double cfl             =  0.4  ;
-const double dt_const        =  0.25 ;
+const double dt_const        =  0.15 ;
 const int    ode_solver_type =  3; // 1. Forward Euler 2. TVD SSP 3 Stage
 
 //Implicit Time marching parameters
 const double rtol            = 2E-8 ; // Linear solver tolerance
 const int    max_newt_it     = 25   ; // Maximum Newton iterations
-const double newt_tol        = 4E-16; // Newton solver  tolerance 
+const double newt_tol        = 2E-16; // Newton solver  tolerance 
 
 //Restart parameters
 const bool restart           =  false;
@@ -55,6 +55,7 @@ void getInvFlux(int dim, const Vector &u, Vector &f);
 void getEulerJacobian(const int dim, const Vector &u, DenseMatrix &J1, DenseMatrix &J2);
 
 double getAbsMin(Vector &v);
+void getUMax(int dim, const Vector &u, double &u_max);
 
 void postProcess(const double gamm, const double R_gas, 
                  GridFunction &u_sol,
@@ -83,6 +84,9 @@ private:
     double dt, dt_real, t;
     int ti;
 
+    double glob_u_max;
+
+
 public:
    CNS();
 
@@ -101,9 +105,11 @@ private:
 
    DenseMatrix mmat;
 
+   const double &coeff;
+
 public:
-   DGMassIntegrator()
-      { }
+   DGMassIntegrator(const double &coeff_)
+      : coeff(coeff_){ }
    virtual void AssembleElementMatrix(const FiniteElement &,
                                       ElementTransformation &,
                                       DenseMatrix &);
@@ -141,7 +147,7 @@ void DGMassIntegrator::AssembleElementMatrix(
 
       Trans.SetIntPoint(&ip);
 
-      w = Trans.Weight() * ip.weight;
+      w = Trans.Weight() * ip.weight * coeff;
       
       AddMult_a_VVt(w, shape, mmat);
 
@@ -305,9 +311,12 @@ private:
 
    DenseMatrix j1, j2;
 
+   const double &u_max;
+
 public:
-   FaceJacobianIntegrator(VectorCoefficient &q, GridFunction &u_sol, const FiniteElementSpace &fes_)
-      : Q(q), uS(u_sol), fes(fes_) { }
+   FaceJacobianIntegrator(VectorCoefficient &q, GridFunction &u_sol, const FiniteElementSpace &fes_,
+                         const double &u_m)
+      : Q(q), uS(u_sol), fes(fes_), u_max(u_m) { }
    virtual void AssembleFaceMatrix(const FiniteElement &, const FiniteElement &,
                                       FaceElementTransformations &,
                                       DenseMatrix &);
@@ -416,8 +425,6 @@ void FaceJacobianIntegrator::AssembleFaceMatrix(
         Q.Eval(u_r, *Trans.Elem2, eip2);
    
         getEulerJacobian(dim, u_l, j1, j2);
-
-        double u_max = 2.4;
 
         for(int j=0; j < var_dim; j++)
             for(int k=0; k < var_dim; k++)
@@ -589,10 +596,16 @@ CNS::CNS()
    else
        doRestart(restart_cycle, *pmesh, *u_sol, r_t, r_ti);
 
+   // Initialize u_max
+   MPI_Comm comm = pmesh->GetComm();
+   double loc_u_max;
+   getUMax(dim, *u_sol, loc_u_max);
+   MPI_Allreduce(&loc_u_max, &glob_u_max, 1, MPI_DOUBLE, MPI_MAX, comm); // Get global u_max across processors
+
    getInvFlux(dim, *u_sol, *f_inv);
  
    ParBilinearForm *m = new ParBilinearForm(fes);
-   m->AddDomainIntegrator( new DGMassIntegrator );
+   m->AddDomainIntegrator( new DGMassIntegrator(1.) );
    m->Assemble(1); 
    m->Finalize(1); 
    
@@ -644,26 +657,29 @@ CNS::CNS()
    {
        dt = dt_const; 
    }
+   
 
    bool done = false;
    for (ti = ti_in; !done; )
    {
        dt_real = min(dt, t_final - t);
 
-//       double a11      = 1.   -     (1./std::sqrt(2.)); 
-//       double a21      =-1.   +     (   std::sqrt(2.)); 
-//       double a22      = 1.   -     (1./std::sqrt(2.)); 
+       double a11      = 1.   -     (1./std::sqrt(2.)); 
+       double a21      =-1.   +     (   std::sqrt(2.)); 
+       double a22      = 1.   -     (1./std::sqrt(2.)); 
  
-       double a11      = 0.5  +     (.5/std::sqrt(3.)); 
-       double a21      =      -     (1./std::sqrt(3.)); 
-       double a22      = 0.5  +     (.5/std::sqrt(3.)); 
+//       double a11      = 0.5  +     (.5/std::sqrt(3.)); 
+//       double a21      =      -     (1./std::sqrt(3.)); 
+//       double a22      = 0.5  +     (.5/std::sqrt(3.)); 
       
        double b1       = 0.5; 
        double b2       = 0.5; 
 
        *k_s   = *u_sol;
-       e_rhs0 = 0.0;
+       k_s->ExchangeFaceNbrData();
 
+       e_rhs0 = 0.0;
+       
        newton_solve(  0,   1, e_rhs0, e_rhs1);       
        e_rhs0 = e_rhs1;
    
@@ -681,7 +697,9 @@ CNS::CNS()
        add(*u_sol, m_rhs, *k_s);
        *u_sol = *k_s;
 
-       cout << u_sol->Min() << "\t" << u_sol->Max() << "\t" << u_sol->Sum() << endl;
+       double loc_u_max;
+       getUMax(dim, *u_sol, loc_u_max);
+       MPI_Allreduce(&loc_u_max, &glob_u_max, 1, MPI_DOUBLE, MPI_MAX, comm); // Get global u_max across processors
 
        t += dt_real;
        ti++;
@@ -689,7 +707,7 @@ CNS::CNS()
        if (myid == 0)
        {
             cout << setprecision(6) << "time step: " << ti << ", dt: " << dt_real << ", time: " << 
-            t <<  endl;
+            t    << " max speed: " << glob_u_max <<  endl;
 
        }
 
@@ -699,24 +717,25 @@ CNS::CNS()
 
    }
 
+   
    delete M;
+
 
 
 }
 
-/*
- * Function for explicit stepping
- */
+
+// Function for explicit time stepping
 void CNS::solve(ParGridFunction &u_sol, Vector &rhs) 
 {
     VectorGridFunctionCoefficient u_vec(&u_sol);
 
-    rhs.SetSize(u_sol.Size()); // Stage value for Newton iterations
+    rhs.SetSize(u_sol.Size()); 
 
     {
         ParBilinearForm *KJx = new ParBilinearForm(fes);
         KJx->AddDomainIntegrator( new DeriJacobianIntegrator(u_vec) );
-        KJx->AddInteriorFaceIntegrator( new FaceJacobianIntegrator(u_vec, u_sol, *fes) );
+        KJx->AddInteriorFaceIntegrator( new FaceJacobianIntegrator(u_vec, u_sol, *fes, glob_u_max) );
         KJx->Assemble(1); 
         KJx->Finalize(1); 
     
@@ -737,21 +756,30 @@ void CNS::solve(ParGridFunction &u_sol, Vector &rhs)
 
 void CNS::newton_solve(const double a21, const double a22, const Vector &e_rhs0, Vector &e_rhs) 
 {
+    int myid;
+    MPI_Comm comm              = fes->GetComm();
+    MPI_Comm_rank(comm, &myid);
+
     VectorGridFunctionCoefficient u_vec(k_s);
 
-    Vector temp1(u_sol->Size()); // Stage value for Newton iterations
-    Vector temp2(u_sol->Size()); // Stage value for Newton iterations
-    Vector   rhs(u_sol->Size()); // Stage value for Newton iterations
-    Vector    du(u_sol->Size()); // Stage value for Newton iterations
+    Vector temp1(u_sol->Size()); 
+    Vector temp2(u_sol->Size()); 
+    Vector temp3(u_sol->Size()); 
+    Vector   rhs(u_sol->Size()); 
+    Vector    du(u_sol->Size()); 
 
     int it;
-    double min_du = 1E15;
+    double glob_min_du = 1E15;
+    double  loc_min_du = 1E15;
     // Newton iteration
     for (it = 0; it < max_newt_it; it++)
     {
+        // Matrix M/(a22*dt) + KJ
+        // where K is the derivative operator and J the Jacobian
         ParBilinearForm *KJx = new ParBilinearForm(fes);
         KJx->AddDomainIntegrator( new DeriJacobianIntegrator(u_vec) );
-        KJx->AddInteriorFaceIntegrator( new FaceJacobianIntegrator(u_vec, *u_sol, *fes) );
+        KJx->AddDomainIntegrator( new DGMassIntegrator(1./(a22*dt_real)) );
+        KJx->AddInteriorFaceIntegrator( new FaceJacobianIntegrator(u_vec, *u_sol, *fes, glob_u_max) );
         KJx->Assemble(1); 
         KJx->Finalize(1); 
     
@@ -759,31 +787,30 @@ void CNS::newton_solve(const double a21, const double a22, const Vector &e_rhs0,
         
         delete KJx;
      
-        (*M) *= 1./(a22*dt);   // M = M/dt
+        (*M) *= 1./(a22*dt_real);   // M = M/dt
     
         subtract(*k_s, *u_sol, temp1);
         M->Mult(temp1, temp2);
     
-        A->Mult(*k_s, temp1);
-        e_rhs = temp1;
+        A->Mult(*k_s, temp1);       // ( M/(a22*dt) + KJ ) . u - ( M/(a22*dt).u )
+        M->Mult(*k_s, temp3);
+        subtract(temp1, temp3, e_rhs);
     
-        add(temp2, temp1, rhs); // (M/dt)*(u_n - u_0) + F(u) 
+        add(temp2, e_rhs, rhs); // (M/dt)*(u_n - u_0) + F(u) 
         add(rhs, (a21/a22), e_rhs0, temp1); 
         rhs = temp1;
     
         rhs *= -1;
     
-        HypreParMatrix *C = Add(1., *M,  1, *A);
-    
-        HypreSmoother jac(*C, 0); // Jacobi smoother
+        HypreSmoother jac(*A, 0); // Jacobi smoother
 
-        GMRESSolver gmres(C->GetComm());
+        GMRESSolver gmres(A->GetComm());
         gmres.SetKDim(50);
         IterativeSolver &solver = gmres;
         solver.SetRelTol(rtol);
         solver.SetMaxIter(500);
         solver.SetPrintLevel(0);
-        solver.SetOperator(*C);
+        solver.SetOperator(*A);
         solver.SetPreconditioner(jac);
 
         solver.Mult(rhs, du);
@@ -792,17 +819,17 @@ void CNS::newton_solve(const double a21, const double a22, const Vector &e_rhs0,
     
         *k_s = temp1;
         
-        (*M) *= a22*dt;   // Reset M 
+        (*M) *= a22*dt_real;   // Reset M 
     
         delete A;
-        C->~HypreParMatrix(); // This seems to be the only way to delete it
 
-        min_du = std::min(min_du, getAbsMin(du));
-        if (min_du < newt_tol)
+        loc_min_du = std::min(loc_min_du, getAbsMin(du));
+        MPI_Allreduce(&loc_min_du, &glob_min_du, 1, MPI_DOUBLE, MPI_MAX, comm); // Get global u_max across processors
+        if (glob_min_du < newt_tol)
             break;
 
     }
-    cout << "Newton iterations: " << it << " Min of du: "<< getAbsMin(du) << endl; 
+    cout << myid << ":ID Newton iterations: " << it << " Min of du: "<< getAbsMin(du) << endl; 
 
 }
 
@@ -829,6 +856,53 @@ double getAbsMin(Vector &v)
     return min;
 
 }
+
+void getUMax(int dim, const Vector &u, double &u_max)
+{
+    int var_dim = dim + 2;
+    int offset  = u.Size()/var_dim;
+
+    Array<int> offsets[var_dim];
+    for(int i = 0; i < var_dim; i++)
+    {
+        offsets[i].SetSize(offset);
+    }
+
+    for(int j = 0; j < var_dim; j++)
+    {
+        for(int i = 0; i < offset; i++)
+        {
+            offsets[j][i] = var_dim*i + j ; // Redo offsets according to Ordering::ByVDIM
+        }
+    }
+    Vector rho, rho_e;
+    u.GetSubVector(offsets[0],           rho   );
+    u.GetSubVector(offsets[var_dim - 1],  rho_e);
+    
+    Vector rho_vel[dim];
+    for(int i = 0; i < dim; i++) u.GetSubVector(offsets[1 + i], rho_vel[i]);
+
+    u_max = -1E16;
+    for(int i = 0; i < offset; i++)
+    {
+        double vel[dim];        
+        for(int j = 0; j < dim; j++) vel[j]   = rho_vel[j][i]/rho[i];
+
+        double vel_sq = 0.0;
+        for(int j = 0; j < dim; j++) vel_sq += pow(vel[j], 2);
+
+        double pres    = (rho_e[i] - 0.5*rho[i]*vel_sq)*(gamm - 1);
+
+        double c       = std::sqrt(gamm*pres/rho[i]);
+
+        double u_m     = c + std::sqrt(vel_sq);
+
+        u_max = std::max(u_max, u_m);
+
+    }
+
+}
+
 
 
 
