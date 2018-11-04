@@ -746,6 +746,8 @@ void SparseMatrix::Finalize(int skip_zeros, bool fix_empty_rows)
    int i, j, nr, nz;
    RowNode *aux;
 
+   double tol = 1E-15;
+
    if (Finalized())
    {
       return;
@@ -760,7 +762,7 @@ void SparseMatrix::Finalize(int skip_zeros, bool fix_empty_rows)
    {
       nr = 0;
       for (aux = Rows[i-1]; aux != NULL; aux = aux->Prev)
-         if (!skip_zeros || aux->Value != 0.0)
+         if (!skip_zeros || std::abs( aux->Value ) > tol )
          {
             nr++;
          }
@@ -779,7 +781,7 @@ void SparseMatrix::Finalize(int skip_zeros, bool fix_empty_rows)
       nr = 0;
       for (aux = Rows[i]; aux != NULL; aux = aux->Prev)
       {
-         if (!skip_zeros || aux->Value != 0.0)
+         if (!skip_zeros || std::abs( aux->Value ) > tol )
          {
             J[j] = aux->Column;
             A[j] = aux->Value;
