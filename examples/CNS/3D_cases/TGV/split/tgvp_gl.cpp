@@ -5375,6 +5375,8 @@ void CNS::getParEulerDGTranspose()
 
 
 
+
+
 /*
  * Get Interaction flux using the local KEP solver 
  */
@@ -5413,10 +5415,6 @@ void getVectorKEPECFlux(const double R, const double gamm, const int dim, const 
         }
         T_L        = (E_L - 0.5*rho_L*vel_sq_L)/(rho_L*Cv);
         p_L        = rho_L*R*T_L;
-        a_L        = sqrt(gamm * R * T_L);
-        h_L        = (E_L + p_L)/rho_L;
-        sqrtRho_L  = std::sqrt(rho_L);
-        beta_L     = 1./(2*R_gas*T_L);
 
         rho_R = u2(p);
         for (int i = 0; i < dim; i++)
@@ -5432,14 +5430,10 @@ void getVectorKEPECFlux(const double R, const double gamm, const int dim, const 
         }
         T_R       = (E_R - 0.5*rho_R*vel_sq_R)/(rho_R*Cv);
         p_R       = rho_R*R*T_R;
-        a_R       = sqrt(gamm * R * T_R);
-        h_R       = (E_R + p_R)/rho_R;
-        sqrtRho_R = std::sqrt(rho_R);
-        beta_R     = 1./(2*R_gas*T_R);
         
         for (int i = 0; i < dim; i++)
         {
-            double f_mass                                 = 0.25*(rho_L + rho_R)*(vel_L(i) + vel_R(i));
+            double f_mass                                 = 0.5 * (std::sqrt(rho_L*rho_R)) * (vel_L(i) + vel_R(i));
             f_com((i*var_dim + 0)*num_pts + p)            = f_mass;
             
             for (int j = 0; j < dim; j++)
@@ -5468,16 +5462,10 @@ void getVectorKEPECFlux(const double R, const double gamm, const int dim, const 
         nor_l2 = nor_in.Norml2();
         nor_dim.Set(1/nor_l2, nor_in);
 
-//        for (int i = 0; i < dim; i++)
-//        {
-//            for (int j = 0; j < var_dim; j++)
-//            {
-//                f_com((i*var_dim + j)*num_pts + p) += 
-//                    -0.5*u_max*nor_dim(i)*(u2(j*num_pts + p) - u1(j*num_pts + p)); 
-//            }
-//        }
     }
 }
+
+
 
 
 
