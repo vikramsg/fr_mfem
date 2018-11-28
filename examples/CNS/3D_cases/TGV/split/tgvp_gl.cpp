@@ -1978,8 +1978,12 @@ void getSF4SplitDx(int dim,
 
         temp  *= 0.5;
 
-        temp  += pres_dx;
-        
+        getSparseMat(rho_sqrtT).Mult(sqrtT_dx,     temp1);
+        getSparseMat(sqrtT)    .Mult(rho_sqrtT_dx, temp2);
+
+        temp1 *= R_gas; temp2 *= R_gas;
+        temp += temp1; temp += temp2;
+
         fx.SetSubVector(offsets[1], temp );
         
         // rho_v
@@ -2022,37 +2026,22 @@ void getSF4SplitDx(int dim,
  
         temp   = 0.0; 
 
-        getSparseMat(vel[0]        ).Mult(rho_vel_sq_dx, temp1);
-        getSparseMat(rho_vel_sq[0] ).Mult(vel_dx[0],     temp2);
+        getSparseMat(sqrtRho_vel[0])   .Mult(sqrtRho_vel_sq_dx, temp1);
+        getSparseMat(sqrtRho_vel_sq[0]).Mult(sqrtRho_vel_dx[0], temp2);
 
         temp += temp1; temp += temp2;
 
-        getSparseMat(vel[1]     ).Mult(rho_uv_dx[0], temp1);
-        getSparseMat(rho_uv[0]  ).Mult(vel_dx[1],    temp2);
+        getSparseMat(sqrtRho_vel[1]).Mult(sqrtRho_uv_dx[0],  temp1);
+        getSparseMat(sqrtRho_uv[0]) .Mult(sqrtRho_vel_dx[1], temp2);
 
         temp += temp1; temp += temp2;
 
-        getSparseMat(vel[2]     ).Mult(rho_uv_dx[1], temp1);
-        getSparseMat(rho_uv[1]  ).Mult(vel_dx[2],    temp2);
+        getSparseMat(sqrtRho_vel[2]).Mult(sqrtRho_uv_dx[1],  temp1);
+        getSparseMat(sqrtRho_uv[1]) .Mult(sqrtRho_vel_dx[2], temp2);
 
         temp += temp1; temp += temp2;
 
-        getSparseMat(rho_vel[0]).Mult(vel_sq_dx,     temp1);
-        getSparseMat(v_sq[0]   ).Mult(rho_vel_dx[0], temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(rho_vel[1]).Mult(uv_dx[0],      temp1);
-        getSparseMat(uv[0]     ).Mult(rho_vel_dx[1], temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(rho_vel[2]).Mult(uv_dx[1],      temp1);
-        getSparseMat(uv[1]     ).Mult(rho_vel_dx[2], temp2);
-
-        temp += temp1; temp += temp2;
-        
-        temp *= 0.25;
+        temp *= 0.5;
 
         temp1 = pu_dx;
 
@@ -2087,6 +2076,7 @@ void getSF4SplitDx(int dim,
     K_y.Mult(pu[1], pu_dx);
     K_y.Mult(rho_vel_sq[1],    rho_vel_sq_dx);
     K_y.Mult(v_sq[1],          vel_sq_dx);
+
     K_y.Mult(sqrtT  ,          sqrtT_dx);
     K_y.Mult(rho_sqrtT,        rho_sqrtT_dx);
     K_y.Mult(rho_vel_sqrtT[1], rho_vel_sqrtT_dx);
@@ -2153,7 +2143,11 @@ void getSF4SplitDx(int dim,
 
         temp  *= 0.5;
 
-        temp  += pres_dx;
+        getSparseMat(rho_sqrtT).Mult(sqrtT_dx,     temp1);
+        getSparseMat(sqrtT)    .Mult(rho_sqrtT_dx, temp2);
+
+        temp1 *= R_gas; temp2 *= R_gas;
+        temp += temp1; temp += temp2;
 
         fx.AddElementVector(offsets[2], temp);
         
@@ -2179,37 +2173,22 @@ void getSF4SplitDx(int dim,
  
         temp   = 0.0; 
 
-        getSparseMat(vel[0]     ).Mult(rho_uv_dx[0],     temp1);
-        getSparseMat(rho_uv[0]  ).Mult(vel_dx[0],    temp2);
+        getSparseMat(sqrtRho_vel[0]).Mult(sqrtRho_uv_dx[0], temp1);
+        getSparseMat(sqrtRho_uv[0]) .Mult(sqrtRho_vel_dx[0], temp2);
 
         temp += temp1; temp += temp2;
 
-        getSparseMat(vel[1]        ).Mult(rho_vel_sq_dx, temp1);
-        getSparseMat(rho_vel_sq[1] ).Mult(vel_dx[1],    temp2);
+        getSparseMat(sqrtRho_vel[1])   .Mult(sqrtRho_vel_sq_dx, temp1);
+        getSparseMat(sqrtRho_vel_sq[1]).Mult(sqrtRho_vel_dx[1], temp2);
 
         temp += temp1; temp += temp2;
 
-        getSparseMat(vel[2]     ).Mult(rho_uv_dx[2], temp1);
-        getSparseMat(rho_uv[2]  ).Mult(vel_dx[2],    temp2);
+        getSparseMat(sqrtRho_vel[2]).Mult(sqrtRho_uv_dx[2],  temp1);
+        getSparseMat(sqrtRho_uv[2]) .Mult(sqrtRho_vel_dx[2], temp2);
 
         temp += temp1; temp += temp2;
 
-        getSparseMat(rho_vel[0]).Mult(uv_dx[0],     temp1);
-        getSparseMat(uv[0]     ).Mult(rho_vel_dx[0], temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(rho_vel[1]).Mult(vel_sq_dx,     temp1);
-        getSparseMat(v_sq[1]   ).Mult(rho_vel_dx[1], temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(rho_vel[2]).Mult(uv_dx[2],      temp1);
-        getSparseMat(uv[2]     ).Mult(rho_vel_dx[2], temp2);
-
-        temp += temp1; temp += temp2;
-        
-        temp *= 0.25;
+        temp *= 0.5;
 
         temp1 = pu_dx;
 
@@ -2235,7 +2214,6 @@ void getSF4SplitDx(int dim,
 
         temp  += temp1;
 
-
         fx.AddElementVector(offsets[4], temp);
     }
 
@@ -2245,6 +2223,7 @@ void getSF4SplitDx(int dim,
     K_z.Mult(pu[2], pu_dx);
     K_z.Mult(rho_vel_sq[2],    rho_vel_sq_dx);
     K_z.Mult(v_sq[2],          vel_sq_dx);
+
     K_z.Mult(sqrtT  ,          sqrtT_dx);
     K_z.Mult(rho_sqrtT,        rho_sqrtT_dx);
     K_z.Mult(rho_vel_sqrtT[2], rho_vel_sqrtT_dx);
@@ -2329,45 +2308,34 @@ void getSF4SplitDx(int dim,
 
         temp  *= 0.5;
 
-        temp  += pres_dx;
-        
+        getSparseMat(rho_sqrtT).Mult(sqrtT_dx,     temp1);
+        getSparseMat(sqrtT)    .Mult(rho_sqrtT_dx, temp2);
+
+        temp1 *= R_gas; temp2 *= R_gas;
+        temp += temp1; temp += temp2;
+       
         fx.AddElementVector(offsets[3], temp);
         
         // rho_e
-     
+ 
         temp   = 0.0; 
 
-        getSparseMat(vel[0]    ).Mult(rho_uv_dx[1], temp1);
-        getSparseMat(rho_uv[1] ).Mult(vel_dx[0],    temp2);
+        getSparseMat(sqrtRho_vel[0]).Mult(sqrtRho_uv_dx[1], temp1);
+        getSparseMat(sqrtRho_uv[1]) .Mult(sqrtRho_vel_dx[0], temp2);
 
         temp += temp1; temp += temp2;
 
-        getSparseMat(vel[1]     ).Mult(rho_uv_dx[2], temp1);
-        getSparseMat(rho_uv[2]  ).Mult(vel_dx[1],    temp2);
+        getSparseMat(sqrtRho_vel[1]).Mult(sqrtRho_uv_dx[2], temp1);
+        getSparseMat(sqrtRho_uv[2]) .Mult(sqrtRho_vel_dx[1], temp2);
 
         temp += temp1; temp += temp2;
 
-        getSparseMat(vel[2]        ).Mult(rho_vel_sq_dx,     temp1);
-        getSparseMat(rho_vel_sq[2] ).Mult(vel_dx[2], temp2);
+        getSparseMat(sqrtRho_vel[2])   .Mult(sqrtRho_vel_sq_dx,  temp1);
+        getSparseMat(sqrtRho_vel_sq[2]).Mult(sqrtRho_vel_dx[2], temp2);
 
         temp += temp1; temp += temp2;
 
-        getSparseMat(rho_vel[0]).Mult(uv_dx[1],     temp1);
-        getSparseMat(uv[1]     ).Mult(rho_vel_dx[0], temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(rho_vel[1]).Mult(uv_dx[2],     temp1);
-        getSparseMat(uv[2]     ).Mult(rho_vel_dx[1], temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(rho_vel[2]).Mult(vel_sq_dx,     temp1);
-        getSparseMat(v_sq[2]   ).Mult(rho_vel_dx[2], temp2);
-
-        temp += temp1; temp += temp2;
-        
-        temp *= 0.25;
+        temp *= 0.5;
 
         temp1 = pu_dx;
 
@@ -2399,6 +2367,10 @@ void getSF4SplitDx(int dim,
     f_dx = fx;
 
 }
+
+
+
+
 
 
 
@@ -5439,7 +5411,7 @@ void getVectorKEPECFlux(const double R, const double gamm, const int dim, const 
             for (int j = 0; j < dim; j++)
                 f_com((i*var_dim + 1 + j)*num_pts + p)    = 0.5*(vel_L(j) + vel_R(j))*f_mass;
             
-            f_com((i*var_dim + 1 + i)*num_pts + p)       += 0.5*(p_L + p_R) ;
+            f_com((i*var_dim + 1 + i)*num_pts + p)       += 0.5*R_gas * (rho_L + rho_R) * (std::sqrt(T_L*T_R));
            
             f_com((i*var_dim + var_dim - 1)*num_pts + p)  = -0.25*(vel_sq_L + vel_sq_R)*f_mass ;
             f_com((i*var_dim + var_dim - 1)*num_pts + p) += ( ( 1.0/(gamm - 1) )*(R_gas)*(std::sqrt(T_L*T_R)) )
