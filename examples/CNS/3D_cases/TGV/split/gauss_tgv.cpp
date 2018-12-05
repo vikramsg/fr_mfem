@@ -151,7 +151,7 @@ public:
                                           Vector &b_nl) const;
 
    void getKGRestriction(const ParGridFunction &u, Vector &f_l, Vector &f_r) const;
-
+   void getKGCorrection (const ParGridFunction &u) const;
 
    virtual ~FE_Evolution() { }
 };
@@ -584,6 +584,12 @@ void CNS::Step()
     {
         cout << setprecision(6) << "time step: " << ti << ", dt: " << dt_real << ", time: " << 
             t << ", max_mach " << glob_m_max << ", rho_min "<< glob_rho_min << ", p_min "<< glob_p_min << ", fes_size " << fes->GlobalTrueVSize() << endl;
+    }
+    
+    if (myid == 0)
+    {
+        if ( (glob_p_min < 0) || (glob_rho_min < 0) || (isnan( glob_p_min ) ) || ( isnan(glob_rho_min) ) )
+            mfem_error("Negative values encountered");
     }
 
     if (time_adapt == false)
@@ -1969,6 +1975,274 @@ void FE_Evolution::getKGRestriction(const ParGridFunction &u, Vector &f_l, Vecto
    }
 
 }
+
+
+/*
+ * For Gauss points, after we guarantee conservation, there are unbalanced terms in the
+ * kinetic energy equation that does not guarantee kinetic energy preservation anymore
+ * So, we need to find the unbalanced terms first
+ */
+void FE_Evolution::getKGCorrection(const ParGridFunction &u) const
+{
+   int var_dim    = u.VectorDim(); 
+   int dim        = var_dim - 2;
+   int n_face_pts = wts.Size();
+   int dofs       = u.Size()/var_dim;
+
+   Array<int> offsets[dim*var_dim], offsets_face[dim*var_dim];
+   for(int i = 0; i < dim*var_dim; i++)
+   {
+       offsets_face[i].SetSize(n_face_pts);
+       offsets     [i].SetSize(dofs);
+   }
+   for(int j = 0; j < dim*var_dim; j++)
+   {
+       for(int i = 0; i < n_face_pts; i++)
+       {
+           offsets_face[j][i] = j*n_face_pts + i ;
+       }
+       for(int i = 0; i < dofs; i++)
+       {
+           offsets     [j][i] = j*dofs + i ;
+       }
+   }
+
+   int offset = u.Size()/var_dim; 
+
+   Vector rho, E;
+   u.GetSubVector(offsets[0],           rho   );
+   u.GetSubVector(offsets[var_dim - 1],      E);
+
+   Vector rho_vel[dim];
+   for(int i = 0; i < dim; i++) u.GetSubVector(offsets[1 + i], rho_vel[i]);
+
+   Vector vel[dim], rho_vel_sq[dim], rho_uv[dim], uv[dim], v_sq[dim];
+   for(int i = 0; i < dim; i++) 
+   {
+       vel[i].SetSize(offset); rho_vel_sq[i].SetSize(offset); rho_uv[i].SetSize(offset);
+       uv[i].SetSize(offset);
+       v_sq[i].SetSize(offset);
+   }
+
+   Vector pres(offset); // (rho*Cv*T + p)*u, p
+   Vector pu[dim]; 
+   Vector e(offset), eu[dim], rho_eu[dim]; 
+   for(int i = 0; i < dim; i++) 
+   {
+       eu[i]    .SetSize(offset);
+       rho_eu[i].SetSize(offset);
+       pu[i]    .SetSize(offset);
+   }
+
+   for(int i = 0; i < offset; i++)
+   {
+       double vel_sq = 0.0;
+       for(int j = 0; j < dim; j++)
+       {
+           vel[j][i]        = rho_vel[j](i)/rho(i);
+           vel_sq          += pow(vel[j][i], 2);
+
+           rho_vel_sq[j][i] = rho_vel[j](i)*vel[j](i);
+           v_sq[j][i]       = vel[j](i)*vel[j](i);
+       }
+
+       pres(i)          = (E(i) - 0.5*rho(i)*vel_sq)*(gamm - 1);
+       e(i)             =  E(i)/rho(i);
+
+       for(int j = 0; j < dim; j++)
+       {
+           eu[j](i)            = e(i)*vel[j](i);
+           rho_eu[j](i)        = E(i)*vel[j](i);
+           
+           pu[j](i)            = pres(i)*vel[j](i);
+       }
+
+       rho_uv[0](i)  = rho_vel[0](i)*vel[1](i); // rho*u*v
+       rho_uv[1](i)  = rho_vel[0](i)*vel[2](i); // rho*u*w
+       rho_uv[2](i)  = rho_vel[1](i)*vel[2](i); // rho*v*w
+   
+       uv[0](i)      = vel[0](i)*vel[1](i); // rho*u*v
+       uv[1](i)      = vel[0](i)*vel[2](i); // rho*u*w
+       uv[2](i)      = vel[1](i)*vel[2](i); // rho*v*w
+
+   }
+   
+   Vector rho_vel_Rl[dim]; // Restriction
+   Vector vel_Rl[dim], rho_vel_sq_Rl[dim], rho_uv_Rl[dim];
+   Vector vel_sq_Rl[dim], uv_Rl[dim];
+   Vector pres_Rl(n_face_pts), rho_Rl(n_face_pts); 
+   Vector rho_eu_Rl[dim], eu_Rl[dim], E_Rl(n_face_pts), e_Rl(n_face_pts); 
+   Vector pu_Rl[dim]; 
+
+   glob_proj_l->Mult(rho ,  rho_Rl );
+   glob_proj_l->Mult(pres,  pres_Rl);
+   glob_proj_l->Mult(e,                e_Rl);
+   glob_proj_l->Mult(E,                E_Rl);
+   for(int j = 0; j < dim; j++) 
+   {
+       rho_vel_Rl[j].SetSize(n_face_pts); vel_Rl[j].SetSize(n_face_pts); rho_uv_Rl[j].SetSize(n_face_pts);
+       uv_Rl[j].SetSize(n_face_pts);
+       rho_vel_sq_Rl[j].SetSize(n_face_pts); vel_sq_Rl[j].SetSize(n_face_pts);
+       rho_eu_Rl[j].SetSize(n_face_pts); eu_Rl[j].SetSize(n_face_pts);
+       pu_Rl[j].SetSize(n_face_pts); 
+
+       glob_proj_l->Mult(rho_vel[j],     rho_vel_Rl[j]);
+       glob_proj_l->Mult(vel[j],         vel_Rl[j]);
+       glob_proj_l->Mult(rho_uv[j],      rho_uv_Rl[j]);
+       glob_proj_l->Mult(uv[j],          uv_Rl[j]);
+       glob_proj_l->Mult(rho_vel_sq[j],  rho_vel_sq_Rl[j]);
+       glob_proj_l->Mult(v_sq[j],        vel_sq_Rl[j]);
+       glob_proj_l->Mult(rho_eu[j],      rho_eu_Rl[j]);
+       glob_proj_l->Mult(eu[j],          eu_Rl[j]);
+       glob_proj_l->Mult(pu[j],          pu_Rl[j]);
+   }
+
+   Vector ke_face_error_l(n_face_pts), ke_face_error_r(n_face_pts);
+
+   ke_face_error_l = 0.0;
+   for (int j = 0; j < n_face_pts; j++)
+   {
+       ke_face_error_l[j] += 0.5*( rho_vel_Rl[0][j]*vel_sq_Rl[0][j] - rho_vel_Rl[0][j]*vel_Rl[0][j]*vel_Rl[0][j] );
+       ke_face_error_l[j] += 0.5*( rho_vel_Rl[0][j]*vel_sq_Rl[1][j] - rho_vel_Rl[0][j]*vel_Rl[1][j]*vel_Rl[1][j] );
+       ke_face_error_l[j] += 0.5*( rho_vel_Rl[0][j]*vel_sq_Rl[2][j] - rho_vel_Rl[0][j]*vel_Rl[2][j]*vel_Rl[2][j] );
+       
+       ke_face_error_l[j] += 0.25*( uv_Rl[0][j]*rho_vel_Rl[1][j]
+                                                      - uv_Rl[0][j]*rho_Rl[j]*vel_Rl[1][j] );
+       ke_face_error_l[j] += 0.25*( vel_Rl[0][j]*rho_Rl[j]*v_sq[1][j]
+                                                      - vel_Rl[0][j]*rho_vel_Rl[1][j]*vel_Rl[1][j] );
+
+       ke_face_error_l[j] += 0.25*( uv_Rl[1][j]*rho_vel_Rl[2][j]
+                                                      - uv_Rl[1][j]*rho_Rl[j]*vel_Rl[2][j] );
+       ke_face_error_l[j] += 0.25*( vel_Rl[0][j]*rho_Rl[j]*v_sq[2][j]
+                                                      - vel_Rl[0][j]*rho_vel_Rl[2][j]*vel_Rl[2][j] );
+
+
+       ke_face_error_l[j] += 0.5*( rho_vel_Rl[1][j]*vel_sq_Rl[0][j] - rho_vel_Rl[1][j]*vel_Rl[0][j]*vel_Rl[0][j] );
+       ke_face_error_l[j] += 0.5*( rho_vel_Rl[1][j]*vel_sq_Rl[1][j] - rho_vel_Rl[1][j]*vel_Rl[1][j]*vel_Rl[1][j] );
+       ke_face_error_l[j] += 0.5*( rho_vel_Rl[1][j]*vel_sq_Rl[2][j] - rho_vel_Rl[1][j]*vel_Rl[2][j]*vel_Rl[2][j] );
+
+       ke_face_error_l[j] += 0.25*( uv_Rl[0][j]*rho_vel_Rl[0][j]
+                                                      - uv_Rl[0][j]*rho_Rl[j]*vel_Rl[0][j] );
+       ke_face_error_l[j] += 0.25*( vel_Rl[1][j]*rho_Rl[j]*v_sq[0][j]
+                                                      - vel_Rl[1][j]*rho_vel_Rl[0][j]*vel_Rl[0][j] );
+
+       ke_face_error_l[j] += 0.25*( uv_Rl[2][j]*rho_vel_Rl[2][j]
+                                                      - uv_Rl[2][j]*rho_Rl[j]*vel_Rl[2][j] );
+       ke_face_error_l[j] += 0.25*( vel_Rl[1][j]*rho_Rl[j]*v_sq[2][j]
+                                                      - vel_Rl[1][j]*rho_vel_Rl[2][j]*vel_Rl[2][j] );
+
+       ke_face_error_l[j] += 0.5*( rho_vel_Rl[2][j]*vel_sq_Rl[0][j] - rho_vel_Rl[2][j]*vel_Rl[0][j]*vel_Rl[0][j] );
+       ke_face_error_l[j] += 0.5*( rho_vel_Rl[2][j]*vel_sq_Rl[1][j] - rho_vel_Rl[2][j]*vel_Rl[1][j]*vel_Rl[1][j] );
+       ke_face_error_l[j] += 0.5*( rho_vel_Rl[2][j]*vel_sq_Rl[2][j] - rho_vel_Rl[2][j]*vel_Rl[2][j]*vel_Rl[2][j] );
+
+       ke_face_error_l[j] += 0.25*( uv_Rl[1][j]*rho_vel_Rl[0][j]
+                                                      - uv_Rl[1][j]*rho_Rl[j]*vel_Rl[0][j] );
+       ke_face_error_l[j] += 0.25*( vel_Rl[2][j]*rho_Rl[j]*v_sq[0][j]
+                                                      - vel_Rl[2][j]*rho_vel_Rl[0][j]*vel_Rl[0][j] );
+
+       ke_face_error_l[j] += 0.25*( uv_Rl[2][j]*rho_vel_Rl[1][j]
+                                                      - uv_Rl[2][j]*rho_Rl[j]*vel_Rl[1][j] );
+       ke_face_error_l[j] += 0.25*( vel_Rl[2][j]*rho_Rl[j]*v_sq[1][j]
+                                                    - vel_Rl[2][j]*rho_vel_Rl[1][j]*vel_Rl[1][j] );
+
+   }
+
+   Vector rho_vel_Rr[dim]; // Restriction right
+   Vector vel_Rr[dim], rho_vel_sq_Rr[dim], rho_uv_Rr[dim];
+   Vector vel_sq_Rr[dim], uv_Rr[dim];
+   Vector pres_Rr(n_face_pts), rho_Rr(n_face_pts); 
+   Vector rho_eu_Rr[dim], eu_Rr[dim], E_Rr(n_face_pts), e_Rr(n_face_pts); 
+   Vector pu_Rr[dim]; 
+
+   glob_proj_r->Mult(rho ,  rho_Rr );
+   glob_proj_r->Mult(pres,  pres_Rr);
+   glob_proj_r->Mult(e,                e_Rr);
+   glob_proj_r->Mult(E,                E_Rr);
+   for(int j = 0; j < dim; j++) 
+   {
+       rho_vel_Rr[j].SetSize(n_face_pts); vel_Rr[j].SetSize(n_face_pts); rho_uv_Rr[j].SetSize(n_face_pts);
+       uv_Rr[j].SetSize(n_face_pts);
+       rho_vel_sq_Rr[j].SetSize(n_face_pts); vel_sq_Rr[j].SetSize(n_face_pts);
+       rho_eu_Rr[j].SetSize(n_face_pts); eu_Rr[j].SetSize(n_face_pts);
+       pu_Rr[j].SetSize(n_face_pts); 
+
+       glob_proj_r->Mult(rho_vel[j],     rho_vel_Rr[j]);
+       glob_proj_r->Mult(vel[j],         vel_Rr[j]);
+       glob_proj_r->Mult(rho_uv[j],      rho_uv_Rr[j]);
+       glob_proj_r->Mult(uv[j],          uv_Rr[j]);
+       glob_proj_r->Mult(rho_vel_sq[j],  rho_vel_sq_Rr[j]);
+       glob_proj_r->Mult(v_sq[j],        vel_sq_Rr[j]);
+       glob_proj_r->Mult(rho_eu[j],      rho_eu_Rr[j]);
+       glob_proj_r->Mult(eu[j],          eu_Rr[j]);
+       glob_proj_r->Mult(pu[j],          pu_Rr[j]);
+   }
+
+   ke_face_error_r = 0.0;
+   for (int j = 0; j < n_face_pts; j++)
+   {
+       ke_face_error_r[j] += 0.5*( rho_vel_Rr[0][j]*vel_sq_Rr[0][j] - rho_vel_Rr[0][j]*vel_Rr[0][j]*vel_Rr[0][j] );
+       ke_face_error_r[j] += 0.5*( rho_vel_Rr[0][j]*vel_sq_Rr[1][j] - rho_vel_Rr[0][j]*vel_Rr[1][j]*vel_Rr[1][j] );
+       ke_face_error_r[j] += 0.5*( rho_vel_Rr[0][j]*vel_sq_Rr[2][j] - rho_vel_Rr[0][j]*vel_Rr[2][j]*vel_Rr[2][j] );
+       
+       ke_face_error_r[j] += 0.25*( uv_Rr[0][j]*rho_vel_Rr[1][j]
+                                                      - uv_Rr[0][j]*rho_Rr[j]*vel_Rr[1][j] );
+       ke_face_error_r[j] += 0.25*( vel_Rr[0][j]*rho_Rr[j]*v_sq[1][j]
+                                                      - vel_Rr[0][j]*rho_vel_Rr[1][j]*vel_Rr[1][j] );
+
+       ke_face_error_r[j] += 0.25*( uv_Rr[1][j]*rho_vel_Rr[2][j]
+                                                      - uv_Rr[1][j]*rho_Rr[j]*vel_Rr[2][j] );
+       ke_face_error_r[j] += 0.25*( vel_Rr[0][j]*rho_Rr[j]*v_sq[2][j]
+                                                      - vel_Rr[0][j]*rho_vel_Rr[2][j]*vel_Rr[2][j] );
+
+
+       ke_face_error_r[j] += 0.5*( rho_vel_Rr[1][j]*vel_sq_Rr[0][j] - rho_vel_Rr[1][j]*vel_Rr[0][j]*vel_Rr[0][j] );
+       ke_face_error_r[j] += 0.5*( rho_vel_Rr[1][j]*vel_sq_Rr[1][j] - rho_vel_Rr[1][j]*vel_Rr[1][j]*vel_Rr[1][j] );
+       ke_face_error_r[j] += 0.5*( rho_vel_Rr[1][j]*vel_sq_Rr[2][j] - rho_vel_Rr[1][j]*vel_Rr[2][j]*vel_Rr[2][j] );
+
+       ke_face_error_r[j] += 0.25*( uv_Rr[0][j]*rho_vel_Rr[0][j]
+                                                      - uv_Rr[0][j]*rho_Rr[j]*vel_Rr[0][j] );
+       ke_face_error_r[j] += 0.25*( vel_Rr[1][j]*rho_Rr[j]*v_sq[0][j]
+                                                      - vel_Rr[1][j]*rho_vel_Rr[0][j]*vel_Rr[0][j] );
+
+       ke_face_error_r[j] += 0.25*( uv_Rr[2][j]*rho_vel_Rr[2][j]
+                                                      - uv_Rr[2][j]*rho_Rr[j]*vel_Rr[2][j] );
+       ke_face_error_r[j] += 0.25*( vel_Rr[1][j]*rho_Rr[j]*v_sq[2][j]
+                                                      - vel_Rr[1][j]*rho_vel_Rr[2][j]*vel_Rr[2][j] );
+
+       ke_face_error_r[j] += 0.5*( rho_vel_Rr[2][j]*vel_sq_Rr[0][j] - rho_vel_Rr[2][j]*vel_Rr[0][j]*vel_Rr[0][j] );
+       ke_face_error_r[j] += 0.5*( rho_vel_Rr[2][j]*vel_sq_Rr[1][j] - rho_vel_Rr[2][j]*vel_Rr[1][j]*vel_Rr[1][j] );
+       ke_face_error_r[j] += 0.5*( rho_vel_Rr[2][j]*vel_sq_Rr[2][j] - rho_vel_Rr[2][j]*vel_Rr[2][j]*vel_Rr[2][j] );
+
+       ke_face_error_r[j] += 0.25*( uv_Rr[1][j]*rho_vel_Rr[0][j]
+                                                      - uv_Rr[1][j]*rho_Rr[j]*vel_Rr[0][j] );
+       ke_face_error_r[j] += 0.25*( vel_Rr[2][j]*rho_Rr[j]*v_sq[0][j]
+                                                      - vel_Rr[2][j]*rho_vel_Rr[0][j]*vel_Rr[0][j] );
+
+       ke_face_error_r[j] += 0.25*( uv_Rr[2][j]*rho_vel_Rr[1][j]
+                                                      - uv_Rr[2][j]*rho_Rr[j]*vel_Rr[1][j] );
+       ke_face_error_r[j] += 0.25*( vel_Rr[2][j]*rho_Rr[j]*v_sq[1][j]
+                                                    - vel_Rr[2][j]*rho_vel_Rr[1][j]*vel_Rr[1][j] );
+
+   }
+
+
+   Vector ke_corr_error(dofs), ke_l(dofs), ke_r(dofs), temp(dofs);
+       
+   glob_proj_l->MultTranspose(ke_face_error_l, ke_l);
+   face_t_r    .MultTranspose(ke_face_error_r, ke_r);
+
+   subtract(ke_l, ke_r, temp); // We need to do F_l - F_r
+   M.Mult(temp, ke_corr_error);
+  
+   for (int j = 0; j < dofs; j++)
+   {
+       cout << j << "\t" << rho_vel_sq[0][j] << "\t" 
+           << "\t" << ke_corr_error[j]  
+           << endl;
+   }
+
+}
+
 
 
 // Get max signal speed 
