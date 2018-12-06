@@ -2225,7 +2225,6 @@ void FE_Evolution::getKGCorrection(const ParGridFunction &u) const
 
    }
 
-
    Vector ke_corr_error(dofs), ke_l(dofs), ke_r(dofs), temp(dofs);
        
    glob_proj_l->MultTranspose(ke_face_error_l, ke_l);
@@ -2233,13 +2232,44 @@ void FE_Evolution::getKGCorrection(const ParGridFunction &u) const
 
    subtract(ke_l, ke_r, temp); // We need to do F_l - F_r
    M.Mult(temp, ke_corr_error);
-  
-   for (int j = 0; j < dofs; j++)
+
+   Vector one_v(dofs), mass_v(dofs), mass_rho(dofs);
+   Vector m_vbar_sq(dofs), m_rho_vbar_sq(dofs);
+   
+   one_v = 1.0;
+   M.Mult(one_v,         mass_v);
+   M.Mult(rho  ,         mass_rho);
+   M.Mult(vbar_sq,       m_vbar_sq);
+   M.Mult(rho_vbar_sq,   m_rho_vbar_sq);
+
+   double one_T_ke_corr      = one_v*ke_corr_error; // 1^T R^T B (Ru^2 - R(u)*R(u))
+   double rho_t              = one_v*mass_rho;
+   double one_T_m            = one_v*mass_v;
+   double one_T_vbar_sq      = one_v*m_vbar_sq;
+   double one_T_rho_vbar_sq  = one_v*m_rho_vbar_sq;
+
+   rho_t = rho_t/one_T_m;
+
+   double corr_alpha = one_T_ke_corr/(one_T_rho_vbar_sq - rho_t*one_T_vbar_sq + 1E-16);
+
+   f_ke_corr.SetSize(var_dim*dofs);
+   f_ke_corr = 0.0;
+
+//   cout << one_T_ke_corr << "\t" << rho_t << "\t" << one_T_rho_vbar_sq << "\t" << one_T_vbar_sq 
+//        << "\t" << corr_alpha << endl; 
+
+   if ( std::abs(one_T_rho_vbar_sq - rho_t*one_T_vbar_sq) > 1E-10 )
    {
-       cout << j << "\t" << rho_vel_sq[0][j] << "\t" 
-           << "\t" << ke_corr_error[j]  
-           << endl;
+       for (int j = 0; j < dofs; j++)
+       {
+           f_ke_corr[j] = corr_alpha*( rho[j] - rho_t);
+    
+     //      cout << j << "\t" << rho_vel_sq[0][j] << "\t" 
+     //          << "\t" << ke_corr_error[j]  
+     //          << endl;
+       }
    }
+
 
 }
 
