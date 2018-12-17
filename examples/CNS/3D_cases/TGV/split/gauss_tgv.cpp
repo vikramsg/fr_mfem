@@ -319,8 +319,6 @@ CNS::CNS()
    ///////////////////////////////////////////////////
    // Linear form representing the Euler boundary non-linear term
    b = new ParLinearForm(fes);
-   b->AddFaceIntegrator(
-      new DGEulerIntegrator(R_gas, gamm, u_vec, f_vec, var_dim, -1.0));
    b->Assemble();
 
    b_aux_x     = new ParLinearForm(&fes_aux);
@@ -3219,7 +3217,7 @@ void FE_Evolution::getKGCorrection(const ParGridFunction &u, Vector &f_ke_corr) 
    if ( std::abs(one_T_ke_corr) < 1E-14 )
        one_T_ke_corr = 0.0;
    
-   double corr_alpha1 = one_T_ke_corr/(one_T_rho_vbar_sq - rho_t*one_T_vbar_sq + 1E-16); // Rho
+   double corr_alpha1 = 2.0*one_T_ke_corr/(one_T_rho_vbar_sq - rho_t*one_T_vbar_sq + 1E-16); // Rho
    double corr_alpha2[dim];
    for (int j = 0; j < dim; j++)
        corr_alpha2[j] = one_T_ke_corr/(one_T_rho_vel_sq[j] - rho_vel_t[j]*one_T_vel[j] + 1E-16); // Rho U
@@ -3229,20 +3227,10 @@ void FE_Evolution::getKGCorrection(const ParGridFunction &u, Vector &f_ke_corr) 
    f_ke_corr.SetSize(var_dim*dofs);
    f_ke_corr = 0.0;
 
-//   cout << one_T_ke_corr << "\t" << rho_t << "\t"  
-//        << one_T_rho_vbar_sq << "\t" << one_T_vbar_sq 
-//        << "\t" << corr_alpha1 << "\t" << endl; 
-
-//   cout << one_T_ke_corr << "\t" << rho_vel_t[0] << "\t"  
-//        << one_T_rho_vel_sq[0] << "\t" << rho_vel_t[0]*one_T_vel[0] 
-//        << "\t" << corr_alpha2[0] << "\t" << endl; 
-
-//   if ( (std::abs(corr_alpha1) < 250) && (corr_alpha1 >-50.0) )
-//   if ( (corr_alpha1 <  2. ) )
    {
        temp_ke  = rho;
        temp_ke -= rho_t;
-       temp_ke *=-0.50*corr_alpha1;
+       temp_ke *= 0.00*corr_alpha1;
        
        M.Mult(temp_ke, temp);
        temp_ke = temp;
@@ -3254,12 +3242,12 @@ void FE_Evolution::getKGCorrection(const ParGridFunction &u, Vector &f_ke_corr) 
    {
        temp_ke  =  rho_vel[j];
        temp_ke -=  rho_vel_t[j];
-       temp_ke *=  0.50*corr_alpha2[j];
+       temp_ke *= -0.33*corr_alpha2[j];
        
        M.Mult(temp_ke, temp);
        temp_ke = temp;
        
-       f_ke_corr.SetSubVector(offsets[j], temp_ke);
+       f_ke_corr.SetSubVector(offsets[1 + j], temp_ke);
    }
 
 
@@ -5680,171 +5668,168 @@ void getVectorKGFlux(const double R, const double gamm, const int dim, const Vec
         
     }
  
-    for(int p = 0; p < num_pts; p++)
-    {
-        rho_L = u1(p);
-        
-        for (int i = 0; i < dim; i++)
-        {
-            vel_L(i) = u1((1 + i)*num_pts + p)/rho_L;    
-        }
-        E_L   = u1((var_dim - 1)*num_pts + p);
+//    for(int p = 0; p < num_pts; p++)
+//    {
+//        rho_L = u1(p);
+//        
+//        for (int i = 0; i < dim; i++)
+//        {
+//            vel_L(i) = u1((1 + i)*num_pts + p)/rho_L;    
+//        }
+//        E_L   = u1((var_dim - 1)*num_pts + p);
+//
+//        vel_sq_L = 0.0;
+//        for (int i = 0; i < dim; i++)
+//        {
+//            vel_sq_L += pow(vel_L(i), 2) ;
+//        }
+//        T_L        = (E_L - 0.5*rho_L*vel_sq_L)/(rho_L*Cv);
+//        p_L        = rho_L*R*T_L;
+//        a_L        = sqrt(gamm * R * T_L);
+//        h_L        = (E_L + p_L)/rho_L;
+//        sqrtRho_L  = std::sqrt(rho_L);
+//
+//        rho_R = u2(p);
+//        for (int i = 0; i < dim; i++)
+//        {
+//            vel_R(i) = u2((1 + i)*num_pts + p)/rho_R;    
+//        }
+//        E_R   = u2((var_dim - 1)*num_pts + p);
+//    
+//        vel_sq_R = 0.0;
+//        for (int i = 0; i < dim; i++)
+//        {
+//            vel_sq_R += pow(vel_R(i), 2) ;
+//        }
+//        T_R       = (E_R - 0.5*rho_R*vel_sq_R)/(rho_R*Cv);
+//        p_R       = rho_R*R*T_R;
+//        a_R       = sqrt(gamm * R * T_R);
+//        h_R       = (E_R + p_R)/rho_R;
+//        sqrtRho_R = std::sqrt(rho_R);
+//
+//        for (int i = 0; i < dim; i++)
+//        {
+//            nor_in(i) = nor(i*num_pts + p);
+//        }
+//        nor_l2 = nor_in.Norml2();
+//        nor_dim.Set(1/nor_l2, nor_in);
+//
+//        vnl   = 0.0, vnr = 0.0;
+//        for (int i = 0; i < dim; i++)
+//        {
+//            vnl += vel_L[i]*nor_dim(i); 
+//            vnr += vel_R[i]*nor_dim(i); 
+//        }
+//
+//        sSqrtRho = 1./(sqrtRho_L + sqrtRho_R); 
+//        vel_sq_rho = 0.0;;
+//        for (int i = 0; i < dim; i++)
+//        {
+//            velRho(i)   = (sqrtRho_L*vel_L(i) + sqrtRho_R*vel_R(i))*sSqrtRho;
+//            vel_sq_rho += velRho(i)*velRho(i);
+//        }
+//        r_rho = (sqrtRho_L*rho_L + sqrtRho_R*rho_R)*sSqrtRho;
+//        rho_h = (sqrtRho_L*h_L   + sqrtRho_R*h_R)*sSqrtRho;
+//        rho_a = std::sqrt((gamm - 1)*(rho_h - 0.5*vel_sq_rho));
+//
+//        vn_rho   = 0.0;
+//        for (int i = 0; i < dim; i++)
+//        {
+//            vn_rho += velRho[i]*nor_dim(i); 
+//        }
+//
+//       //Wave Strengths
+//
+//        drho = rho_R - rho_L ;//Density difference
+//        dp   = p_R - p_L     ;//Pressure difference
+//        dvn  = vnr - vnl     ;//Normal velocity difference
+//
+//        LdU(0) = (dp - r_rho*rho_a*dvn )/(2.*rho_a*rho_a); //Left-moving acoustic wave strength
+//        LdU(1) =  drho - dp/(rho_a*rho_a);                 //Entropy wave strength
+//        LdU(2) = (dp + r_rho*rho_a*dvn )/(2.*rho_a*rho_a); //Right-moving acoustic wave strength
+//        LdU(3) = r_rho;                                    //Shear wave strength 
+//
+//        LM_z = std::min(1., std::max(mach_L, mach_R));
+//        dlambda1 = (vnr - a_R) - (vnl - a_L);
+//        dlambda3 = (vnr + a_R) - (vnl + a_L);
+//
+//        double beta     = 1./6.;
+//
+//        // Absolute values of the wave Speeds
+//        ws(0) = std::abs(vn_rho - rho_a + beta*dlambda1) ;//Left-moving acoustic wave
+//        ws(1) = std::abs(vn_rho);         //Entropy wave
+//        ws(2) = std::abs(vn_rho + rho_a + beta*dlambda3) ;//Right-moving acoustic wave
+//        ws(3) = std::abs(vn_rho) ;        //Shear waves
+//
+//        //Harten's Entropy Fix JCP(1983), 49, pp357-393: only for the nonlinear fields.
+//        //NOTE: It avoids vanishing wave speeds by making a parabolic fit near ws = 0.
+//        
+//        dws(0) = 0.2; 
+//        if ( ws(0) < dws(0) ) 
+//             ws(0) = 0.5 * ( ws(0)*ws(0)/dws(0)+dws(0) );
+//        dws(2) = 0.2; 
+//        if ( ws(2) < dws(2) ) 
+//             ws(3) = 0.5 * ( ws(2)*ws(2)/dws(2)+dws(2) );
+//        
+//        //Right Eigenvectors
+//        //Note: Two shear wave components are combined into one, so that tangent vectors
+//        //      are not required. And that's why there are only 4 vectors here.
+//        //      See "I do like CFD, VOL.1" about how tangent vectors are eliminated.
+//        
+//        //  Left-moving acoustic wave
+//        
+//        roeM(0,0) = 1.; 
+//        roeM(1,0) = velRho(0) - rho_a*nor_dim(0);
+//        roeM(2,0) = velRho(1) - rho_a*nor_dim(1);  
+//        roeM(3,0) = velRho(2) - rho_a*nor_dim(2);
+//        roeM(4,0) = rho_h - rho_a*vn_rho;
+//        
+//        // Entropy wave
+//           
+//        roeM(0,1) = 1.; 
+//        roeM(1,1) = velRho(0);
+//        roeM(2,1) = velRho(1);
+//        roeM(3,1) = velRho(2); 
+//        roeM(4,1) = 0.5*vel_sq_rho;
+//        
+//        // Right-moving acoustic wave
+//        
+//        roeM(0,2) = 1.; 
+//        roeM(1,2) = velRho(0) + rho_a*nor_dim(0);
+//        roeM(2,2) = velRho(1) + rho_a*nor_dim(1);  
+//        roeM(3,2) = velRho(2) + rho_a*nor_dim(2);
+//        roeM(4,2) = rho_h + rho_a*vn_rho;
+//
+//        // Two shear wave components combined into one (wave strength incorporated).
+//          
+//        du = vel_R(0) - vel_L(0);
+//        dv = vel_R(1) - vel_L(1);
+//        dw = vel_R(2) - vel_L(2);
+//
+//        roeM(0,3) = 0.; 
+//        roeM(1,3) = du - dvn*nor_dim(0);
+//        roeM(2,3) = dv - dvn*nor_dim(1);
+//        roeM(3,3) = dw - dvn*nor_dim(2);
+//        roeM(4,3) = velRho(0)*du + velRho(1)*dv + velRho(2)*dw - vn_rho*dvn;
+//
+//        // Dissipation Term: |An|(UR-UL) = R|Lambda|L*dU = sum_k of [ ws(k) * R(:,k) * L*dU(k) ]
+//        
+//        for(int j = 0; j < var_dim; j++)
+//            diss(j) = ws(0)*LdU(0)*roeM(j,0) + ws(1)*LdU(1)*roeM(j,1) 
+//             + ws(2)*LdU(2)*roeM(j,2) + ws(3)*LdU(3)*roeM(j,3);
+//
+//        for (int i = 0; i < dim; i++)
+//        {
+//            for (int j = 0; j < var_dim; j++)
+//            {
+//                f_com((i*var_dim + j)*num_pts + p) += 
+//                    -0.5*nor_dim(i)*diss(j);
+//            }
+//        }
+//
+//    }
 
-        vel_sq_L = 0.0;
-        for (int i = 0; i < dim; i++)
-        {
-            vel_sq_L += pow(vel_L(i), 2) ;
-        }
-        T_L        = (E_L - 0.5*rho_L*vel_sq_L)/(rho_L*Cv);
-        p_L        = rho_L*R*T_L;
-        a_L        = sqrt(gamm * R * T_L);
-        h_L        = (E_L + p_L)/rho_L;
-        sqrtRho_L  = std::sqrt(rho_L);
-        mach_L     = std::sqrt(vel_sq_L)/a_L;
-
-        rho_R = u2(p);
-        for (int i = 0; i < dim; i++)
-        {
-            vel_R(i) = u2((1 + i)*num_pts + p)/rho_R;    
-        }
-        E_R   = u2((var_dim - 1)*num_pts + p);
-    
-        vel_sq_R = 0.0;
-        for (int i = 0; i < dim; i++)
-        {
-            vel_sq_R += pow(vel_R(i), 2) ;
-        }
-        T_R       = (E_R - 0.5*rho_R*vel_sq_R)/(rho_R*Cv);
-        p_R       = rho_R*R*T_R;
-        a_R       = sqrt(gamm * R * T_R);
-        h_R       = (E_R + p_R)/rho_R;
-        sqrtRho_R = std::sqrt(rho_R);
-        mach_R    = std::sqrt(vel_sq_R)/a_R;
-
-        for (int i = 0; i < dim; i++)
-        {
-            nor_in(i) = nor(i*num_pts + p);
-        }
-        nor_l2 = nor_in.Norml2();
-        nor_dim.Set(1/nor_l2, nor_in);
-
-        vnl   = 0.0, vnr = 0.0;
-        for (int i = 0; i < dim; i++)
-        {
-            vnl += vel_L[i]*nor_dim(i); 
-            vnr += vel_R[i]*nor_dim(i); 
-        }
-
-        sSqrtRho = 1./(sqrtRho_L + sqrtRho_R); 
-        vel_sq_rho = 0.0;;
-        for (int i = 0; i < dim; i++)
-        {
-            velRho(i)   = (sqrtRho_L*vel_L(i) + sqrtRho_R*vel_R(i))*sSqrtRho;
-            vel_sq_rho += velRho(i)*velRho(i);
-        }
-        r_rho = (sqrtRho_L*rho_L + sqrtRho_R*rho_R)*sSqrtRho;
-        rho_h = (sqrtRho_L*h_L   + sqrtRho_R*h_R)*sSqrtRho;
-        rho_a = std::sqrt((gamm - 1)*(rho_h - 0.5*vel_sq_rho));
-
-        vn_rho   = 0.0;
-        for (int i = 0; i < dim; i++)
-        {
-            vn_rho += velRho[i]*nor_dim(i); 
-        }
-
-       //Wave Strengths
-
-        drho = rho_R - rho_L ;//Density difference
-        dp   = p_R - p_L     ;//Pressure difference
-        dvn  = vnr - vnl     ;//Normal velocity difference
-
-        LM_z = std::min(1., std::max(mach_L, mach_R));
-        dlambda1 = (vnr - a_R) - (vnl - a_L);
-        dlambda3 = (vnr + a_R) - (vnl + a_L);
-
-        double beta     = 1./6.;
-
-
-        LdU(0) = (dp - r_rho*rho_a*LM_z*dvn )/(2.*rho_a*rho_a); //Left-moving acoustic wave strength
-        LdU(1) =  drho - dp/(rho_a*rho_a);                 //Entropy wave strength
-        LdU(2) = (dp + r_rho*rho_a*LM_z*dvn )/(2.*rho_a*rho_a); //Right-moving acoustic wave strength
-        LdU(3) = r_rho;                                    //Shear wave strength 
-
-        // Absolute values of the wave Speeds
-        ws(0) = std::abs(vn_rho - rho_a) + beta*std::abs(dlambda1); ;//Left-moving acoustic wave
-        ws(1) = std::abs(vn_rho);         //Entropy wave
-        ws(2) = std::abs(vn_rho + rho_a) + beta*std::abs(dlambda3); ;//Right-moving acoustic wave
-        ws(3) = std::abs(vn_rho) ;        //Shear waves
-
-        //Harten's Entropy Fix JCP(1983), 49, pp357-393: only for the nonlinear fields.
-        //NOTE: It avoids vanishing wave speeds by making a parabolic fit near ws = 0.
-        
-        dws(0) = 0.2; 
-        if ( ws(0) < dws(0) ) 
-             ws(0) = 0.5 * ( ws(0)*ws(0)/dws(0)+dws(0) );
-        dws(2) = 0.2; 
-        if ( ws(2) < dws(2) ) 
-             ws(3) = 0.5 * ( ws(2)*ws(2)/dws(2)+dws(2) );
-        
-        //Right Eigenvectors
-        //Note: Two shear wave components are combined into one, so that tangent vectors
-        //      are not required. And that's why there are only 4 vectors here.
-        //      See "I do like CFD, VOL.1" about how tangent vectors are eliminated.
-        
-        //  Left-moving acoustic wave
-        
-        roeM(0,0) = 1.; 
-        roeM(1,0) = velRho(0) - rho_a*nor_dim(0);
-        roeM(2,0) = velRho(1) - rho_a*nor_dim(1);  
-        roeM(3,0) = velRho(2) - rho_a*nor_dim(2);
-        roeM(4,0) = rho_h - rho_a*vn_rho;
-        
-        // Entropy wave
-           
-        roeM(0,1) = 1.; 
-        roeM(1,1) = velRho(0);
-        roeM(2,1) = velRho(1);
-        roeM(3,1) = velRho(2); 
-        roeM(4,1) = 0.5*vel_sq_rho;
-        
-        // Right-moving acoustic wave
-        
-        roeM(0,2) = 1.; 
-        roeM(1,2) = velRho(0) + rho_a*nor_dim(0);
-        roeM(2,2) = velRho(1) + rho_a*nor_dim(1);  
-        roeM(3,2) = velRho(2) + rho_a*nor_dim(2);
-        roeM(4,2) = rho_h + rho_a*vn_rho;
-
-        // Two shear wave components combined into one (wave strength incorporated).
-          
-        du = vel_R(0) - vel_L(0);
-        dv = vel_R(1) - vel_L(1);
-        dw = vel_R(2) - vel_L(2);
-
-        roeM(0,3) = 0.; 
-        roeM(1,3) = du - dvn*nor_dim(0);
-        roeM(2,3) = dv - dvn*nor_dim(1);
-        roeM(3,3) = dw - dvn*nor_dim(2);
-        roeM(4,3) = velRho(0)*du + velRho(1)*dv + velRho(2)*dw - vn_rho*dvn;
-
-        // Dissipation Term: |An|(UR-UL) = R|Lambda|L*dU = sum_k of [ ws(k) * R(:,k) * L*dU(k) ]
-        
-        for(int j = 0; j < var_dim; j++)
-            diss(j) = ws(0)*LdU(0)*roeM(j,0) + ws(1)*LdU(1)*roeM(j,1) 
-             + ws(2)*LdU(2)*roeM(j,2) + ws(3)*LdU(3)*roeM(j,3);
-
-        for (int i = 0; i < dim; i++)
-        {
-            for (int j = 0; j < var_dim; j++)
-            {
-                f_com((i*var_dim + j)*num_pts + p) += 
-                    -0.5*nor_dim(i)*diss(j);
-            }
-        }
-
-    }
-
-       
+      
 }
 
 
