@@ -16,7 +16,7 @@ const double   Pr  = 0.72;
 //Run parameters
 //const char *mesh_file        =  "periodic-cube.mesh";
 const char *mesh_file        =  "tgv.mesh";
-const int    order           =  2;
+const int    order           =  3;
 const double t_final         =  60.5001 ;
 const int    problem         =  0;
 const int    ref_levels      =  0;
@@ -53,7 +53,7 @@ const string splitform       =   "KG" ;
 const string riemann         =  "KG";
 
 // Freestream
-const double M_inf           =    0.0845 ;
+const double M_inf           =    0.2    ;
 const double rho_inf         =    1.0;
 
 ////////////////////////////////////////////////////////////////////////
@@ -69,8 +69,6 @@ void getVectorLFFlux(const double R, const double gamm, const int dim, const Vec
                                 const Vector &nor, Vector &f);
 void getVectorKGFlux(const double R, const double gamm, const int dim, const Vector &u1, const Vector &u2, 
                                 const Vector &nor, Vector &f);
-void getVectorSF3Flux(const double R, const double gamm, const int dim, const Vector &u1, const Vector &u2, 
-                                const Vector &nor, Vector &f);
 
 void getVectorRoeFlux(const double R, const double gamm, const int dim, const Vector &u1, const Vector &u2, 
                                 const Vector &nor, Vector &f);
@@ -85,10 +83,6 @@ void getMorinishiSplitDx(int dim,
 void getKGSplitDx(int dim, 
         const HypreParMatrix &K_x, const HypreParMatrix &K_y, const HypreParMatrix &K_z, 
         const Vector &u, Vector &f_dx); 
-
-void getSF3SplitDx(int dim, 
-        const HypreParMatrix &K_x, const HypreParMatrix &K_y, const HypreParMatrix &K_z, 
-        const Vector &u, Vector &f_dx) ;
 
 void getFaceDotNorm(int dim, const Vector &f, const Vector &nor_face, Vector &face_f);
 
@@ -155,8 +149,6 @@ public:
 
    void getKGRestriction(const ParGridFunction &u, Vector &f_l, Vector &f_r) const;
    void getKGCorrection (const ParGridFunction &u, Vector &f_ke_corr) const;
-
-   void getSF3Restriction(const ParGridFunction &u, Vector &f_l, Vector &f_r) const;
 
    virtual ~FE_Evolution() { }
 };
@@ -325,6 +317,10 @@ CNS::CNS()
    b_aux_y     = new ParLinearForm(&fes_aux);
    b_aux_z     = new ParLinearForm(&fes_aux);
 
+   b_aux_x->Assemble();
+   b_aux_y->Assemble();
+   b_aux_z->Assemble();
+
    (*b_aux_x) *= 0.0; // Initialize to 0
    (*b_aux_y) *= 0.0;
    (*b_aux_z) *= 0.0;
@@ -448,9 +444,6 @@ CNS::CNS()
    StopWatch chrono;
    chrono.Clear();
    chrono.Start();
-
-   Vector f_l, f_r;
-   adv->getKGRestriction(*u_sol, f_l, f_r); 
 
    bool done = false;
    for (ti = ti_in; !done; )
@@ -671,8 +664,6 @@ void FE_Evolution::Mult(const ParGridFunction &x, ParGridFunction &y) const
             u_grad);
     getVisFlux(dim, x, u_grad, f_V);
 
-//    b.Assemble();
-
     b *= 0.;
 
     Vector b_nl(x.Size());
@@ -713,14 +704,6 @@ void FE_Evolution::Mult(const ParGridFunction &x, ParGridFunction &y) const
         else if ( splitform == "KG" ) 
         {
             getKGSplitDx(dim, K_inv_x, K_inv_y, K_inv_z, x, f_dx);
-            Vector temp(var_dim*offset), f_ke_corr(var_dim*offset);
-            getKGCorrection(u, f_ke_corr);
-            add(f_dx, f_ke_corr, temp);
-            f_dx = temp;
-        }
-        else if ( splitform == "SF3" )
-        {
-            getSF3SplitDx(dim, K_inv_x, K_inv_y, K_inv_z, x, f_dx);
             Vector temp(var_dim*offset), f_ke_corr(var_dim*offset);
             getKGCorrection(u, f_ke_corr);
             add(f_dx, f_ke_corr, temp);
@@ -1228,10 +1211,6 @@ void FE_Evolution::getParEulerDGTranspose(const ParGridFunction &u_sol, const Pa
    {
         if ( splitform == "KG" ) 
             getKGRestriction(u_sol, f_l, f_r);
-        else if ( splitform == "SF3" ) 
-        {
-            getSF3Restriction(u_sol, f_l, f_r);
-        }
         else
         {
            Vector f_l1 (dim*var_dim*n_face_pts), f_r1(dim*var_dim*n_face_pts);
@@ -2025,874 +2004,6 @@ void FE_Evolution::getKGRestriction(const ParGridFunction &u, Vector &f_l, Vecto
 }
 
 
-/*
- * For Gauss points, the restriction of f for the RHS C(f_{num} - f) does not guarantee conservation
- * for splittings in general. Therefore we need to instroduce a function to get this restriction
- * for each splitting
- */
-void FE_Evolution::getSF3Restriction(const ParGridFunction &u, Vector &f_l, Vector &f_r) const
-{
-   int var_dim    = u.VectorDim(); 
-   int dim        = var_dim - 2;
-   int n_face_pts = wts.Size();
-   int dofs       = u.Size()/var_dim;
-
-   Array<int> offsets[dim*var_dim], offsets_face[dim*var_dim];
-   for(int i = 0; i < dim*var_dim; i++)
-   {
-       offsets_face[i].SetSize(n_face_pts);
-       offsets     [i].SetSize(dofs);
-   }
-   for(int j = 0; j < dim*var_dim; j++)
-   {
-       for(int i = 0; i < n_face_pts; i++)
-       {
-           offsets_face[j][i] = j*n_face_pts + i ;
-       }
-       for(int i = 0; i < dofs; i++)
-       {
-           offsets     [j][i] = j*dofs + i ;
-       }
-   }
-
-   int offset = u.Size()/var_dim; 
-
-   Vector rho, E;
-   u.GetSubVector(offsets[0],           rho   );
-   u.GetSubVector(offsets[var_dim - 1],      E);
-
-   Vector rho_vel[dim];
-   for(int i = 0; i < dim; i++) u.GetSubVector(offsets[1 + i], rho_vel[i]);
-
-   Vector vel[dim], rho_vel_sq[dim], rho_uv[dim], uv[dim], v_sq[dim];
-   for(int i = 0; i < dim; i++) 
-   {
-       vel[i].SetSize(offset); rho_vel_sq[i].SetSize(offset); rho_uv[i].SetSize(offset);
-       uv[i].SetSize(offset);
-       v_sq[i].SetSize(offset);
-   }
-
-   Vector pres(offset); // (rho*Cv*T + p)*u, p
-   Vector T(offset); // (rho*Cv*T + p)*u, p
-   Vector pu[dim]; 
-   Vector e(offset), eu[dim], rho_eu[dim]; 
-   Vector sqrtT(offset), rho_sqrtT(offset), rho_vel_sqrtT[dim], vel_sqrtT[dim];  // sqrt(T)
-   for(int i = 0; i < dim; i++) 
-   {
-       eu[i]    .SetSize(offset);
-       rho_eu[i].SetSize(offset);
-       pu[i]    .SetSize(offset);
-       rho_vel_sqrtT[i].SetSize(offset);
-       vel_sqrtT[i]    .SetSize(offset);
-   }
-
-   for(int i = 0; i < offset; i++)
-   {
-       double vel_sq = 0.0;
-       for(int j = 0; j < dim; j++)
-       {
-           vel[j][i]        = rho_vel[j](i)/rho(i);
-           vel_sq          += pow(vel[j][i], 2);
-
-           rho_vel_sq[j][i] = rho_vel[j](i)*vel[j](i);
-           v_sq[j][i]       = vel[j](i)*vel[j](i);
-       }
-
-       pres(i)          = (E(i) - 0.5*rho(i)*vel_sq)*(gamm - 1);
-       T[i]             = pres(i)/(rho(i)*R_gas);
-       e(i)             =  E(i)/rho(i);
-
-       sqrtT[i]         = std::sqrt(T[i]);
-       rho_sqrtT[i]     = rho[i]*sqrtT[i];
-
-       for(int j = 0; j < dim; j++)
-       {
-           eu[j](i)            = e(i)*vel[j](i);
-           rho_eu[j](i)        = E(i)*vel[j](i);
-           
-           pu[j](i)            = pres(i)*vel[j](i);
-           
-           vel_sqrtT[j][i]     = vel[j][i]*sqrtT[i];
-           rho_vel_sqrtT[j][i] = rho[i]*vel_sqrtT[j][i];
-
-       }
-
-       rho_uv[0](i)  = rho_vel[0](i)*vel[1](i); // rho*u*v
-       rho_uv[1](i)  = rho_vel[0](i)*vel[2](i); // rho*u*w
-       rho_uv[2](i)  = rho_vel[1](i)*vel[2](i); // rho*v*w
-   
-       uv[0](i)      = vel[0](i)*vel[1](i); // rho*u*v
-       uv[1](i)      = vel[0](i)*vel[2](i); // rho*u*w
-       uv[2](i)      = vel[1](i)*vel[2](i); // rho*v*w
-
-   }
-   
-   Vector rho_vel_Rl[dim]; // Restriction
-   Vector vel_Rl[dim], rho_vel_sq_Rl[dim], rho_uv_Rl[dim];
-   Vector vel_sq_Rl[dim], uv_Rl[dim];
-   Vector pres_Rl(n_face_pts), rho_Rl(n_face_pts); 
-   Vector rho_eu_Rl[dim], eu_Rl[dim], E_Rl(n_face_pts), e_Rl(n_face_pts); 
-   Vector pu_Rl[dim]; 
-    
-   Vector sqrtT_Rl(n_face_pts), rho_sqrtT_Rl(n_face_pts);
-   Vector rho_vel_sqrtT_Rl[dim], vel_sqrtT_Rl[dim]; 
-
-   glob_proj_l->Mult(rho ,  rho_Rl );
-   glob_proj_l->Mult(pres,  pres_Rl);
-   glob_proj_l->Mult(e,                e_Rl);
-   glob_proj_l->Mult(E,                E_Rl);
-   glob_proj_l->Mult(sqrtT  ,          sqrtT_Rl);
-   glob_proj_l->Mult(rho_sqrtT,        rho_sqrtT_Rl);
-
-   for(int j = 0; j < dim; j++) 
-   {
-       rho_vel_Rl[j].SetSize(n_face_pts); vel_Rl[j].SetSize(n_face_pts); rho_uv_Rl[j].SetSize(n_face_pts);
-       uv_Rl[j].SetSize(n_face_pts);
-       rho_vel_sq_Rl[j].SetSize(n_face_pts); vel_sq_Rl[j].SetSize(n_face_pts);
-       rho_eu_Rl[j].SetSize(n_face_pts); eu_Rl[j].SetSize(n_face_pts);
-       pu_Rl[j].SetSize(n_face_pts);
-
-       rho_vel_sqrtT_Rl[j].SetSize(n_face_pts); vel_sqrtT_Rl[j].SetSize(n_face_pts);
-
-       glob_proj_l->Mult(rho_vel[j],     rho_vel_Rl[j]);
-       glob_proj_l->Mult(vel[j],         vel_Rl[j]);
-       glob_proj_l->Mult(rho_uv[j],      rho_uv_Rl[j]);
-       glob_proj_l->Mult(uv[j],          uv_Rl[j]);
-       glob_proj_l->Mult(rho_vel_sq[j],  rho_vel_sq_Rl[j]);
-       glob_proj_l->Mult(v_sq[j],        vel_sq_Rl[j]);
-       glob_proj_l->Mult(rho_eu[j],      rho_eu_Rl[j]);
-       glob_proj_l->Mult(eu[j],          eu_Rl[j]);
-       glob_proj_l->Mult(pu[j],          pu_Rl[j]);
-       
-       glob_proj_l->Mult(rho_vel_sqrtT[j], rho_vel_sqrtT_Rl[j]);
-       glob_proj_l->Mult(vel_sqrtT[j],     vel_sqrtT_Rl[j]);
-
-   }
-
-   Vector temp(n_face_pts), temp1(n_face_pts), temp2(n_face_pts), temp3(n_face_pts), temp4(n_face_pts);
-
-   {
-       // X -dir
-       // Density
-
-       temp = rho_vel_Rl[0];
-
-       getSparseMat(vel_Rl[0]).Mult(rho_Rl, temp1);
-       temp += temp1; 
-
-       temp *= 0.5;
-
-       f_l.SetSubVector(offsets_face[0], temp);
-       
-       // rho_u 
-       
-       temp = rho_vel_sq_Rl[0];
-
-       getSparseMat(vel_Rl[0]).Mult(rho_vel_Rl[0], temp1);
-       temp1 *= 2.0;
-       temp  += temp1; 
-
-       getSparseMat(vel_sq_Rl[0]).Mult(rho_Rl, temp1);
-       temp  += temp1; 
-
-       temp  *= 0.25;
-
-       temp  += pres_Rl; 
-
-       f_l.SetSubVector(offsets_face[1], temp);
-
-       // rho_v 
-
-       temp = rho_uv_Rl[0];
-
-       getSparseMat(vel_Rl[0]).Mult(rho_vel_Rl[1], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_Rl[1]).Mult(rho_vel_Rl[0], temp1);
-       temp  += temp1; 
-
-       getSparseMat(uv_Rl[0]).Mult(rho_Rl, temp1);
-       temp  += temp1; 
-
-       temp  *= 0.25;
-
-       f_l.SetSubVector(offsets_face[2], temp);
-
-       // rho_w 
-
-       temp = rho_uv_Rl[1];
-
-       getSparseMat(vel_Rl[0]).Mult(rho_vel_Rl[2], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_Rl[2]).Mult(rho_vel_Rl[0], temp1);
-       temp  += temp1; 
-
-       getSparseMat(uv_Rl[1]).Mult(rho_Rl, temp1);
-       temp  += temp1; 
-
-       temp  *= 0.25;
-
-       f_l.SetSubVector(offsets_face[3], temp);
-   
-       // rho_e 
-
-       temp   = 0.0;
-
-       getSparseMat(vel_Rl[0]).Mult(rho_vel_sq_Rl[0], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_Rl[1]).Mult(rho_uv_Rl[0], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_Rl[2]).Mult(rho_uv_Rl[1], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_sq_Rl[0]).Mult(rho_vel_Rl[0], temp1);
-       temp  += temp1; 
-
-       getSparseMat(uv_Rl[0])    .Mult(rho_vel_Rl[1], temp1);
-       temp  += temp1; 
-
-       getSparseMat(uv_Rl[1])    .Mult(rho_vel_Rl[2], temp1);
-       temp  += temp1; 
-
-       temp  *= 0.25;
-
-       temp1  = pu_Rl[0];
-       
-       getSparseMat(vel_Rl[0]).Mult(pres_Rl, temp2);
-
-       temp1 += temp2;
-       temp1 *= 0.5;
-
-       temp  += temp1;
-
-       temp1  = 0.0;  
-
-       getSparseMat(rho_vel_sqrtT_Rl[0]).Mult(sqrtT_Rl, temp2);
-       temp1 += temp2; 
-
-       getSparseMat(rho_sqrtT_Rl)       .Mult(vel_sqrtT_Rl[0], temp2);
-       temp1 += temp2; 
-
-       temp1 *= 0.5*R_gas/(gamm - 1);
-
-       temp  += temp1;
-
-       f_l.SetSubVector(offsets_face[4], temp);
-
-   }
-
-   {
-       // Y -dir
-       // Density
-
-       temp = rho_vel_Rl[1];
-
-       getSparseMat(vel_Rl[1]).Mult(rho_Rl, temp1);
-       temp += temp1; 
-
-       temp *= 0.5;
-
-       f_l.SetSubVector(offsets_face[var_dim + 0], temp);
-       
-       // rho_u 
-       
-       temp = rho_uv_Rl[0];
-
-       getSparseMat(vel_Rl[0]).Mult(rho_vel_Rl[1], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_Rl[1]).Mult(rho_vel_Rl[0], temp1);
-       temp  += temp1; 
-
-       getSparseMat(uv_Rl[0]).Mult(rho_Rl, temp1);
-       temp  += temp1; 
-
-       temp  *= 0.25;
-
-       f_l.SetSubVector(offsets_face[var_dim + 1], temp);
-
-       // rho_v 
-
-       temp = rho_vel_sq_Rl[1];
-
-       getSparseMat(vel_Rl[1]).Mult(rho_vel_Rl[1], temp1);
-       temp1 *= 2.0;
-       temp  += temp1; 
-
-       getSparseMat(vel_sq_Rl[1]).Mult(rho_Rl, temp1);
-       temp  += temp1; 
-
-       temp  *= 0.25;
-
-       temp  += pres_Rl; 
-
-       f_l.SetSubVector(offsets_face[var_dim + 2], temp);
-
-       // rho_w 
-
-       temp = rho_uv_Rl[2];
-
-       getSparseMat(vel_Rl[1]).Mult(rho_vel_Rl[2], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_Rl[2]).Mult(rho_vel_Rl[1], temp1);
-       temp  += temp1; 
-
-       getSparseMat(uv_Rl[2]).Mult(rho_Rl, temp1);
-       temp  += temp1; 
-
-       temp  *= 0.25;
-
-       f_l.SetSubVector(offsets_face[var_dim + 3], temp);
-   
-       // rho_e 
-
-       temp   = 0.0;
-
-       getSparseMat(vel_Rl[0]).Mult(rho_uv_Rl[0], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_Rl[1]).Mult(rho_vel_sq_Rl[1], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_Rl[2]).Mult(rho_uv_Rl[2], temp1);
-       temp  += temp1; 
-
-       getSparseMat(uv_Rl[0]) .Mult(rho_vel_Rl[0], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_sq_Rl[1]).Mult(rho_vel_Rl[1], temp1);
-       temp  += temp1; 
-
-       getSparseMat(uv_Rl[2])    .Mult(rho_vel_Rl[2], temp1);
-       temp  += temp1; 
-
-       temp  *= 0.25;
-
-       temp1  = pu_Rl[1];
-       
-       getSparseMat(vel_Rl[1]).Mult(pres_Rl, temp2);
-
-       temp1 += temp2;
-       temp1 *= 0.5;
-
-       temp  += temp1;
-
-       temp1  = 0.0;  
-
-       getSparseMat(rho_vel_sqrtT_Rl[1]).Mult(sqrtT_Rl, temp2);
-       temp1 += temp2; 
-
-       getSparseMat(rho_sqrtT_Rl)       .Mult(vel_sqrtT_Rl[1], temp2);
-       temp1 += temp2; 
-
-       temp1 *= 0.5*R_gas/(gamm - 1);
-
-       temp  += temp1;
- 
-       f_l.SetSubVector(offsets_face[var_dim + 4], temp);
-
-   }
-
-   {
-       // Z -dir
-       // Density
-
-       temp = rho_vel_Rl[2];
-
-       getSparseMat(vel_Rl[2]).Mult(rho_Rl, temp1);
-       temp += temp1; 
-
-       temp *= 0.5;
-
-       f_l.SetSubVector(offsets_face[2*var_dim + 0], temp);
-       
-       // rho_u 
-       
-       temp = rho_uv_Rl[1];
-
-       getSparseMat(vel_Rl[0]).Mult(rho_vel_Rl[2], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_Rl[2]).Mult(rho_vel_Rl[0], temp1);
-       temp  += temp1; 
-
-       getSparseMat(uv_Rl[1]).Mult(rho_Rl, temp1);
-       temp  += temp1; 
-
-       temp  *= 0.25;
-
-       f_l.SetSubVector(offsets_face[2*var_dim + 1], temp);
-
-       // rho_v 
-
-       temp = rho_uv_Rl[2];
-
-       getSparseMat(vel_Rl[1]).Mult(rho_vel_Rl[2], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_Rl[2]).Mult(rho_vel_Rl[1], temp1);
-       temp  += temp1; 
-
-       getSparseMat(uv_Rl[2]).Mult(rho_Rl, temp1);
-       temp  += temp1; 
-
-       temp  *= 0.25;
-
-       f_l.SetSubVector(offsets_face[2*var_dim + 2], temp);
-
-       // rho_w 
-
-       temp = rho_vel_sq_Rl[2];
-
-       getSparseMat(vel_Rl[2]).Mult(rho_vel_Rl[2], temp1);
-       temp1 *= 2.0;
-       temp  += temp1; 
-
-       getSparseMat(vel_sq_Rl[2]).Mult(rho_Rl, temp1);
-       temp  += temp1; 
-
-       temp  *= 0.25;
-
-       temp  += pres_Rl; 
-
-       f_l.SetSubVector(offsets_face[2*var_dim + 3], temp);
-   
-       // rho_e 
-
-       temp   = 0.0;
-
-       getSparseMat(vel_Rl[0]).Mult(rho_uv_Rl[1], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_Rl[1]).Mult(rho_uv_Rl[2], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_Rl[2]).Mult(rho_vel_sq_Rl[2], temp1);
-       temp  += temp1; 
-
-       getSparseMat(uv_Rl[1]) .Mult(rho_vel_Rl[0], temp1);
-       temp  += temp1; 
-
-       getSparseMat(uv_Rl[2]).Mult(rho_vel_Rl[1], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_sq_Rl[2]).Mult(rho_vel_Rl[2], temp1);
-       temp  += temp1; 
-
-       temp  *= 0.25;
-
-       temp1  = pu_Rl[2];
-       
-       getSparseMat(vel_Rl[2]).Mult(pres_Rl, temp2);
-
-       temp1 += temp2;
-       temp1 *= 0.5;
-
-       temp  += temp1;
-
-       temp1  = 0.0;  
-
-       getSparseMat(rho_vel_sqrtT_Rl[2]).Mult(sqrtT_Rl, temp2);
-       temp1 += temp2; 
-
-       getSparseMat(rho_sqrtT_Rl)       .Mult(vel_sqrtT_Rl[2], temp2);
-       temp1 += temp2; 
-
-       temp1 *= 0.5*R_gas/(gamm - 1);
-
-       temp  += temp1;
- 
-       f_l.SetSubVector(offsets_face[2*var_dim + 4], temp);
-
-   }
-
-   Vector rho_vel_Rr[dim]; // Restriction right
-   Vector vel_Rr[dim], rho_vel_sq_Rr[dim], rho_uv_Rr[dim];
-   Vector vel_sq_Rr[dim], uv_Rr[dim];
-   Vector pres_Rr(n_face_pts), rho_Rr(n_face_pts); 
-   Vector rho_eu_Rr[dim], eu_Rr[dim], E_Rr(n_face_pts), e_Rr(n_face_pts); 
-   Vector pu_Rr[dim]; 
-
-   Vector sqrtT_Rr(n_face_pts), rho_sqrtT_Rr(n_face_pts);
-   Vector rho_vel_sqrtT_Rr[dim], vel_sqrtT_Rr[dim]; 
-
-   glob_proj_r->Mult(rho ,  rho_Rr );
-   glob_proj_r->Mult(pres,  pres_Rr);
-   glob_proj_r->Mult(e,                e_Rr);
-   glob_proj_r->Mult(E,                E_Rr);
-   
-   glob_proj_r->Mult(sqrtT  ,          sqrtT_Rr);
-   glob_proj_r->Mult(rho_sqrtT,        rho_sqrtT_Rr);
-
-   for(int j = 0; j < dim; j++) 
-   {
-       rho_vel_Rr[j].SetSize(n_face_pts); vel_Rr[j].SetSize(n_face_pts); rho_uv_Rr[j].SetSize(n_face_pts);
-       uv_Rr[j].SetSize(n_face_pts);
-       rho_vel_sq_Rr[j].SetSize(n_face_pts); vel_sq_Rr[j].SetSize(n_face_pts);
-       rho_eu_Rr[j].SetSize(n_face_pts); eu_Rr[j].SetSize(n_face_pts);
-       pu_Rr[j].SetSize(n_face_pts); 
-       
-       rho_vel_sqrtT_Rr[j].SetSize(n_face_pts); vel_sqrtT_Rr[j].SetSize(n_face_pts);
-
-       glob_proj_r->Mult(rho_vel[j],     rho_vel_Rr[j]);
-       glob_proj_r->Mult(vel[j],         vel_Rr[j]);
-       glob_proj_r->Mult(rho_uv[j],      rho_uv_Rr[j]);
-       glob_proj_r->Mult(uv[j],          uv_Rr[j]);
-       glob_proj_r->Mult(rho_vel_sq[j],  rho_vel_sq_Rr[j]);
-       glob_proj_r->Mult(v_sq[j],        vel_sq_Rr[j]);
-       glob_proj_r->Mult(rho_eu[j],      rho_eu_Rr[j]);
-       glob_proj_r->Mult(eu[j],          eu_Rr[j]);
-       glob_proj_r->Mult(pu[j],          pu_Rr[j]);
-       
-       glob_proj_r->Mult(rho_vel_sqrtT[j], rho_vel_sqrtT_Rr[j]);
-       glob_proj_r->Mult(vel_sqrtT[j],     vel_sqrtT_Rr[j]);
-
-   }
-
-   {
-       // X -dir
-       // Density
-
-       temp = rho_vel_Rr[0];
-
-       getSparseMat(vel_Rr[0]).Mult(rho_Rr, temp1);
-       temp += temp1; 
-
-       temp *= 0.5;
-
-       f_r.SetSubVector(offsets_face[0], temp);
-       
-       // rho_u 
-       
-       temp = rho_vel_sq_Rr[0];
-
-       getSparseMat(vel_Rr[0]).Mult(rho_vel_Rr[0], temp1);
-       temp1 *= 2.0;
-       temp  += temp1; 
-
-       getSparseMat(vel_sq_Rr[0]).Mult(rho_Rr, temp1);
-       temp  += temp1; 
-
-       temp  *= 0.25;
-
-       temp  += pres_Rr; 
-
-       f_r.SetSubVector(offsets_face[1], temp);
-
-       // rho_v 
-
-       temp = rho_uv_Rr[0];
-
-       getSparseMat(vel_Rr[0]).Mult(rho_vel_Rr[1], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_Rr[1]).Mult(rho_vel_Rr[0], temp1);
-       temp  += temp1; 
-
-       getSparseMat(uv_Rr[0]).Mult(rho_Rr, temp1);
-       temp  += temp1; 
-
-       temp  *= 0.25;
-
-       f_r.SetSubVector(offsets_face[2], temp);
-
-       // rho_w 
-
-       temp = rho_uv_Rr[1];
-
-       getSparseMat(vel_Rr[0]).Mult(rho_vel_Rr[2], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_Rr[2]).Mult(rho_vel_Rr[0], temp1);
-       temp  += temp1; 
-
-       getSparseMat(uv_Rr[1]).Mult(rho_Rr, temp1);
-       temp  += temp1; 
-
-       temp  *= 0.25;
-
-       f_r.SetSubVector(offsets_face[3], temp);
-   
-       // rho_e 
-
-       temp   = 0.0;
-
-       getSparseMat(vel_Rr[0]).Mult(rho_vel_sq_Rr[0], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_Rr[1]).Mult(rho_uv_Rr[0], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_Rr[2]).Mult(rho_uv_Rr[1], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_sq_Rr[0]).Mult(rho_vel_Rr[0], temp1);
-       temp  += temp1; 
-
-       getSparseMat(uv_Rr[0])    .Mult(rho_vel_Rr[1], temp1);
-       temp  += temp1; 
-
-       getSparseMat(uv_Rr[1])    .Mult(rho_vel_Rr[2], temp1);
-       temp  += temp1; 
-
-       temp  *= 0.25;
-
-       temp1  = pu_Rr[0];
-       
-       getSparseMat(vel_Rr[0]).Mult(pres_Rr, temp2);
-
-       temp1 += temp2;
-       temp1 *= 0.5;
-
-       temp  += temp1;
-
-       temp1  = 0.0;  
-
-       getSparseMat(rho_vel_sqrtT_Rr[0]).Mult(sqrtT_Rr, temp2);
-       temp1 += temp2; 
-
-       getSparseMat(rho_sqrtT_Rr)       .Mult(vel_sqrtT_Rr[0], temp2);
-       temp1 += temp2; 
-
-       temp1 *= 0.5*R_gas/(gamm - 1);
-
-       temp  += temp1;
-
-       f_r.SetSubVector(offsets_face[4], temp);
-
-   }
-
-   {
-       // Y -dir
-       // Density
-
-       temp = rho_vel_Rr[1];
-
-       getSparseMat(vel_Rr[1]).Mult(rho_Rr, temp1);
-       temp += temp1; 
-
-       temp *= 0.5;
-
-       f_r.SetSubVector(offsets_face[var_dim + 0], temp);
-       
-       // rho_u 
-       
-       temp = rho_uv_Rr[0];
-
-       getSparseMat(vel_Rr[0]).Mult(rho_vel_Rr[1], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_Rr[1]).Mult(rho_vel_Rr[0], temp1);
-       temp  += temp1; 
-
-       getSparseMat(uv_Rr[0]).Mult(rho_Rr, temp1);
-       temp  += temp1; 
-
-       temp  *= 0.25;
-
-       f_r.SetSubVector(offsets_face[var_dim + 1], temp);
-
-       // rho_v 
-
-       temp = rho_vel_sq_Rr[1];
-
-       getSparseMat(vel_Rr[1]).Mult(rho_vel_Rr[1], temp1);
-       temp1 *= 2.0;
-       temp  += temp1; 
-
-       getSparseMat(vel_sq_Rr[1]).Mult(rho_Rr, temp1);
-       temp  += temp1; 
-
-       temp  *= 0.25;
-
-       temp  += pres_Rr; 
-
-       f_r.SetSubVector(offsets_face[var_dim + 2], temp);
-
-       // rho_w 
-
-       temp = rho_uv_Rr[2];
-
-       getSparseMat(vel_Rr[1]).Mult(rho_vel_Rr[2], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_Rr[2]).Mult(rho_vel_Rr[1], temp1);
-       temp  += temp1; 
-
-       getSparseMat(uv_Rr[2]).Mult(rho_Rr, temp1);
-       temp  += temp1; 
-
-       temp  *= 0.25;
-
-       f_r.SetSubVector(offsets_face[var_dim + 3], temp);
-   
-       // rho_e 
-
-       temp   = 0.0;
-
-       getSparseMat(vel_Rr[0]).Mult(rho_uv_Rr[0], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_Rr[1]).Mult(rho_vel_sq_Rr[1], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_Rr[2]).Mult(rho_uv_Rr[2], temp1);
-       temp  += temp1; 
-
-       getSparseMat(uv_Rr[0]) .Mult(rho_vel_Rr[0], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_sq_Rr[1]).Mult(rho_vel_Rr[1], temp1);
-       temp  += temp1; 
-
-       getSparseMat(uv_Rr[2])    .Mult(rho_vel_Rr[2], temp1);
-       temp  += temp1; 
-
-       temp  *= 0.25;
-
-       temp1  = pu_Rr[1];
-       
-       getSparseMat(vel_Rr[1]).Mult(pres_Rr, temp2);
-
-       temp1 += temp2;
-       temp1 *= 0.5;
-
-       temp  += temp1;
-
-       temp1  = 0.0;  
-
-       getSparseMat(rho_vel_sqrtT_Rr[1]).Mult(sqrtT_Rr, temp2);
-       temp1 += temp2; 
-
-       getSparseMat(rho_sqrtT_Rr)       .Mult(vel_sqrtT_Rr[1], temp2);
-       temp1 += temp2; 
-
-       temp1 *= 0.5*R_gas/(gamm - 1);
-
-       temp  += temp1;
-
-       f_r.SetSubVector(offsets_face[var_dim + 4], temp);
-
-   }
-
-   {
-       // Z -dir
-       // Density
-
-       temp = rho_vel_Rr[2];
-
-       getSparseMat(vel_Rr[2]).Mult(rho_Rr, temp1);
-       temp += temp1; 
-
-       temp *= 0.5;
-
-       f_r.SetSubVector(offsets_face[2*var_dim + 0], temp);
-       
-       // rho_u 
-       
-       temp = rho_uv_Rr[1];
-
-       getSparseMat(vel_Rr[0]).Mult(rho_vel_Rr[2], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_Rr[2]).Mult(rho_vel_Rr[0], temp1);
-       temp  += temp1; 
-
-       getSparseMat(uv_Rr[1]).Mult(rho_Rr, temp1);
-       temp  += temp1; 
-
-       temp  *= 0.25;
-
-       f_r.SetSubVector(offsets_face[2*var_dim + 1], temp);
-
-       // rho_v 
-
-       temp = rho_uv_Rr[2];
-
-       getSparseMat(vel_Rr[1]).Mult(rho_vel_Rr[2], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_Rr[2]).Mult(rho_vel_Rr[1], temp1);
-       temp  += temp1; 
-
-       getSparseMat(uv_Rr[2]).Mult(rho_Rr, temp1);
-       temp  += temp1; 
-
-       temp  *= 0.25;
-
-       f_r.SetSubVector(offsets_face[2*var_dim + 2], temp);
-
-       // rho_w 
-
-       temp = rho_vel_sq_Rr[2];
-
-       getSparseMat(vel_Rr[2]).Mult(rho_vel_Rr[2], temp1);
-       temp1 *= 2.0;
-       temp  += temp1; 
-
-       getSparseMat(vel_sq_Rr[2]).Mult(rho_Rr, temp1);
-       temp  += temp1; 
-
-       temp  *= 0.25;
-
-       temp  += pres_Rr; 
-
-       f_r.SetSubVector(offsets_face[2*var_dim + 3], temp);
-   
-       // rho_e 
-
-       temp   = 0.0;
-
-       getSparseMat(vel_Rr[0]).Mult(rho_uv_Rr[1], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_Rr[1]).Mult(rho_uv_Rr[2], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_Rr[2]).Mult(rho_vel_sq_Rr[2], temp1);
-       temp  += temp1; 
-
-       getSparseMat(uv_Rr[1]) .Mult(rho_vel_Rr[0], temp1);
-       temp  += temp1; 
-
-       getSparseMat(uv_Rr[2]).Mult(rho_vel_Rr[1], temp1);
-       temp  += temp1; 
-
-       getSparseMat(vel_sq_Rr[2]).Mult(rho_vel_Rr[2], temp1);
-       temp  += temp1; 
-
-       temp  *= 0.25;
-
-       temp1  = pu_Rr[2];
-       
-       getSparseMat(vel_Rr[2]).Mult(pres_Rr, temp2);
-
-       temp1 += temp2;
-       temp1 *= 0.5;
-
-       temp  += temp1;
-
-       temp1  = 0.0;  
-
-       getSparseMat(rho_vel_sqrtT_Rr[2]).Mult(sqrtT_Rr, temp2);
-       temp1 += temp2; 
-
-       getSparseMat(rho_sqrtT_Rr)       .Mult(vel_sqrtT_Rr[2], temp2);
-       temp1 += temp2; 
-
-       temp1 *= 0.5*R_gas/(gamm - 1);
-
-       temp  += temp1;
-
-       f_r.SetSubVector(offsets_face[2*var_dim + 4], temp);
-
-   }
-}
-
 
 /*
  * For Gauss points, after we guarantee conservation, there are unbalanced terms in the
@@ -3618,600 +2729,6 @@ SparseMatrix getSparseMat(const Vector &x)
         a.Set(i, i, x(i));
 
     return a;
-}
-
-
-
-void getSF3SplitDx(int dim, 
-        const HypreParMatrix &K_x, const HypreParMatrix &K_y, const HypreParMatrix &K_z, 
-        const Vector &u, Vector &f_dx) 
-{
-    int var_dim = dim + 2;
-    int offset  = u.Size()/var_dim;
-
-    Array<int> offsets[dim*var_dim];
-    for(int i = 0; i < dim*var_dim; i++)
-    {
-        offsets[i].SetSize(offset);
-    }
-
-    for(int j = 0; j < dim*var_dim; j++)
-    {
-        for(int i = 0; i < offset; i++)
-        {
-            offsets[j][i] = j*offset + i ;
-        }
-    }
-    Vector rho, E;
-    u.GetSubVector(offsets[0],           rho   );
-    u.GetSubVector(offsets[var_dim - 1],      E);
-
-    Vector rho_vel[dim];
-    for(int i = 0; i < dim; i++) u.GetSubVector(offsets[1 + i], rho_vel[i]);
-
-    Vector vel[dim], rho_vel_sq[dim], rho_uv[dim], uv[dim], v_sq[dim];
-    for(int i = 0; i < dim; i++) 
-    {
-        vel[i].SetSize(offset); rho_vel_sq[i].SetSize(offset); rho_uv[i].SetSize(offset);
-        uv[i].SetSize(offset);
-        v_sq[i].SetSize(offset);
-    }
-
-    Vector vel_sq_V(offset), rho_vbar_sq(offset); // rho(u^2 + v^2 + w^2) 
-    Vector T(offset), pres(offset); // (rho*Cv*T + p)*u, p
-    Vector pu[dim]; 
-    Vector e(offset), eu[dim], rho_eu[dim]; 
-    Vector sqrtT(offset), rho_sqrtT(offset), rho_vel_sqrtT[dim], vel_sqrtT[dim];  // sqrt(T)
-    for(int i = 0; i < dim; i++) 
-    {
-        eu[i]           .SetSize(offset);
-        rho_eu[i]       .SetSize(offset);
-        pu[i]           .SetSize(offset);
-        rho_vel_sqrtT[i].SetSize(offset);
-        vel_sqrtT[i]    .SetSize(offset);
-    }
-
-    for(int i = 0; i < offset; i++)
-    {
-        double vel_sq = 0.0;
-        for(int j = 0; j < dim; j++)
-        {
-            vel[j][i]        = rho_vel[j](i)/rho(i);
-            vel_sq          += pow(vel[j][i], 2);
-
-            rho_vel_sq[j][i] = rho_vel[j](i)*vel[j](i);
-            v_sq[j][i]       = vel[j](i)*vel[j](i);
-        }
-        
-        vel_sq_V[i]      = vel_sq;
-        rho_vbar_sq[i]   = rho[i]*vel_sq;
-
-        pres[i]          = (E(i) - 0.5*rho(i)*vel_sq)*(gamm - 1);
-        T[i]             = pres(i)/(rho(i)*R_gas);
-        e[i]             =  E(i)/rho(i);
-
-        sqrtT[i]         = std::sqrt(T[i]);
-        rho_sqrtT[i]     = rho[i]*sqrtT[i];
-
-        for(int j = 0; j < dim; j++)
-        {
-            eu[j](i)            = e(i)*vel[j](i);
-            rho_eu[j](i)        = E(i)*vel[j](i);
-            
-            pu[j](i)            = pres(i)*vel[j](i);
-
-            vel_sqrtT[j][i]     = vel[j][i]*sqrtT[i];
-            rho_vel_sqrtT[j][i] = rho[i]*vel_sqrtT[j][i];
-        }
-
-        rho_uv[0](i)  = rho_vel[0](i)*vel[1](i); // rho*u*v
-        rho_uv[1](i)  = rho_vel[0](i)*vel[2](i); // rho*u*w
-        rho_uv[2](i)  = rho_vel[1](i)*vel[2](i); // rho*v*w
-    
-        uv[0](i)      = vel[0](i)*vel[1](i); // rho*u*v
-        uv[1](i)      = vel[0](i)*vel[2](i); // rho*u*w
-        uv[2](i)      = vel[1](i)*vel[2](i); // rho*v*w
-
-    }
-
-    Vector rho_vel_dx[dim];
-    Vector vel_dx[dim], rho_vel_sq_dx(offset), rho_uv_dx[dim];
-    Vector vel_sq_dx(offset), uv_dx[dim];
-    Vector vbar_sq_dx(offset), rho_vbar_sq_dx(offset);
-    Vector pres_dx(offset), rho_dx(offset); 
-    Vector rho_eu_dx(offset), eu_dx(offset), E_dx(offset), e_dx(offset); 
-    Vector pu_dx(offset); 
-    Vector sqrtT_dx(offset), rho_sqrtT_dx(offset), rho_vel_sqrtT_dx(offset), vel_sqrtT_dx(offset); 
-
-    K_x.Mult(rho ,  rho_dx );
-    K_x.Mult(pres,  pres_dx);
-    K_x.Mult(pu[0], pu_dx);
-    K_x.Mult(rho_vel_sq[0],    rho_vel_sq_dx);
-    K_x.Mult(v_sq[0],          vel_sq_dx);
-    K_x.Mult(sqrtT  ,          sqrtT_dx);
-    K_x.Mult(rho_sqrtT,        rho_sqrtT_dx);
-    K_x.Mult(rho_vel_sqrtT[0], rho_vel_sqrtT_dx);
-    K_x.Mult(vel_sqrtT[0],     vel_sqrtT_dx);
-    for(int j = 0; j < dim; j++) 
-    {
-        rho_vel_dx[j].SetSize(offset); vel_dx[j].SetSize(offset); rho_uv_dx[j].SetSize(offset);
-        uv_dx[j].SetSize(offset);
-
-        K_x.Mult(rho_vel[j],    rho_vel_dx[j]);
-        K_x.Mult(vel[j],        vel_dx[j]);
-        K_x.Mult(rho_uv[j],     rho_uv_dx[j]);
-        K_x.Mult(uv[j],         uv_dx[j]);
-    }
-
-    Vector fx(var_dim*offset);
-    fx = 0.0;
-
-    Vector temp(offset), temp1(offset), temp2(offset), temp3(offset);
-
-    SparseMatrix rho_mat    = getSparseMat(rho   );
-    {
-        // X - derivatives
-        
-        // rho
-        
-        temp1  = rho_vel_dx[0];
-        rho_mat.Mult(vel_dx[0], temp2);
-        temp1 += temp2;
-        getSparseMat(vel[0]).Mult(rho_dx,    temp3);
-        temp1 += temp3;
-        
-        temp1 *= 0.5;
-        
-        fx.SetSubVector(offsets[0], temp1);
-        
-        // rho_u
-        temp   = rho_vel_sq_dx;
-
-        rho_mat.              Mult(vel_sq_dx,     temp1);
-        getSparseMat(v_sq[0]).Mult(rho_dx,        temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(vel[0])    .Mult(rho_vel_dx[0], temp1);
-        getSparseMat(rho_vel[0]).Mult(vel_dx[0],     temp2);
-
-        temp1 += temp2;
-        temp1 *= 2.;
-
-        temp  += temp1;
-        temp  *= 0.25;
-        temp  += pres_dx;
-        
-        fx.SetSubVector(offsets[1], temp );
-        
-        // rho_v
-        temp   = rho_uv_dx[0]; 
-
-        rho_mat.            Mult(uv_dx[0],      temp1);
-        getSparseMat(uv[0]).Mult(rho_dx,        temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(vel[1])    .Mult(rho_vel_dx[0], temp1);
-        getSparseMat(rho_vel[0]).Mult(vel_dx[1],     temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(vel[0])    .Mult(rho_vel_dx[1], temp1);
-        getSparseMat(rho_vel[1]).Mult(vel_dx[0],     temp2);
-
-        temp += temp1; temp += temp2; // This is probably done
-
-        temp  *= 0.25;
- 
-        fx.SetSubVector(offsets[2], temp);
-        
-        // rho_w
-        temp   = rho_uv_dx[1]; 
-
-        getSparseMat(rho_vel[0]).Mult(vel_dx[2],     temp1);
-        getSparseMat(    vel[2]).Mult(rho_vel_dx[0], temp2);
-
-        temp += temp1; temp += temp2;
- 
-        getSparseMat(rho_vel[2]).Mult(vel_dx[0],     temp1);
-        getSparseMat(    vel[0]).Mult(rho_vel_dx[2], temp2);
-
-        temp += temp1; temp += temp2;
-
-        rho_mat            .Mult(uv_dx[1],  temp1);
-        getSparseMat(uv[1]).Mult(rho_dx,    temp2);
-
-        temp += temp1; temp += temp2;
-
-        temp *= 0.25;
-     
-        fx.SetSubVector(offsets[3], temp);
-    
-        // rho_e
- 
-        temp   = 0.0; 
-
-        getSparseMat(vel[0]        ).Mult(rho_vel_sq_dx, temp1);
-        getSparseMat(rho_vel_sq[0] ).Mult(vel_dx[0],     temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(vel[1]     ).Mult(rho_uv_dx[0], temp1);
-        getSparseMat(rho_uv[0]  ).Mult(vel_dx[1],    temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(vel[2]     ).Mult(rho_uv_dx[1], temp1);
-        getSparseMat(rho_uv[1]  ).Mult(vel_dx[2],    temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(rho_vel[0]).Mult(vel_sq_dx,     temp1);
-        getSparseMat(v_sq[0]   ).Mult(rho_vel_dx[0], temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(rho_vel[1]).Mult(uv_dx[0],      temp1);
-        getSparseMat(uv[0]     ).Mult(rho_vel_dx[1], temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(rho_vel[2]).Mult(uv_dx[1],      temp1);
-        getSparseMat(uv[1]     ).Mult(rho_vel_dx[2], temp2);
-
-        temp += temp1; temp += temp2;
-        
-        temp *= 0.25;
-
-        temp1 = pu_dx;
-
-        getSparseMat(pres)  .Mult(vel_dx[0], temp2);
-        getSparseMat(vel[0]).Mult(pres_dx,   temp3);
-        temp1 += temp2; temp1 += temp3;
-
-        temp1 *= 0.5;
-
-        temp  += temp1;
-
-        temp1  = 0.0;  
-
-        getSparseMat(rho_vel_sqrtT[0]) .Mult(sqrtT_dx, temp2);
-        getSparseMat(sqrtT)            .Mult(rho_vel_sqrtT_dx,   temp3);
-        temp1 += temp2; temp1 += temp3;
-
-        getSparseMat(rho_sqrtT)    .Mult(vel_sqrtT_dx, temp2);
-        getSparseMat(vel_sqrtT[0]) .Mult(rho_sqrtT_dx, temp3);
-        temp1 += temp2; temp1 += temp3;
-
-        temp1 *= 0.5*R_gas/(gamm - 1);
-
-        temp  += temp1;
-
-        fx.SetSubVector(offsets[4], temp);
-        
-    }
-
-    K_y.Mult(rho , rho_dx );
-    K_y.Mult(pres, pres_dx);
-    K_y.Mult(pu[1], pu_dx);
-    K_y.Mult(rho_vel_sq[1],    rho_vel_sq_dx);
-    K_y.Mult(v_sq[1],          vel_sq_dx);
-    K_y.Mult(sqrtT  ,          sqrtT_dx);
-    K_y.Mult(rho_sqrtT,        rho_sqrtT_dx);
-    K_y.Mult(rho_vel_sqrtT[1], rho_vel_sqrtT_dx);
-    K_y.Mult(vel_sqrtT[1],     vel_sqrtT_dx);
-    for(int j = 0; j < dim; j++) 
-    {
-        K_y.Mult(rho_vel[j],    rho_vel_dx[j]);
-        K_y.Mult(vel[j],        vel_dx[j]);
-        K_y.Mult(rho_uv[j],     rho_uv_dx[j]);
-        K_y.Mult(uv[j],         uv_dx[j]);
-    }
-
-    {
-        // Y -deri
-
-        temp1  = rho_vel_dx[1];
-        getSparseMat(rho   ).Mult(vel_dx[1], temp2);
-        temp1 += temp2;
-        getSparseMat(vel[1]).Mult(rho_dx,    temp3);
-        temp1 += temp3;
-        
-        temp1 *= 0.5;
-        
-        fx.AddElementVector(offsets[0], temp1); // rho
-    
-        // rho_u
-        temp   = rho_uv_dx[0];
-
-        rho_mat.            Mult(uv_dx[0],     temp1);
-        getSparseMat(uv[0]).Mult(rho_dx,       temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(vel[0])    .Mult(rho_vel_dx[1], temp1);
-        getSparseMat(rho_vel[1]).Mult(vel_dx[0],     temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(vel[1])    .Mult(rho_vel_dx[0], temp1);
-        getSparseMat(rho_vel[0]).Mult(vel_dx[1],     temp2);
-        
-        temp += temp1; temp += temp2;
-
-        temp  *= 0.25;
-        
-        fx.AddElementVector(offsets[1], temp );
-        
-        // rho_v
-        temp   = rho_vel_sq_dx; 
-
-        rho_mat.              Mult(vel_sq_dx,     temp1);
-        getSparseMat(v_sq[1]).Mult(rho_dx,        temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(vel[1])    .Mult(rho_vel_dx[1], temp1);
-        getSparseMat(rho_vel[1]).Mult(vel_dx[1],     temp2);
-
-        temp1 += temp2;
-        temp1 *= 2.0;
-
-        temp += temp1;
-
-        temp  *= 0.25;
-
-        temp  += pres_dx;
-        
-        fx.AddElementVector(offsets[2], temp);
-        
-        // rho_w
-        temp   = rho_uv_dx[2]; 
-
-        getSparseMat(rho_vel[1]).Mult(vel_dx[2],     temp1);
-        getSparseMat(    vel[2]).Mult(rho_vel_dx[1], temp2);
-
-        temp += temp1; temp += temp2;
- 
-        getSparseMat(rho_vel[2]).Mult(vel_dx[1],     temp1);
-        getSparseMat(    vel[1]).Mult(rho_vel_dx[2], temp2);
-
-        temp += temp1; temp += temp2;
-
-        rho_mat            .Mult(uv_dx[2],  temp1);
-        getSparseMat(uv[2]).Mult(rho_dx,    temp2);
-
-        temp += temp1; temp += temp2;
-
-        temp *= 0.25;
- 
-        fx.AddElementVector(offsets[3], temp);
-        
-        // rho_e
- 
-        temp   = 0.0; 
-
-        getSparseMat(vel[0]     ).Mult(rho_uv_dx[0],     temp1);
-        getSparseMat(rho_uv[0]  ).Mult(vel_dx[0],    temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(vel[1]        ).Mult(rho_vel_sq_dx, temp1);
-        getSparseMat(rho_vel_sq[1] ).Mult(vel_dx[1],    temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(vel[2]     ).Mult(rho_uv_dx[2], temp1);
-        getSparseMat(rho_uv[2]  ).Mult(vel_dx[2],    temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(rho_vel[0]).Mult(uv_dx[0],     temp1);
-        getSparseMat(uv[0]     ).Mult(rho_vel_dx[0], temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(rho_vel[1]).Mult(vel_sq_dx,     temp1);
-        getSparseMat(v_sq[1]   ).Mult(rho_vel_dx[1], temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(rho_vel[2]).Mult(uv_dx[2],      temp1);
-        getSparseMat(uv[2]     ).Mult(rho_vel_dx[2], temp2);
-
-        temp += temp1; temp += temp2;
-        
-        temp *= 0.25;
-
-        temp1 = pu_dx;
-
-        getSparseMat(pres)  .Mult(vel_dx[1], temp2);
-        getSparseMat(vel[1]).Mult(pres_dx,   temp3);
-        temp1 += temp2; temp1 += temp3;
-
-        temp1 *= 0.5;
-
-        temp  += temp1;
-
-        temp1  = 0.0;  
-
-        getSparseMat(rho_vel_sqrtT[1]) .Mult(sqrtT_dx, temp2);
-        getSparseMat(sqrtT)            .Mult(rho_vel_sqrtT_dx,   temp3);
-        temp1 += temp2; temp1 += temp3;
-
-        getSparseMat(rho_sqrtT)    .Mult(vel_sqrtT_dx, temp2);
-        getSparseMat(vel_sqrtT[1]) .Mult(rho_sqrtT_dx, temp3);
-        temp1 += temp2; temp1 += temp3;
-
-        temp1 *= 0.5*R_gas/(gamm - 1);
-
-        temp  += temp1;
-
-
-        fx.AddElementVector(offsets[4], temp);
-    }
-
-
-    K_z.Mult(rho , rho_dx );
-    K_z.Mult(pres, pres_dx);
-    K_z.Mult(pu[2], pu_dx);
-    K_z.Mult(rho_vel_sq[2],    rho_vel_sq_dx);
-    K_z.Mult(v_sq[2],          vel_sq_dx);
-    K_z.Mult(sqrtT  ,          sqrtT_dx);
-    K_z.Mult(rho_sqrtT,        rho_sqrtT_dx);
-    K_z.Mult(rho_vel_sqrtT[2], rho_vel_sqrtT_dx);
-    K_z.Mult(vel_sqrtT[2],     vel_sqrtT_dx);
-    for(int j = 0; j < dim; j++) 
-    {
-        K_z.Mult(rho_vel[j],    rho_vel_dx[j]);
-        K_z.Mult(vel[j],        vel_dx[j]);
-        K_z.Mult(rho_uv[j],     rho_uv_dx[j]);
-        K_z.Mult(uv[j],         uv_dx[j]);
-    }
-    
-    {
-        // Z -deri
-        temp1  = rho_vel_dx[2];
-        getSparseMat(rho   ).Mult(vel_dx[2], temp2);
-        temp1 += temp2;
-        getSparseMat(vel[2]).Mult(rho_dx,    temp3);
-        temp1 += temp3;
-        
-        temp1 *= 0.5;
-        
-        fx.AddElementVector(offsets[0], temp1); // rho
-        
-        // rho_u
-        temp   = rho_uv_dx[1];
-
-        rho_mat.            Mult(uv_dx[1],     temp1);
-        getSparseMat(uv[1]).Mult(rho_dx,       temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(vel[0])    .Mult(rho_vel_dx[2], temp1);
-        getSparseMat(rho_vel[2]).Mult(vel_dx[0],     temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(vel[2])    .Mult(rho_vel_dx[0], temp1);
-        getSparseMat(rho_vel[0]).Mult(vel_dx[2],     temp2);
-        
-        temp += temp1; temp += temp2;
-
-        temp  *= 0.25;
-        
-        fx.AddElementVector(offsets[1], temp);
-        
-        // rho_v
-        temp   = rho_uv_dx[2]; 
-
-        rho_mat.            Mult(uv_dx[2],      temp1);
-        getSparseMat(uv[2]).Mult(rho_dx,        temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(vel[2])    .Mult(rho_vel_dx[1], temp1);
-        getSparseMat(rho_vel[1]).Mult(vel_dx[2],     temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(vel[1])    .Mult(rho_vel_dx[2], temp1);
-        getSparseMat(rho_vel[2]).Mult(vel_dx[1],     temp2);
-
-        temp += temp1; temp += temp2; // This is probably done
-
-        temp  *= 0.25;
- 
-        fx.AddElementVector(offsets[2], temp);
-        
-        // rho_w
-        temp   = rho_vel_sq_dx; 
-
-        getSparseMat(rho_vel[2]).Mult(vel_dx[2],     temp1);
-        getSparseMat(    vel[2]).Mult(rho_vel_dx[2], temp2);
-
-        temp1 += temp2;
-        temp1 *= 2.;
-        temp  += temp1;
-
-        rho_mat              .Mult(vel_sq_dx, temp1);
-        getSparseMat(v_sq[2]).Mult(rho_dx,    temp2);
-
-        temp  += temp1; temp += temp2;
-
-        temp  *= 0.25;
- 
-        temp  += pres_dx;
-        
-        fx.AddElementVector(offsets[3], temp);
-        
-        // rho_e
-     
-        temp   = 0.0; 
-
-        getSparseMat(vel[0]    ).Mult(rho_uv_dx[1], temp1);
-        getSparseMat(rho_uv[1] ).Mult(vel_dx[0],    temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(vel[1]     ).Mult(rho_uv_dx[2], temp1);
-        getSparseMat(rho_uv[2]  ).Mult(vel_dx[1],    temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(vel[2]        ).Mult(rho_vel_sq_dx,     temp1);
-        getSparseMat(rho_vel_sq[2] ).Mult(vel_dx[2], temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(rho_vel[0]).Mult(uv_dx[1],     temp1);
-        getSparseMat(uv[1]     ).Mult(rho_vel_dx[0], temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(rho_vel[1]).Mult(uv_dx[2],     temp1);
-        getSparseMat(uv[2]     ).Mult(rho_vel_dx[1], temp2);
-
-        temp += temp1; temp += temp2;
-
-        getSparseMat(rho_vel[2]).Mult(vel_sq_dx,     temp1);
-        getSparseMat(v_sq[2]   ).Mult(rho_vel_dx[2], temp2);
-
-        temp += temp1; temp += temp2;
-        
-        temp *= 0.25;
-
-        temp1 = pu_dx;
-
-        getSparseMat(pres)  .Mult(vel_dx[2], temp2);
-        getSparseMat(vel[2]).Mult(pres_dx,   temp3);
-        temp1 += temp2; temp1 += temp3;
-
-        temp1 *= 0.5;
-
-        temp  += temp1;
-
-        temp1  = 0.0;  
-
-        getSparseMat(rho_vel_sqrtT[2]) .Mult(sqrtT_dx, temp2);
-        getSparseMat(sqrtT)            .Mult(rho_vel_sqrtT_dx,   temp3);
-        temp1 += temp2; temp1 += temp3;
-
-        getSparseMat(rho_sqrtT)    .Mult(vel_sqrtT_dx, temp2);
-        getSparseMat(vel_sqrtT[2]) .Mult(rho_sqrtT_dx, temp3);
-        temp1 += temp2; temp1 += temp3;
-
-        temp1 *= 0.5*R_gas/(gamm - 1);
-
-        temp  += temp1;
-
-        fx.AddElementVector(offsets[4], temp);
-    }
-
-    f_dx = fx;
-
 }
 
 
@@ -5305,273 +3822,6 @@ void getVectorLFFlux(const double R, const double gamm, const int dim,
 
 
 
-/*
- * Get Interaction flux using the local KEP solver 
- */
-void getVectorSF3Flux(const double R, const double gamm, const int dim, const Vector &u1, const Vector &u2, 
-                                const Vector &nor, Vector &f_com)
-{
-    int var_dim = dim + 2;
-    int num_pts = u1.Size()/var_dim;
-
-    double Cv   = R/(gamm - 1);
-
-    double rho_L, E_L, e_L, vel_sq_L, T_L, p_L, a_L, h_L, sqrtRho_L, vnl, mach_L;
-    double rho_R, E_R, e_R, vel_sq_R, T_R, p_R, a_R, h_R, sqrtRho_R, vnr, mach_R;
-    double beta_L, beta_R;
-    double vsl, vsr, u_max;
-    Vector vel_L(dim);
-    Vector vel_R(dim);
-
-    double sSqrtRho, vel_sq_rho, r_rho, rho_h, rho_a, vn_rho;
-    Vector velRho(dim);
-
-    double drho, dp, dvn, du, dv, dw;
-    Vector LdU(4), ws(4), dws(4);
-
-    DenseMatrix roeM(dim + 2, 4);
-    Vector diss(var_dim); // dissipation 
-
-    double LM_z;
-    double dlambda1, dlambda3;
-
-    Vector nor_in(dim), nor_dim(dim);
-    double nor_l2;
-
-    for(int p = 0; p < num_pts; p++)
-    {
-        rho_L = u1(p);
-        
-        for (int i = 0; i < dim; i++)
-        {
-            vel_L(i) = u1((1 + i)*num_pts + p)/rho_L;    
-        }
-        E_L   = u1((var_dim - 1)*num_pts + p);
-        e_L   = E_L/rho_L; 
-
-        vel_sq_L = 0.0;
-        for (int i = 0; i < dim; i++)
-        {
-            vel_sq_L += pow(vel_L(i), 2) ;
-        }
-        T_L        = (E_L - 0.5*rho_L*vel_sq_L)/(rho_L*Cv);
-        p_L        = rho_L*R*T_L;
-        a_L        = sqrt(gamm * R * T_L);
-        h_L        = (E_L + p_L)/rho_L;
-        sqrtRho_L  = std::sqrt(rho_L);
-        beta_L     = 1./(2*R_gas*T_L);
-
-        rho_R = u2(p);
-        for (int i = 0; i < dim; i++)
-        {
-            vel_R(i) = u2((1 + i)*num_pts + p)/rho_R;    
-        }
-        E_R   = u2((var_dim - 1)*num_pts + p);
-        e_R   = E_R/rho_R; 
-    
-        vel_sq_R = 0.0;
-        for (int i = 0; i < dim; i++)
-        {
-            vel_sq_R += pow(vel_R(i), 2) ;
-        }
-        T_R       = (E_R - 0.5*rho_R*vel_sq_R)/(rho_R*Cv);
-        p_R       = rho_R*R*T_R;
-        a_R       = sqrt(gamm * R * T_R);
-        h_R       = (E_R + p_R)/rho_R;
-        sqrtRho_R = std::sqrt(rho_R);
-        beta_R     = 1./(2*R_gas*T_R);
-        
-        for (int i = 0; i < dim; i++)
-        {
-            double f_mass                                 = 0.25*(rho_L + rho_R)*(vel_L(i) + vel_R(i));
-            f_com((i*var_dim + 0)*num_pts + p)            = f_mass;
-            
-            for (int j = 0; j < dim; j++)
-                f_com((i*var_dim + 1 + j)*num_pts + p)    = 0.5*(vel_L(j) + vel_R(j))*f_mass;
-            
-            f_com((i*var_dim + 1 + i)*num_pts + p)       += 0.5*(p_L + p_R) ;
-
-            f_com((i*var_dim + var_dim - 1)*num_pts + p)  = -0.25*(vel_sq_L + vel_sq_R)*f_mass ;
-            f_com((i*var_dim + var_dim - 1)*num_pts + p) += ( ( 1.0/(gamm - 1) )*(R_gas)*(std::sqrt(T_L*T_R)) )
-                                                                *f_mass;
-            for (int j = 0; j < dim; j++)
-            {
-                f_com((i*var_dim + var_dim - 1)*num_pts + p)  += 0.5*(vel_L(j) + vel_R(j))
-                                                                *f_com((i*var_dim + 1 + j)*num_pts + p); 
-            }
-      
-        }
-    }
-    
-
-    for(int p = 0; p < num_pts; p++)
-    {
-        rho_L = u1(p);
-        
-        for (int i = 0; i < dim; i++)
-        {
-            vel_L(i) = u1((1 + i)*num_pts + p)/rho_L;    
-        }
-        E_L   = u1((var_dim - 1)*num_pts + p);
-
-        vel_sq_L = 0.0;
-        for (int i = 0; i < dim; i++)
-        {
-            vel_sq_L += pow(vel_L(i), 2) ;
-        }
-        T_L        = (E_L - 0.5*rho_L*vel_sq_L)/(rho_L*Cv);
-        p_L        = rho_L*R*T_L;
-        a_L        = sqrt(gamm * R * T_L);
-        h_L        = (E_L + p_L)/rho_L;
-        sqrtRho_L  = std::sqrt(rho_L);
-        mach_L     = std::sqrt(vel_sq_L)/a_L;
-
-        rho_R = u2(p);
-        for (int i = 0; i < dim; i++)
-        {
-            vel_R(i) = u2((1 + i)*num_pts + p)/rho_R;    
-        }
-        E_R   = u2((var_dim - 1)*num_pts + p);
-    
-        vel_sq_R = 0.0;
-        for (int i = 0; i < dim; i++)
-        {
-            vel_sq_R += pow(vel_R(i), 2) ;
-        }
-        T_R       = (E_R - 0.5*rho_R*vel_sq_R)/(rho_R*Cv);
-        p_R       = rho_R*R*T_R;
-        a_R       = sqrt(gamm * R * T_R);
-        h_R       = (E_R + p_R)/rho_R;
-        sqrtRho_R = std::sqrt(rho_R);
-        mach_R    = std::sqrt(vel_sq_R)/a_R;
-
-        for (int i = 0; i < dim; i++)
-        {
-            nor_in(i) = nor(i*num_pts + p);
-        }
-        nor_l2 = nor_in.Norml2();
-        nor_dim.Set(1/nor_l2, nor_in);
-
-        vnl   = 0.0, vnr = 0.0;
-        for (int i = 0; i < dim; i++)
-        {
-            vnl += vel_L[i]*nor_dim(i); 
-            vnr += vel_R[i]*nor_dim(i); 
-        }
-
-        sSqrtRho = 1./(sqrtRho_L + sqrtRho_R); 
-        vel_sq_rho = 0.0;;
-        for (int i = 0; i < dim; i++)
-        {
-            velRho(i)   = (sqrtRho_L*vel_L(i) + sqrtRho_R*vel_R(i))*sSqrtRho;
-            vel_sq_rho += velRho(i)*velRho(i);
-        }
-        r_rho = (sqrtRho_L*rho_L + sqrtRho_R*rho_R)*sSqrtRho;
-        rho_h = (sqrtRho_L*h_L   + sqrtRho_R*h_R)*sSqrtRho;
-        rho_a = std::sqrt((gamm - 1)*(rho_h - 0.5*vel_sq_rho));
-
-        vn_rho   = 0.0;
-        for (int i = 0; i < dim; i++)
-        {
-            vn_rho += velRho[i]*nor_dim(i); 
-        }
-
-       //Wave Strengths
-
-        drho = rho_R - rho_L ;//Density difference
-        dp   = p_R - p_L     ;//Pressure difference
-        dvn  = vnr - vnl     ;//Normal velocity difference
-
-        LM_z = std::min(1., std::max(mach_L, mach_R));
-        dlambda1 = (vnr - a_R) - (vnl - a_L);
-        dlambda3 = (vnr + a_R) - (vnl + a_L);
-
-        double beta     = 1./6.;
-
-
-        LdU(0) = (dp - r_rho*rho_a*LM_z*dvn )/(2.*rho_a*rho_a); //Left-moving acoustic wave strength
-        LdU(1) =  drho - dp/(rho_a*rho_a);                 //Entropy wave strength
-        LdU(2) = (dp + r_rho*rho_a*LM_z*dvn )/(2.*rho_a*rho_a); //Right-moving acoustic wave strength
-        LdU(3) = r_rho;                                    //Shear wave strength 
-
-        // Absolute values of the wave Speeds
-        ws(0) = std::abs(vn_rho - rho_a) + beta*std::abs(dlambda1); ;//Left-moving acoustic wave
-        ws(1) = std::abs(vn_rho);         //Entropy wave
-        ws(2) = std::abs(vn_rho + rho_a) + beta*std::abs(dlambda3); ;//Right-moving acoustic wave
-        ws(3) = std::abs(vn_rho) ;        //Shear waves
-
-        //Harten's Entropy Fix JCP(1983), 49, pp357-393: only for the nonlinear fields.
-        //NOTE: It avoids vanishing wave speeds by making a parabolic fit near ws = 0.
-        
-        dws(0) = 0.2; 
-        if ( ws(0) < dws(0) ) 
-             ws(0) = 0.5 * ( ws(0)*ws(0)/dws(0)+dws(0) );
-        dws(2) = 0.2; 
-        if ( ws(2) < dws(2) ) 
-             ws(3) = 0.5 * ( ws(2)*ws(2)/dws(2)+dws(2) );
-        
-        //Right Eigenvectors
-        //Note: Two shear wave components are combined into one, so that tangent vectors
-        //      are not required. And that's why there are only 4 vectors here.
-        //      See "I do like CFD, VOL.1" about how tangent vectors are eliminated.
-        
-        //  Left-moving acoustic wave
-        
-        roeM(0,0) = 1.; 
-        roeM(1,0) = velRho(0) - rho_a*nor_dim(0);
-        roeM(2,0) = velRho(1) - rho_a*nor_dim(1);  
-        roeM(3,0) = velRho(2) - rho_a*nor_dim(2);
-        roeM(4,0) = rho_h - rho_a*vn_rho;
-        
-        // Entropy wave
-           
-        roeM(0,1) = 1.; 
-        roeM(1,1) = velRho(0);
-        roeM(2,1) = velRho(1);
-        roeM(3,1) = velRho(2); 
-        roeM(4,1) = 0.5*vel_sq_rho;
-        
-        // Right-moving acoustic wave
-        
-        roeM(0,2) = 1.; 
-        roeM(1,2) = velRho(0) + rho_a*nor_dim(0);
-        roeM(2,2) = velRho(1) + rho_a*nor_dim(1);  
-        roeM(3,2) = velRho(2) + rho_a*nor_dim(2);
-        roeM(4,2) = rho_h + rho_a*vn_rho;
-
-        // Two shear wave components combined into one (wave strength incorporated).
-          
-        du = vel_R(0) - vel_L(0);
-        dv = vel_R(1) - vel_L(1);
-        dw = vel_R(2) - vel_L(2);
-
-        roeM(0,3) = 0.; 
-        roeM(1,3) = du - dvn*nor_dim(0);
-        roeM(2,3) = dv - dvn*nor_dim(1);
-        roeM(3,3) = dw - dvn*nor_dim(2);
-        roeM(4,3) = velRho(0)*du + velRho(1)*dv + velRho(2)*dw - vn_rho*dvn;
-
-        // Dissipation Term: |An|(UR-UL) = R|Lambda|L*dU = sum_k of [ ws(k) * R(:,k) * L*dU(k) ]
-        
-        for(int j = 0; j < var_dim; j++)
-            diss(j) = ws(0)*LdU(0)*roeM(j,0) + ws(1)*LdU(1)*roeM(j,1) 
-             + ws(2)*LdU(2)*roeM(j,2) + ws(3)*LdU(3)*roeM(j,3);
-
-        for (int i = 0; i < dim; i++)
-        {
-            for (int j = 0; j < var_dim; j++)
-            {
-                f_com((i*var_dim + j)*num_pts + p) += 
-                    -0.5*nor_dim(i)*diss(j);
-            }
-        }
-
-    }
-
-        
-}
-
-
 
 
 /*
@@ -5668,166 +3918,166 @@ void getVectorKGFlux(const double R, const double gamm, const int dim, const Vec
         
     }
  
-//    for(int p = 0; p < num_pts; p++)
-//    {
-//        rho_L = u1(p);
-//        
-//        for (int i = 0; i < dim; i++)
-//        {
-//            vel_L(i) = u1((1 + i)*num_pts + p)/rho_L;    
-//        }
-//        E_L   = u1((var_dim - 1)*num_pts + p);
-//
-//        vel_sq_L = 0.0;
-//        for (int i = 0; i < dim; i++)
-//        {
-//            vel_sq_L += pow(vel_L(i), 2) ;
-//        }
-//        T_L        = (E_L - 0.5*rho_L*vel_sq_L)/(rho_L*Cv);
-//        p_L        = rho_L*R*T_L;
-//        a_L        = sqrt(gamm * R * T_L);
-//        h_L        = (E_L + p_L)/rho_L;
-//        sqrtRho_L  = std::sqrt(rho_L);
-//
-//        rho_R = u2(p);
-//        for (int i = 0; i < dim; i++)
-//        {
-//            vel_R(i) = u2((1 + i)*num_pts + p)/rho_R;    
-//        }
-//        E_R   = u2((var_dim - 1)*num_pts + p);
-//    
-//        vel_sq_R = 0.0;
-//        for (int i = 0; i < dim; i++)
-//        {
-//            vel_sq_R += pow(vel_R(i), 2) ;
-//        }
-//        T_R       = (E_R - 0.5*rho_R*vel_sq_R)/(rho_R*Cv);
-//        p_R       = rho_R*R*T_R;
-//        a_R       = sqrt(gamm * R * T_R);
-//        h_R       = (E_R + p_R)/rho_R;
-//        sqrtRho_R = std::sqrt(rho_R);
-//
-//        for (int i = 0; i < dim; i++)
-//        {
-//            nor_in(i) = nor(i*num_pts + p);
-//        }
-//        nor_l2 = nor_in.Norml2();
-//        nor_dim.Set(1/nor_l2, nor_in);
-//
-//        vnl   = 0.0, vnr = 0.0;
-//        for (int i = 0; i < dim; i++)
-//        {
-//            vnl += vel_L[i]*nor_dim(i); 
-//            vnr += vel_R[i]*nor_dim(i); 
-//        }
-//
-//        sSqrtRho = 1./(sqrtRho_L + sqrtRho_R); 
-//        vel_sq_rho = 0.0;;
-//        for (int i = 0; i < dim; i++)
-//        {
-//            velRho(i)   = (sqrtRho_L*vel_L(i) + sqrtRho_R*vel_R(i))*sSqrtRho;
-//            vel_sq_rho += velRho(i)*velRho(i);
-//        }
-//        r_rho = (sqrtRho_L*rho_L + sqrtRho_R*rho_R)*sSqrtRho;
-//        rho_h = (sqrtRho_L*h_L   + sqrtRho_R*h_R)*sSqrtRho;
-//        rho_a = std::sqrt((gamm - 1)*(rho_h - 0.5*vel_sq_rho));
-//
-//        vn_rho   = 0.0;
-//        for (int i = 0; i < dim; i++)
-//        {
-//            vn_rho += velRho[i]*nor_dim(i); 
-//        }
-//
-//       //Wave Strengths
-//
-//        drho = rho_R - rho_L ;//Density difference
-//        dp   = p_R - p_L     ;//Pressure difference
-//        dvn  = vnr - vnl     ;//Normal velocity difference
-//
-//        LdU(0) = (dp - r_rho*rho_a*dvn )/(2.*rho_a*rho_a); //Left-moving acoustic wave strength
-//        LdU(1) =  drho - dp/(rho_a*rho_a);                 //Entropy wave strength
-//        LdU(2) = (dp + r_rho*rho_a*dvn )/(2.*rho_a*rho_a); //Right-moving acoustic wave strength
-//        LdU(3) = r_rho;                                    //Shear wave strength 
-//
-//        LM_z = std::min(1., std::max(mach_L, mach_R));
-//        dlambda1 = (vnr - a_R) - (vnl - a_L);
-//        dlambda3 = (vnr + a_R) - (vnl + a_L);
-//
-//        double beta     = 1./6.;
-//
-//        // Absolute values of the wave Speeds
-//        ws(0) = std::abs(vn_rho - rho_a + beta*dlambda1) ;//Left-moving acoustic wave
-//        ws(1) = std::abs(vn_rho);         //Entropy wave
-//        ws(2) = std::abs(vn_rho + rho_a + beta*dlambda3) ;//Right-moving acoustic wave
-//        ws(3) = std::abs(vn_rho) ;        //Shear waves
-//
-//        //Harten's Entropy Fix JCP(1983), 49, pp357-393: only for the nonlinear fields.
-//        //NOTE: It avoids vanishing wave speeds by making a parabolic fit near ws = 0.
-//        
-//        dws(0) = 0.2; 
-//        if ( ws(0) < dws(0) ) 
-//             ws(0) = 0.5 * ( ws(0)*ws(0)/dws(0)+dws(0) );
-//        dws(2) = 0.2; 
-//        if ( ws(2) < dws(2) ) 
-//             ws(3) = 0.5 * ( ws(2)*ws(2)/dws(2)+dws(2) );
-//        
-//        //Right Eigenvectors
-//        //Note: Two shear wave components are combined into one, so that tangent vectors
-//        //      are not required. And that's why there are only 4 vectors here.
-//        //      See "I do like CFD, VOL.1" about how tangent vectors are eliminated.
-//        
-//        //  Left-moving acoustic wave
-//        
-//        roeM(0,0) = 1.; 
-//        roeM(1,0) = velRho(0) - rho_a*nor_dim(0);
-//        roeM(2,0) = velRho(1) - rho_a*nor_dim(1);  
-//        roeM(3,0) = velRho(2) - rho_a*nor_dim(2);
-//        roeM(4,0) = rho_h - rho_a*vn_rho;
-//        
-//        // Entropy wave
-//           
-//        roeM(0,1) = 1.; 
-//        roeM(1,1) = velRho(0);
-//        roeM(2,1) = velRho(1);
-//        roeM(3,1) = velRho(2); 
-//        roeM(4,1) = 0.5*vel_sq_rho;
-//        
-//        // Right-moving acoustic wave
-//        
-//        roeM(0,2) = 1.; 
-//        roeM(1,2) = velRho(0) + rho_a*nor_dim(0);
-//        roeM(2,2) = velRho(1) + rho_a*nor_dim(1);  
-//        roeM(3,2) = velRho(2) + rho_a*nor_dim(2);
-//        roeM(4,2) = rho_h + rho_a*vn_rho;
-//
-//        // Two shear wave components combined into one (wave strength incorporated).
-//          
-//        du = vel_R(0) - vel_L(0);
-//        dv = vel_R(1) - vel_L(1);
-//        dw = vel_R(2) - vel_L(2);
-//
-//        roeM(0,3) = 0.; 
-//        roeM(1,3) = du - dvn*nor_dim(0);
-//        roeM(2,3) = dv - dvn*nor_dim(1);
-//        roeM(3,3) = dw - dvn*nor_dim(2);
-//        roeM(4,3) = velRho(0)*du + velRho(1)*dv + velRho(2)*dw - vn_rho*dvn;
-//
-//        // Dissipation Term: |An|(UR-UL) = R|Lambda|L*dU = sum_k of [ ws(k) * R(:,k) * L*dU(k) ]
-//        
-//        for(int j = 0; j < var_dim; j++)
-//            diss(j) = ws(0)*LdU(0)*roeM(j,0) + ws(1)*LdU(1)*roeM(j,1) 
-//             + ws(2)*LdU(2)*roeM(j,2) + ws(3)*LdU(3)*roeM(j,3);
-//
-//        for (int i = 0; i < dim; i++)
-//        {
-//            for (int j = 0; j < var_dim; j++)
-//            {
-//                f_com((i*var_dim + j)*num_pts + p) += 
-//                    -0.5*nor_dim(i)*diss(j);
-//            }
-//        }
-//
-//    }
+    for(int p = 0; p < num_pts; p++)
+    {
+        rho_L = u1(p);
+        
+        for (int i = 0; i < dim; i++)
+        {
+            vel_L(i) = u1((1 + i)*num_pts + p)/rho_L;    
+        }
+        E_L   = u1((var_dim - 1)*num_pts + p);
+
+        vel_sq_L = 0.0;
+        for (int i = 0; i < dim; i++)
+        {
+            vel_sq_L += pow(vel_L(i), 2) ;
+        }
+        T_L        = (E_L - 0.5*rho_L*vel_sq_L)/(rho_L*Cv);
+        p_L        = rho_L*R*T_L;
+        a_L        = sqrt(gamm * R * T_L);
+        h_L        = (E_L + p_L)/rho_L;
+        sqrtRho_L  = std::sqrt(rho_L);
+
+        rho_R = u2(p);
+        for (int i = 0; i < dim; i++)
+        {
+            vel_R(i) = u2((1 + i)*num_pts + p)/rho_R;    
+        }
+        E_R   = u2((var_dim - 1)*num_pts + p);
+    
+        vel_sq_R = 0.0;
+        for (int i = 0; i < dim; i++)
+        {
+            vel_sq_R += pow(vel_R(i), 2) ;
+        }
+        T_R       = (E_R - 0.5*rho_R*vel_sq_R)/(rho_R*Cv);
+        p_R       = rho_R*R*T_R;
+        a_R       = sqrt(gamm * R * T_R);
+        h_R       = (E_R + p_R)/rho_R;
+        sqrtRho_R = std::sqrt(rho_R);
+
+        for (int i = 0; i < dim; i++)
+        {
+            nor_in(i) = nor(i*num_pts + p);
+        }
+        nor_l2 = nor_in.Norml2();
+        nor_dim.Set(1/nor_l2, nor_in);
+
+        vnl   = 0.0, vnr = 0.0;
+        for (int i = 0; i < dim; i++)
+        {
+            vnl += vel_L[i]*nor_dim(i); 
+            vnr += vel_R[i]*nor_dim(i); 
+        }
+
+        sSqrtRho = 1./(sqrtRho_L + sqrtRho_R); 
+        vel_sq_rho = 0.0;;
+        for (int i = 0; i < dim; i++)
+        {
+            velRho(i)   = (sqrtRho_L*vel_L(i) + sqrtRho_R*vel_R(i))*sSqrtRho;
+            vel_sq_rho += velRho(i)*velRho(i);
+        }
+        r_rho = (sqrtRho_L*rho_L + sqrtRho_R*rho_R)*sSqrtRho;
+        rho_h = (sqrtRho_L*h_L   + sqrtRho_R*h_R)*sSqrtRho;
+        rho_a = std::sqrt((gamm - 1)*(rho_h - 0.5*vel_sq_rho));
+
+        vn_rho   = 0.0;
+        for (int i = 0; i < dim; i++)
+        {
+            vn_rho += velRho[i]*nor_dim(i); 
+        }
+
+       //Wave Strengths
+
+        drho = rho_R - rho_L ;//Density difference
+        dp   = p_R - p_L     ;//Pressure difference
+        dvn  = vnr - vnl     ;//Normal velocity difference
+
+        LdU(0) = (dp - r_rho*rho_a*dvn )/(2.*rho_a*rho_a); //Left-moving acoustic wave strength
+        LdU(1) =  drho - dp/(rho_a*rho_a);                 //Entropy wave strength
+        LdU(2) = (dp + r_rho*rho_a*dvn )/(2.*rho_a*rho_a); //Right-moving acoustic wave strength
+        LdU(3) = r_rho;                                    //Shear wave strength 
+
+        LM_z = std::min(1., std::max(mach_L, mach_R));
+        dlambda1 = (vnr - a_R) - (vnl - a_L);
+        dlambda3 = (vnr + a_R) - (vnl + a_L);
+
+        double beta     = 1./6.;
+
+        // Absolute values of the wave Speeds
+        ws(0) = std::abs(vn_rho - rho_a + beta*dlambda1) ;//Left-moving acoustic wave
+        ws(1) = std::abs(vn_rho);         //Entropy wave
+        ws(2) = std::abs(vn_rho + rho_a + beta*dlambda3) ;//Right-moving acoustic wave
+        ws(3) = std::abs(vn_rho) ;        //Shear waves
+
+        //Harten's Entropy Fix JCP(1983), 49, pp357-393: only for the nonlinear fields.
+        //NOTE: It avoids vanishing wave speeds by making a parabolic fit near ws = 0.
+        
+        dws(0) = 0.2; 
+        if ( ws(0) < dws(0) ) 
+             ws(0) = 0.5 * ( ws(0)*ws(0)/dws(0)+dws(0) );
+        dws(2) = 0.2; 
+        if ( ws(2) < dws(2) ) 
+             ws(3) = 0.5 * ( ws(2)*ws(2)/dws(2)+dws(2) );
+        
+        //Right Eigenvectors
+        //Note: Two shear wave components are combined into one, so that tangent vectors
+        //      are not required. And that's why there are only 4 vectors here.
+        //      See "I do like CFD, VOL.1" about how tangent vectors are eliminated.
+        
+        //  Left-moving acoustic wave
+        
+        roeM(0,0) = 1.; 
+        roeM(1,0) = velRho(0) - rho_a*nor_dim(0);
+        roeM(2,0) = velRho(1) - rho_a*nor_dim(1);  
+        roeM(3,0) = velRho(2) - rho_a*nor_dim(2);
+        roeM(4,0) = rho_h - rho_a*vn_rho;
+        
+        // Entropy wave
+           
+        roeM(0,1) = 1.; 
+        roeM(1,1) = velRho(0);
+        roeM(2,1) = velRho(1);
+        roeM(3,1) = velRho(2); 
+        roeM(4,1) = 0.5*vel_sq_rho;
+        
+        // Right-moving acoustic wave
+        
+        roeM(0,2) = 1.; 
+        roeM(1,2) = velRho(0) + rho_a*nor_dim(0);
+        roeM(2,2) = velRho(1) + rho_a*nor_dim(1);  
+        roeM(3,2) = velRho(2) + rho_a*nor_dim(2);
+        roeM(4,2) = rho_h + rho_a*vn_rho;
+
+        // Two shear wave components combined into one (wave strength incorporated).
+          
+        du = vel_R(0) - vel_L(0);
+        dv = vel_R(1) - vel_L(1);
+        dw = vel_R(2) - vel_L(2);
+
+        roeM(0,3) = 0.; 
+        roeM(1,3) = du - dvn*nor_dim(0);
+        roeM(2,3) = dv - dvn*nor_dim(1);
+        roeM(3,3) = dw - dvn*nor_dim(2);
+        roeM(4,3) = velRho(0)*du + velRho(1)*dv + velRho(2)*dw - vn_rho*dvn;
+
+        // Dissipation Term: |An|(UR-UL) = R|Lambda|L*dU = sum_k of [ ws(k) * R(:,k) * L*dU(k) ]
+        
+        for(int j = 0; j < var_dim; j++)
+            diss(j) = ws(0)*LdU(0)*roeM(j,0) + ws(1)*LdU(1)*roeM(j,1) 
+             + ws(2)*LdU(2)*roeM(j,2) + ws(3)*LdU(3)*roeM(j,3);
+
+        for (int i = 0; i < dim; i++)
+        {
+            for (int j = 0; j < var_dim; j++)
+            {
+                f_com((i*var_dim + j)*num_pts + p) += 
+                    -0.5*nor_dim(i)*diss(j);
+            }
+        }
+
+    }
 
       
 }
