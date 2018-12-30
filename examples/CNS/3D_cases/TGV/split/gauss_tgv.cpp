@@ -101,6 +101,10 @@ void getAuxVar(int dim, const Vector &u, Vector &aux_sol);
 
 double ComputeEntropy(ParFiniteElementSpace &fes, const Vector &uD);
 
+void getEleKGCorr(const ParGridFunction &u, const Vector &mass_v, const Vector &ke_err,
+                  const Vector *m_vel, const Vector *m_rho_vel, const Vector *m_rho_vel_sq,
+                  const Vector *rho_vel, Vector &f_ke_corr);
+
 /** A time-dependent operator for the right-hand side of the ODE. The DG weak
     form is M du/dt = K u + b, where M and K are the mass
     and operator matrices, and b describes the face correction terms. This can
@@ -2361,6 +2365,128 @@ void FE_Evolution::getKGCorrection(const ParGridFunction &u, Vector &f_ke_corr) 
        f_ke_corr.SetSubVector(offsets[1 + j], temp_ke);
    }
 
+
+}
+
+
+
+void getEleKGCorr(const ParGridFunction &u, const Vector &mass_v, const Vector &ke_err,
+                  const Vector *m_vel, const Vector *m_rho_vel, const Vector *m_rho_vel_sq,
+                  const Vector *rho_vel, Vector &f_ke_corr)
+{
+   ParFiniteElementSpace *fes = u.ParFESpace();
+   ParMesh *pmesh             = fes->GetParMesh();
+
+   int dim     = pmesh->SpaceDimension();
+   int var_dim = dim + 2;
+
+   const FiniteElement *el;
+
+   Vector ke_loc, m_v[dim], m_rho_v[dim], m_rho_v_sq[dim], one;
+   double one_T_m, one_T_ke, one_T_v[dim], one_T_rho_v[dim], one_T_rho_v_sq[dim];
+   double rho_v_t[dim];
+       
+   double corr_alpha2[dim];
+       
+   Vector temp_ke;
+
+   Array<int> offsets[var_dim];
+
+   double temp = 0.0;
+
+   for (int i = 0; i < fes->GetNE(); i++)
+   {
+       ElementTransformation *T  = fes->GetElementTransformation(i);
+       el = fes->GetFE(i);
+
+       int dof = el->GetDof();
+       Array<int> vdofs;
+       fes->GetElementVDofs(i, vdofs);
+
+       one.SetSize(dof); one = 1.;
+
+       for(int j = 0; j < var_dim; j++)
+       {
+           offsets     [j].SetSize(dof);
+       }
+       for(int j = 0; j < var_dim; j++)
+       {
+           for(int k = 0; k < dof; k++)
+           {
+               offsets     [j][k] = vdofs[j*dof + k] ;
+           }
+       }
+
+   }
+
+   for (int i = 0; i < fes->GetNE(); i++)
+   {
+       ElementTransformation *T  = fes->GetElementTransformation(i);
+       el = fes->GetFE(i);
+
+       int dof = el->GetDof();
+       Array<int> vdofs;
+       fes->GetElementVDofs(i, vdofs);
+
+       one.SetSize(dof); one = 1.;
+
+       for(int j = 0; j < var_dim; j++)
+       {
+           offsets     [j].SetSize(dof);
+       }
+       for(int j = 0; j < var_dim; j++)
+       {
+           for(int k = 0; k < dof; k++)
+           {
+               offsets     [j][k] = vdofs[j*dof + k] ;
+           }
+       }
+
+       one_T_m  = one*mass_v;
+
+       ke_err.GetSubVector(offsets[0], ke_loc);
+       one_T_ke = one*ke_loc;
+       
+       for(int j = 0; j < dim; j++)
+       {
+           m_vel[j]       .GetSubVector(offsets[0], m_v[j]);
+           m_rho_vel[j]   .GetSubVector(offsets[0], m_rho_v[j]);
+           m_rho_vel_sq[j].GetSubVector(offsets[0], m_rho_v_sq[j]);
+           one_T_v[j]        = one*m_v[j];
+           one_T_rho_v[j]    = one*m_rho_v[j];
+           one_T_rho_v_sq[j] = one*m_rho_v_sq[j];
+
+           rho_v_t[j]        = one_T_rho_v[j]/one_T_m;
+       }
+
+       if ( std::abs(one_T_ke) < 1E-14 )
+           one_T_ke = 0.0;
+
+       for (int j = 0; j < dim; j++)
+       {
+           corr_alpha2[j] = one_T_ke/(one_T_rho_v_sq[j] - rho_v_t[j]*one_T_v[j] + 1E-16); // Rho U
+           if ( std::abs(corr_alpha2[j]) > 1E2 )
+                   corr_alpha2[j] = 0.0;
+       }
+
+       temp_ke.SetSize(dof);
+       temp_ke = 0.0;
+
+       for (int j = 0; j < dim; j++)
+       {
+           rho_vel[j].GetSubVector(offsets[1 + j], temp_ke);
+           temp_ke -=  rho_v_t[j];
+           temp_ke *= -0.080*corr_alpha2[j];
+           f_ke_corr.SetSubVector (offsets[1 + j], temp_ke);
+
+       }
+       
+//       cout << i << "\t" << corr_alpha2[0]<< "\t" << corr_alpha2[1]<< "\t" << corr_alpha2[2]<< endl;
+//       cout << "ke \t" << one_T_rho_v_sq[0]<< "\t" << one_T_rho_v_sq[1]<< "\t" << one_T_rho_v_sq[2]<< endl;
+//       cout << i << "\t" << f_ke_corr.Min() << "\t" << f_ke_corr.Max() << "\t" << f_ke_corr.Sum() << endl;
+
+
+   }
 
 }
 
