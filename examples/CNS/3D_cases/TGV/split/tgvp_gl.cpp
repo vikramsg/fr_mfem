@@ -53,6 +53,8 @@ const double M_inf           =    0.07;
 const double p_inf           =   100.; 
 const double rho_inf         =    1.0; 
 
+//LES model 
+const string les_mod         =   "SMAG"  ; // SMAG:Smagorinsky; WALE:WALE; VREM:VREMAN
    
 ///////////////////////////////////////////////////////////
 // Velocity coefficient
@@ -65,8 +67,16 @@ double getUMax(int dim, const Vector &u);
 double getMMax(int dim, const Vector &u);
 void getPRhoMinMax(int dim, const Vector &u, double &rho_min, double &p_min, double &rho_max, double &p_max);
 
+void getEleVol(ParFiniteElementSpace &fes, Vector &el_vol);
+
 void getInvFlux(int dim, const Vector &u, Vector &f);
 void getVisFlux(int dim, const Vector &u, const Vector &aux_grad, Vector &f);
+void getSmagVisFlux(int dim, const Vector &u, const Vector &aux_grad, const Vector &el_vol, 
+                    Vector &f);
+void getWALEVisFlux(int dim, const Vector &u, const Vector &aux_grad, const Vector &el_vol, 
+                    Vector &f);
+void getVREMVisFlux(int dim, const Vector &u, const Vector &aux_grad, const Vector &el_vol, 
+                    Vector &f);
 
 void getAuxGrad(int dim, const HypreParMatrix &K_x, const HypreParMatrix &K_y, const HypreParMatrix &K_z,
         const CGSolver &M_solver, const Vector &u, 
@@ -160,6 +170,8 @@ public:
                             ParGridFunction &f_I_, ParGridFunction &f_V_,
                             ParLinearForm &_b_aux_x, ParLinearForm &_b_aux_y, ParLinearForm &_b_aux_z, 
                             ParLinearForm &_b);
+
+   Vector el_vol;
 
    void GetSize() ;
 
@@ -486,6 +498,7 @@ CNS::CNS()
                             *b_aux_x, *b_aux_y, *b_aux_z, 
                             *b);
    }
+   getEleVol(*fes_op, adv->el_vol);
 
    ///////////////////////////////////////////////////
    //Setup viscous coefficients
@@ -695,6 +708,12 @@ void CNS::Step()
         dt = cfl*((h_min/(2.0*order + 1))/glob_u_max);
     }
 
+    if (myid == 0)
+    {
+        if ( (glob_p_min < 0) || (glob_rho_min < 0) || (isnan( glob_p_min ) ) || ( isnan(glob_rho_min) ) )
+            mfem_error("Negative values encountered"); 
+    }
+
 }
 
 
@@ -751,7 +770,16 @@ void FE_Evolution::Mult(const ParGridFunction &x, ParGridFunction &y) const
     getAuxGrad(dim, K_vis_x, K_vis_y, K_vis_z, M_solver, x, 
             b_aux_x, b_aux_y, b_aux_z,
             u_grad);
-    getVisFlux(dim, x, u_grad, f_V);
+    if (les_mod == "NONE")
+        getVisFlux(dim, x, u_grad, f_V);
+    else if (les_mod == "SMAG")
+        getSmagVisFlux(dim, x, u_grad, el_vol, f_V);
+    else if (les_mod == "WALE")
+        getWALEVisFlux(dim, x, u_grad, el_vol, f_V);
+    else if (les_mod == "VREM")
+        getVREMVisFlux(dim, x, u_grad, el_vol, f_V);
+    else
+       mfem_error("LES model not implemented");
 
     b *= 0.;
 
@@ -1372,6 +1400,35 @@ void FE_Evolution::getParEulerDGTranspose(const ParGridFunction &u_sol, const Pa
 }
 
 
+// Get element volumes 
+void getEleVol(ParFiniteElementSpace &fes, Vector &el_vol)
+{
+    el_vol.SetSize(fes.GetVSize());
+    ParMesh *pmesh  = fes.GetParMesh();
+
+    int dim     = pmesh->SpaceDimension();
+    int var_dim = dim + 2;
+
+    double vol  = 0.0; 
+
+    Vector volV;
+    Array<int> vdofs;
+
+    for (int i = 0; i < fes.GetNE(); i++)
+    {
+       fes.GetElementVDofs(i, vdofs);
+
+       volV.SetSize(vdofs.Size());
+
+       vol  = pmesh->GetElementVolume(i);
+       volV = std::pow( vol, 1./3. );
+
+       el_vol.SetSubVector(vdofs, volV);
+    }
+}
+
+
+
 // Get max signal speed 
 double getMMax(int dim, const Vector &u)
 {
@@ -1721,6 +1778,349 @@ void getVisFlux(int dim, const Vector &u, const Vector &aux_grad, Vector &f)
         }
     }
 }
+
+
+// Smag Vis flux 
+void getSmagVisFlux(int dim, const Vector &u, const Vector &aux_grad, const Vector &el_vol, 
+                    Vector &f)
+{
+    int var_dim = dim + 2;
+    int aux_dim = dim + 1;
+    int offset  = u.Size()/var_dim;
+
+    Array<int> offsets[dim*var_dim];
+    for(int i = 0; i < dim*var_dim; i++)
+    {
+        offsets[i].SetSize(offset);
+    }
+
+    for(int j = 0; j < dim*var_dim; j++)
+    {
+        for(int i = 0; i < offset; i++)
+        {
+            offsets[j][i] = j*offset + i ;
+        }
+    }
+
+    Vector rho(offset), E(offset);
+    u.GetSubVector(offsets[0],           rho   );
+    u.GetSubVector(offsets[var_dim - 1],      E);
+
+    Vector rho_vel[dim];
+    for(int i = 0; i < dim; i++) u.GetSubVector(offsets[1 + i], rho_vel[i]);
+
+    Vector mut(offset);
+
+    for(int i = 0; i < offset; i++)
+    {
+        double vel[dim];        
+        for(int j = 0; j < dim; j++) vel[j]   = rho_vel[j](i)/rho(i);
+
+        double vel_grad[dim][dim];
+        for (int k = 0; k < dim; k++)
+            for (int j = 0; j < dim; j++)
+            {
+                vel_grad[j][k]      =  aux_grad[k*(aux_dim)*offset + j*offset + i];
+            }
+
+        double divergence = 0.0;            
+        for (int k = 0; k < dim; k++) divergence += vel_grad[k][k];
+
+        double tau[dim][dim];
+        double Sij[dim][dim], modS = 0;
+        for (int j = 0; j < dim; j++) 
+            for (int k = 0; k < dim; k++) 
+            {
+                Sij[j][k] =  0.5*(vel_grad[j][k] + vel_grad[k][j]);
+                if (j == k)
+                    Sij[j][k] -=   1.0*divergence/3.0; 
+                tau[j][k] = 2.*mu*Sij[j][k];
+                
+                modS     += 2*Sij[j][k]*Sij[j][k];
+            }
+
+        modS = std::sqrt(modS);
+
+        double Cs   = 0.1, del = el_vol[i];
+        double mu_t = rho[i]*Cs*Cs*del*del*modS;
+        for (int j = 0; j < dim; j++) 
+            for (int k = 0; k < dim; k++) 
+                tau[j][k] += 2.*mu_t*Sij[j][k];
+
+        mut[i] = mu_t;
+
+        double int_en_grad[dim];
+        for (int j = 0; j < dim; j++)
+        {
+            int_en_grad[j] = (R_gas/(gamm - 1))*aux_grad[j*(aux_dim)*offset + (aux_dim - 1)*offset + i] ; // Cv*T_x
+        }
+
+        for (int j = 0; j < dim ; j++)
+        {
+            f(j*var_dim*offset + i)       = 0.0;
+
+            for (int k = 0; k < dim ; k++)
+            {
+                f(j*var_dim*offset + (k + 1)*offset + i)       = tau[j][k];
+            }
+            f(j*var_dim*offset + (var_dim - 1)*offset + i)     =  (mu/Pr)*gamm*int_en_grad[j]; 
+            for (int k = 0; k < dim ; k++)
+            {
+                f(j*var_dim*offset + (var_dim - 1)*offset + i)+= vel[k]*tau[j][k]; 
+            }
+        }
+    }
+
+//    cout << mut.Min() << "\t" << mut.Max() << endl;
+}
+
+
+
+// WALE vis flux 
+void getWALEVisFlux(int dim, const Vector &u, const Vector &aux_grad, const Vector &el_vol, 
+                    Vector &f)
+{
+    int var_dim = dim + 2;
+    int aux_dim = dim + 1;
+    int offset  = u.Size()/var_dim;
+
+    Array<int> offsets[dim*var_dim];
+    for(int i = 0; i < dim*var_dim; i++)
+    {
+        offsets[i].SetSize(offset);
+    }
+
+    for(int j = 0; j < dim*var_dim; j++)
+    {
+        for(int i = 0; i < offset; i++)
+        {
+            offsets[j][i] = j*offset + i ;
+        }
+    }
+
+    Vector rho(offset), E(offset);
+    u.GetSubVector(offsets[0],           rho   );
+    u.GetSubVector(offsets[var_dim - 1],      E);
+
+    Vector rho_vel[dim];
+    for(int i = 0; i < dim; i++) u.GetSubVector(offsets[1 + i], rho_vel[i]);
+
+    Vector mut(offset);
+
+    for(int i = 0; i < offset; i++)
+    {
+        double vel[dim];        
+        for(int j = 0; j < dim; j++) vel[j]   = rho_vel[j](i)/rho(i);
+
+        double vel_grad[dim][dim];
+        for (int k = 0; k < dim; k++)
+            for (int j = 0; j < dim; j++)
+            {
+                vel_grad[j][k]      =  aux_grad[k*(aux_dim)*offset + j*offset + i];
+            }
+
+        double divergence = 0.0;            
+        double div_Sq     = 0.0;            
+        for (int k = 0; k < dim; k++) 
+        {
+            divergence += vel_grad[k][k];
+            div_Sq     += std::pow( vel_grad[k][k], 2 );
+        }
+
+        double tau[dim][dim];
+        double Sij[dim][dim];
+
+        double modS = 0.0;
+        for (int j = 0; j < dim; j++) 
+            for (int k = 0; k < dim; k++) 
+            {
+                Sij[j][k] =  0.5*(vel_grad[j][k] + vel_grad[k][j]);
+                if (j == k)
+                    Sij[j][k] -=   1.0*divergence/3.0; 
+                tau[j][k] = 2.*mu*Sij[j][k];
+                
+                modS  += Sij[j][k]*Sij[j][k];
+            }
+
+
+        for (int j = 0; j < dim; j++) tau[j][j] -= 2.0*mu*divergence/3.0; 
+
+        double Sijd[dim][dim];
+        double modSd = 0.; 
+        for (int j = 0; j < dim; j++) 
+            for (int k = 0; k < dim; k++) 
+            {
+                Sijd[j][k] =  0.5*(std::pow( vel_grad[j][k], 2 ) + std::pow( vel_grad[k][j], 2 ));
+                if (j == k)
+                    Sijd[j][k] -=   1.0*div_Sq/3.0; 
+
+                modSd += Sijd[j][k]*Sijd[j][k];
+            }
+
+        double num   = std::pow( modSd, 3./2.);
+        double denom = std::pow( modS , 5./2.) + std::pow( modSd, 5./4.);
+
+        double Cw   = 0.325, del = el_vol[i];
+        double mu_t = rho[i]*Cw*Cw*del*del*num/( denom + 1E-15);
+        for (int j = 0; j < dim; j++) 
+            for (int k = 0; k < dim; k++) 
+                tau[j][k] += 2.*mu_t*Sij[j][k];
+
+        mut[i] = mu_t;
+
+        double int_en_grad[dim];
+        for (int j = 0; j < dim; j++)
+        {
+            int_en_grad[j] = (R_gas/(gamm - 1))*aux_grad[j*(aux_dim)*offset + (aux_dim - 1)*offset + i] ; // Cv*T_x
+        }
+
+        for (int j = 0; j < dim ; j++)
+        {
+            f(j*var_dim*offset + i)       = 0.0;
+
+            for (int k = 0; k < dim ; k++)
+            {
+                f(j*var_dim*offset + (k + 1)*offset + i)       = tau[j][k];
+            }
+            f(j*var_dim*offset + (var_dim - 1)*offset + i)     =  (mu/Pr)*gamm*int_en_grad[j]; 
+            for (int k = 0; k < dim ; k++)
+            {
+                f(j*var_dim*offset + (var_dim - 1)*offset + i)+= vel[k]*tau[j][k]; 
+            }
+        }
+    }
+    
+//    cout << mut.Min() << "\t" << mut.Max() << endl;
+}
+
+
+
+// Vreman vis flux 
+void getVREMVisFlux(int dim, const Vector &u, const Vector &aux_grad, const Vector &el_vol, 
+                    Vector &f)
+{
+    int var_dim = dim + 2;
+    int aux_dim = dim + 1;
+    int offset  = u.Size()/var_dim;
+
+    Array<int> offsets[dim*var_dim];
+    for(int i = 0; i < dim*var_dim; i++)
+    {
+        offsets[i].SetSize(offset);
+    }
+
+    for(int j = 0; j < dim*var_dim; j++)
+    {
+        for(int i = 0; i < offset; i++)
+        {
+            offsets[j][i] = j*offset + i ;
+        }
+    }
+
+    Vector rho(offset), E(offset);
+    u.GetSubVector(offsets[0],           rho   );
+    u.GetSubVector(offsets[var_dim - 1],      E);
+
+    Vector rho_vel[dim];
+    for(int i = 0; i < dim; i++) u.GetSubVector(offsets[1 + i], rho_vel[i]);
+
+    Vector mut(offset);
+
+    for(int i = 0; i < offset; i++)
+    {
+        double vel[dim];        
+        for(int j = 0; j < dim; j++) vel[j]   = rho_vel[j](i)/rho(i);
+
+        double vel_grad[dim][dim];
+        for (int k = 0; k < dim; k++)
+            for (int j = 0; j < dim; j++)
+            {
+                vel_grad[j][k]      =  aux_grad[k*(aux_dim)*offset + j*offset + i];
+            }
+
+        double divergence = 0.0;            
+        double div_Sq     = 0.0;            
+        for (int k = 0; k < dim; k++) 
+        {
+            divergence += vel_grad[k][k];
+            div_Sq     += std::pow( vel_grad[k][k], 2 );
+        }
+
+        double tau[dim][dim];
+        double Sij[dim][dim];
+
+        double modS = 0.0;
+        for (int j = 0; j < dim; j++) 
+            for (int k = 0; k < dim; k++) 
+            {
+                Sij[j][k] =  0.5*(vel_grad[j][k] + vel_grad[k][j]);
+                if (j == k)
+                    Sij[j][k] -=   1.0*divergence/3.0; 
+                tau[j][k] = 2.*mu*Sij[j][k];
+                
+                modS  += Sij[j][k]*Sij[j][k];
+            }
+
+
+        for (int j = 0; j < dim; j++) tau[j][j] -= 2.0*mu*divergence/3.0; 
+
+        double alphaij[dim][dim], betaij[dim][dim];
+        double modAlpha = 0.0;
+        for (int j = 0; j < dim; j++) 
+            for (int k = 0; k < dim; k++) 
+            {
+                alphaij[j][k] =  vel_grad[k][j];
+                modAlpha += alphaij[j][k]*alphaij[j][k];
+            }
+
+        double Cs   = 0.1, del = el_vol[i];
+        for (int j = 0; j < dim; j++) 
+            for (int k = 0; k < dim; k++) 
+            {
+                betaij[j][k] = 0.0;
+                for (int m = 0; m < dim; m++) 
+                    betaij[j][k] += del*del*alphaij[m][j]*alphaij[m][k];
+            }
+
+        double B_beta = betaij[0][0]*betaij[1][1] - betaij[0][1]*betaij[0][1] + 
+                        betaij[0][0]*betaij[2][2] - betaij[0][2]*betaij[0][2] + 
+                        betaij[1][1]*betaij[2][2] - betaij[1][2]*betaij[1][2] ;
+        if (B_beta < 1E-12)
+            B_beta = 0.0;
+
+
+        double mu_t = rho[i]*2.5*Cs*Cs*(std::sqrt( B_beta/(modAlpha + 1E-15) ));
+        for (int j = 0; j < dim; j++) 
+            for (int k = 0; k < dim; k++) 
+                tau[j][k] += 2.*mu_t*Sij[j][k];
+
+        mut[i] = mu_t;
+
+        double int_en_grad[dim];
+        for (int j = 0; j < dim; j++)
+        {
+            int_en_grad[j] = (R_gas/(gamm - 1))*aux_grad[j*(aux_dim)*offset + (aux_dim - 1)*offset + i] ; // Cv*T_x
+        }
+
+        for (int j = 0; j < dim ; j++)
+        {
+            f(j*var_dim*offset + i)       = 0.0;
+
+            for (int k = 0; k < dim ; k++)
+            {
+                f(j*var_dim*offset + (k + 1)*offset + i)       = tau[j][k];
+            }
+            f(j*var_dim*offset + (var_dim - 1)*offset + i)     =  (mu/Pr)*gamm*int_en_grad[j]; 
+            for (int k = 0; k < dim ; k++)
+            {
+                f(j*var_dim*offset + (var_dim - 1)*offset + i)+= vel[k]*tau[j][k]; 
+            }
+        }
+    }
+//    cout << mut.Min() << "\t" << mut.Max() << endl;
+    
+}
+
 
 SparseMatrix getSparseMat(const Vector &x)
 {
