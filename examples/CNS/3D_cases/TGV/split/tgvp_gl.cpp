@@ -171,8 +171,6 @@ public:
                             ParLinearForm &_b_aux_x, ParLinearForm &_b_aux_y, ParLinearForm &_b_aux_z, 
                             ParLinearForm &_b);
 
-   Vector el_vol;
-
    void GetSize() ;
 
    CGSolver &GetMSolver() ;
@@ -188,6 +186,10 @@ public:
    void AssembleSharedFaceMatrices(const ParGridFunction &x) ;
    void getParEulerDGTranspose(const ParGridFunction &u_sol, const ParGridFunction &f_inv,
                                           Vector &b_nl) const;
+
+   Vector el_vol;
+   void getSMAGDissipation(const ParGridFunction &u, const ParGridFunction &aux_grad,
+                                      Vector &b_dis) const;
 
    virtual ~FE_Evolution() { }
 };
@@ -1398,6 +1400,234 @@ void FE_Evolution::getParEulerDGTranspose(const ParGridFunction &u_sol, const Pa
        b_nl.SetSubVector(offsets[j], f_dofs);
    }
 }
+
+
+void FE_Evolution::getSMAGDissipation(const ParGridFunction &u, const ParGridFunction &aux_grad,
+                                      Vector &b_dis) const
+{
+    int var_dim    = u.VectorDim(); 
+    int dim        = var_dim - 2;
+    int aux_dim    = dim + 1;
+    int n_face_pts = wts.Size();
+    int dofs       = u.Size()/var_dim;
+ 
+    Array<int> offsets[dim*var_dim], offsets_face[dim*var_dim];
+    for(int i = 0; i < dim*var_dim; i++)
+    {
+        offsets_face[i].SetSize(n_face_pts);
+        offsets     [i].SetSize(dofs);
+    }
+    for(int j = 0; j < dim*var_dim; j++)
+    {
+        for(int i = 0; i < n_face_pts; i++)
+        {
+            offsets_face[j][i] = j*n_face_pts + i ;
+        }
+        for(int i = 0; i < dofs; i++)
+        {
+            offsets     [j][i] = j*dofs + i ;
+        }
+    }
+
+    // Get the strain tensor
+    Vector S_v(dim*var_dim*dofs); 
+    for(int i = 0; i < dofs; i++)
+    {
+        double vel_grad[dim][dim];
+        for (int k = 0; k < dim; k++)
+            for (int j = 0; j < dim; j++)
+            {
+                vel_grad[j][k]      =  aux_grad[k*(aux_dim)*dofs + j*dofs + i];
+            }
+
+        double divergence = 0.0;            
+        for (int k = 0; k < dim; k++) divergence += vel_grad[k][k];
+
+        double Sij[dim][dim];
+        for (int j = 0; j < dim; j++) 
+            for (int k = 0; k < dim; k++) 
+                Sij[j][k] = 0.5*(vel_grad[j][k] + vel_grad[k][j]);
+
+        for (int j = 0; j < dim; j++) Sij[j][j] -= 1.0*divergence/3.0; 
+
+        for (int j = 0; j < dim ; j++)
+        {
+            S_v[j*var_dim*dofs + i]       = 0.0;
+
+            for (int k = 0; k < dim ; k++)
+            {
+                S_v[j*var_dim*dofs + (k + 1)*dofs + i]   = Sij[j][k];
+            }
+            
+            S_v[j*var_dim*dofs + (var_dim - 1)*dofs + i] = aux_grad
+                                                [j*(aux_dim)*dofs + (aux_dim - 1)*dofs + i] ; // T_x
+        }
+    }
+
+    Vector u_l(var_dim*n_face_pts), u_r(var_dim*n_face_pts);
+    Vector u_f_sub(n_face_pts), u_sub(dofs);
+    Vector u_com(var_dim*n_face_pts);
+    for(int j = 0; j < var_dim; j++)
+    {
+        u.GetSubVector(offsets[j], u_sub);
+ 
+        glob_proj_l->Mult(u_sub, u_f_sub);
+        u_l.SetSubVector(offsets_face[j], u_f_sub);
+        
+        glob_proj_r->Mult(u_sub, u_f_sub);
+        u_r.SetSubVector(offsets_face[j], u_f_sub);
+    }
+    add(0.5, u_l, u_r, u_com);
+
+    Vector S_l(dim*var_dim*n_face_pts), S_r(dim*var_dim*n_face_pts);
+    Vector S_com(dim*var_dim*n_face_pts);
+    for(int j = 0; j < dim*var_dim; j++)
+    {
+        S_v.GetSubVector(offsets[j], u_sub);
+ 
+        glob_proj_l->Mult(u_sub, u_f_sub);
+        S_l.SetSubVector(offsets_face[j], u_f_sub);
+ 
+        glob_proj_r->Mult(u_sub, u_f_sub);
+        S_r.SetSubVector(offsets_face[j], u_f_sub);
+    }
+    add(0.5, S_l, S_r, S_com);
+
+    // Element volume projected to face and averaged
+    Vector el_l(n_face_pts), el_r(n_face_pts);
+    Vector el_com(dim*var_dim*n_face_pts);
+    {
+        glob_proj_l->Mult(el_vol, el_l);
+ 
+        glob_proj_r->Mult(el_vol, el_r);
+    }
+    add(0.5, el_l, el_r, el_com);
+       
+    Vector f_dis(dim*var_dim*n_face_pts);
+    f_dis = 0.0;
+
+    Vector rho(n_face_pts), E(n_face_pts);
+    u_com.GetSubVector(offsets_face[0],           rho   );
+    u_com.GetSubVector(offsets_face[var_dim - 1],      E);
+
+    Vector rho_vel[dim];
+    for(int i = 0; i < dim; i++) u.GetSubVector(offsets_face[1 + i], rho_vel[i]);
+
+    Vector mut(n_face_pts);
+    for(int i = 0; i < n_face_pts; i++)
+    {
+        double vel[dim];        
+        for(int j = 0; j < dim; j++) vel[j]   = rho_vel[j][i]/rho[i];
+
+        double Sij[dim][dim], modS = 0;
+        for (int j = 0; j < dim; j++) 
+            for (int k = 0; k < dim; k++) 
+            {
+                Sij[j][k] = S_com[j*var_dim*n_face_pts + (k + 1)*n_face_pts + i]  ;
+                
+                modS     += 2*Sij[j][k]*Sij[j][k];
+            }
+
+        modS = std::sqrt(modS);
+        double mu_t;
+        double Cs   = 0.1, del = el_com[i];
+       
+        {
+            mu_t = rho[i]*Cs*Cs*del*del*modS;
+        }
+//        {
+//            double alphaij[dim][dim], betaij[dim][dim];
+//            double modAlpha = 0.0;
+//            for (int j = 0; j < dim; j++) 
+//                for (int k = 0; k < dim; k++) 
+//                {
+//                    alphaij[j][k] = S_com[j*var_dim*n_face_pts + (k + 1)*n_face_pts + i]  ;
+////                    alphaij[j][k] =  vel_grad[k][j]; FIXME
+//                    modAlpha += alphaij[j][k]*alphaij[j][k];
+//                }
+//    
+//            for (int j = 0; j < dim; j++) 
+//                for (int k = 0; k < dim; k++) 
+//                {
+//                    betaij[j][k] = 0.0;
+//                    for (int m = 0; m < dim; m++) 
+//                        betaij[j][k] += del*del*alphaij[m][j]*alphaij[m][k];
+//                }
+//    
+//            double B_beta = betaij[0][0]*betaij[1][1] - betaij[0][1]*betaij[0][1] + 
+//                            betaij[0][0]*betaij[2][2] - betaij[0][2]*betaij[0][2] + 
+//                            betaij[1][1]*betaij[2][2] - betaij[1][2]*betaij[1][2] ;
+//            if (B_beta < 1E-12)
+//                B_beta = 0.0;
+//    
+//            mu_t = rho[i]*2.5*Cs*Cs*(std::sqrt( B_beta/(modAlpha + 1E-15) ));
+//        }
+
+        double tau[dim][dim];
+        for (int j = 0; j < dim; j++) 
+            for (int k = 0; k < dim; k++) 
+                tau[j][k] = 2.*mu_t*Sij[j][k];
+
+        mut[i] = mu_t;
+
+        double int_en_grad[dim];
+        for (int j = 0; j < dim; j++)
+        {
+            int_en_grad[j] = (R_gas/(gamm - 1))*S_com[j*(var_dim)*n_face_pts + (var_dim - 1)*n_face_pts + i] ;//Cv*T_x
+        }
+        
+        for (int k = 0; k < dim; k++)
+        {
+            for (int j = 0; j < var_dim; j++)
+            {
+                f_dis((k*var_dim + j)*n_face_pts + i) += 
+                               mu_t*nor_face[k*n_face_pts + i]*(u_r[j*n_face_pts + i] - u_l[j*n_face_pts + i]); 
+            }
+        }
+
+
+//        for (int j = 0; j < dim ; j++)
+//        {
+//            f_dis(j*var_dim*n_face_pts + i)       = 0.0;
+//
+//            for (int k = 0; k < dim ; k++)
+//            {
+//                f_dis(j*var_dim*n_face_pts + (k + 1)*n_face_pts + i)       = tau[j][k];
+//            }
+//            f_dis(j*var_dim*n_face_pts + (var_dim - 1)*n_face_pts + i)     =  (mu_t/Pr)*gamm*int_en_grad[j]; 
+//            for (int k = 0; k < dim ; k++)
+//            {
+//                f_dis(j*var_dim*n_face_pts + (var_dim - 1)*n_face_pts + i)+= vel[k]*tau[j][k]; 
+//            }
+//        }
+    }
+//    cout << mut.Min() << "\t" << mut.Max() << endl;
+
+    Vector face_f(var_dim*n_face_pts);
+    getFaceDotNorm(dim, f_dis, nor_face, face_f);
+
+    b_dis.SetSize(var_dim*dofs);
+ 
+    Vector f_sub(n_face_pts), temp1(dofs), temp2(dofs), f_dofs(dofs);
+    for(int j = 0; j < var_dim; j++)
+    {
+        face_f.GetSubVector(offsets_face[j], u_f_sub);
+        for(int pt = 0;  pt < n_face_pts; pt++)
+            f_sub(pt) = wts(pt)*u_f_sub(pt);
+        glob_proj_l->MultTranspose(f_sub, temp1);
+ 
+        face_f.GetSubVector(offsets_face[j], u_f_sub);
+        for(int pt = 0;  pt < n_face_pts; pt++)
+            f_sub(pt) = wts(pt)*u_f_sub(pt);
+        face_t_r.MultTranspose(f_sub, temp2);
+ 
+        subtract(temp1, temp2, f_dofs);
+ 
+        b_dis.SetSubVector(offsets[j], f_dofs);
+    }
+
+}
+
 
 
 // Get element volumes 
